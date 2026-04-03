@@ -33,7 +33,7 @@
 				<string key="targetRuntimeIdentifier">IBCocoaTouchFramework</string>
 			</object>
 			<object class="IBUITableViewCell" id="116778014">
-				<reference key="NSNextResponder"/>
+				<nil key="NSNextResponder"/>
 				<int key="NSvFlags">18</int>
 				<array class="NSMutableArray" key="NSSubviews">
 					<object class="IBUIView" id="494805391">
@@ -45,7 +45,6 @@
 								<int key="NSvFlags">18</int>
 								<string key="NSFrame">{{48, 2}, {273, 1446}}</string>
 								<reference key="NSSuperview" ref="494805391"/>
-								<reference key="NSNextKeyView"/>
 								<bool key="IBUIOpaque">NO</bool>
 								<bool key="IBUIAutoresizesSubviews">NO</bool>
 								<bool key="IBUIMultipleTouchEnabled">YES</bool>
@@ -82,7 +81,7 @@
 							</object>
 							<object class="IBUIImageView" id="256396676">
 								<reference key="NSNextResponder" ref="494805391"/>
-								<int key="NSvFlags">292</int>
+								<int key="NSvFlags">290</int>
 								<string key="NSFrameSize">{321, 2}</string>
 								<reference key="NSSuperview" ref="494805391"/>
 								<reference key="NSNextKeyView" ref="1025506783"/>
@@ -90,10 +89,6 @@
 								<string key="NSHuggingPriority">{251, 251}</string>
 								<bool key="IBUIUserInteractionEnabled">NO</bool>
 								<string key="targetRuntimeIdentifier">IBCocoaTouchFramework</string>
-								<object class="NSCustomResource" key="IBUIImage">
-									<string key="NSClassName">NSImage</string>
-									<string key="NSResourceName">separator.png</string>
-								</object>
 							</object>
 							<object class="IBUIImageView" id="1025506783">
 								<reference key="NSNextResponder" ref="494805391"/>
@@ -122,7 +117,6 @@
 					</object>
 				</array>
 				<string key="NSFrameSize">{320, 40}</string>
-				<reference key="NSSuperview"/>
 				<reference key="NSNextKeyView" ref="494805391"/>
 				<object class="NSColor" key="IBUIBackgroundColor">
 					<int key="NSColorSpace">1</int>
@@ -163,6 +157,14 @@
 						<reference key="destination" ref="1025506783"/>
 					</object>
 					<string key="id">l3T-Uh-QJ2</string>
+				</object>
+				<object class="IBConnectionRecord">
+					<object class="IBCocoaTouchOutletConnection" key="connection">
+						<string key="label">separatorImageView</string>
+						<reference key="source" ref="116778014"/>
+						<reference key="destination" ref="256396676"/>
+					</object>
+					<string key="id">msa-mf-xSY</string>
 				</object>
 			</array>
 			<object class="IBMutableOrderedSet" key="objectRecords">
@@ -242,7 +244,7 @@
 		</object>
 		<object class="NSMutableDictionary" key="IBDocument.PluginDeclaredDependencyDefaults">
 			<string key="NS.key.0">com.apple.InterfaceBuilder.CocoaTouchPlugin.iPhoneOS</string>
-			<real value="1280" key="NS.object.0"/>
+			<real value="1296" key="NS.object.0"/>
 		</object>
 		<object class="NSMutableDictionary" key="IBDocument.PluginDeclaredDevelopmentDependencies">
 			<string key="NS.key.0">com.apple.InterfaceBuilder.CocoaTouchPlugin.InterfaceBuilder3</string>
@@ -250,10 +252,6 @@
 		</object>
 		<bool key="IBDocument.PluginDeclaredDependenciesTrackSystemTargetVersion">YES</bool>
 		<int key="IBDocument.defaultPropertyAccessControl">3</int>
-		<object class="NSMutableDictionary" key="IBDocument.LastKnownImageSizes">
-			<string key="NS.key.0">separator.png</string>
-			<string key="NS.object.0">{320, 4}</string>
-		</object>
 		<string key="IBCocoaTouchPluginVersion">3733</string>
 	</data>
 </archive>

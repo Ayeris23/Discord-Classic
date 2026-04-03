@@ -48,13 +48,13 @@
 								<reference key="NSSuperview" ref="389460513"/>
 								<reference key="NSWindow"/>
 								<reference key="NSNextKeyView" ref="606452199"/>
-								<object class="NSColor" key="IBUIBackgroundColor">
-									<int key="NSColorSpace">1</int>
-									<bytes key="NSRGB">MC4yNjQzMDA4MTgxIDAuMjA0NzMwNzc4MiAwLjM4ODU3MjIyNTgAA</bytes>
+								<object class="NSColor" key="IBUIBackgroundColor" id="695644085">
+									<int key="NSColorSpace">3</int>
+									<bytes key="NSWhite">MCAwAA</bytes>
 								</object>
 								<bool key="IBUIUserInteractionEnabled">NO</bool>
 								<string key="targetRuntimeIdentifier">IBCocoaTouchFramework</string>
-								<object class="NSCustomResource" key="IBUIImage" id="214166785">
+								<object class="NSCustomResource" key="IBUIImage">
 									<string key="NSClassName">NSImage</string>
 									<string key="NSResourceName">Icon.png</string>
 								</object>
@@ -68,6 +68,7 @@
 								<reference key="NSNextKeyView" ref="223833178"/>
 								<string key="NSReuseIdentifierKey">_NS:9</string>
 								<string key="NSHuggingPriority">{251, 251}</string>
+								<reference key="IBUIBackgroundColor" ref="695644085"/>
 								<bool key="IBUIUserInteractionEnabled">NO</bool>
 								<string key="targetRuntimeIdentifier">IBCocoaTouchFramework</string>
 								<object class="NSCustomResource" key="IBUIImage">
@@ -81,12 +82,13 @@
 								<string key="NSFrame">{{5, 3}, {46, 46}}</string>
 								<reference key="NSSuperview" ref="389460513"/>
 								<reference key="NSWindow"/>
-								<reference key="NSNextKeyView"/>
+								<reference key="NSNextKeyView" ref="540558230"/>
+								<reference key="IBUIBackgroundColor" ref="695644085"/>
 								<bool key="IBUIOpaque">NO</bool>
 								<bool key="IBUIClearsContextBeforeDrawing">NO</bool>
+								<int key="IBUIContentMode">2</int>
 								<bool key="IBUIUserInteractionEnabled">NO</bool>
 								<string key="targetRuntimeIdentifier">IBCocoaTouchFramework</string>
-								<reference key="IBUIImage" ref="214166785"/>
 							</object>
 							<object class="IBUITextView" id="223833178">
 								<reference key="NSNextResponder" ref="389460513"/>
@@ -173,7 +175,6 @@
 								<string key="NSFrame">{{110, 8}, {254, 16}}</string>
 								<reference key="NSSuperview" ref="389460513"/>
 								<reference key="NSWindow"/>
-								<reference key="NSNextKeyView" ref="408912399"/>
 								<bool key="IBUIOpaque">NO</bool>
 								<bool key="IBUIClipsSubviews">YES</bool>
 								<int key="IBUIContentMode">7</int>
@@ -205,32 +206,26 @@
 							</object>
 							<object class="IBUIImageView" id="127917611">
 								<reference key="NSNextResponder" ref="389460513"/>
-								<int key="NSvFlags">292</int>
+								<int key="NSvFlags">290</int>
 								<string key="NSFrameSize">{320, 2}</string>
 								<reference key="NSSuperview" ref="389460513"/>
 								<reference key="NSWindow"/>
-								<reference key="NSNextKeyView" ref="540558230"/>
+								<reference key="NSNextKeyView" ref="408912399"/>
 								<string key="NSReuseIdentifierKey">_NS:9</string>
 								<string key="NSHuggingPriority">{251, 251}</string>
 								<object class="NSAppearance" key="NSAppearance">
 									<string key="NSAppearanceName">NSAppearanceNameAqua</string>
 								</object>
+								<reference key="IBUIBackgroundColor" ref="695644085"/>
 								<bool key="IBUIUserInteractionEnabled">NO</bool>
 								<string key="targetRuntimeIdentifier">IBCocoaTouchFramework</string>
-								<object class="NSCustomResource" key="IBUIImage">
-									<string key="NSClassName">NSImage</string>
-									<string key="NSResourceName">separator.png</string>
-								</object>
 							</object>
 						</array>
 						<string key="NSFrameSize">{320, 52}</string>
 						<reference key="NSSuperview" ref="233494426"/>
 						<reference key="NSWindow"/>
 						<reference key="NSNextKeyView" ref="127917611"/>
-						<object class="NSColor" key="IBUIBackgroundColor">
-							<int key="NSColorSpace">3</int>
-							<bytes key="NSWhite">MCAwAA</bytes>
-						</object>
+						<reference key="IBUIBackgroundColor" ref="695644085"/>
 						<bool key="IBUIOpaque">NO</bool>
 						<bool key="IBUIClipsSubviews">YES</bool>
 						<int key="IBUIContentMode">4</int>
@@ -300,6 +295,14 @@
 				</object>
 				<object class="IBConnectionRecord">
 					<object class="IBCocoaTouchOutletConnection" key="connection">
+						<string key="label">separatorImageView</string>
+						<reference key="source" ref="233494426"/>
+						<reference key="destination" ref="127917611"/>
+					</object>
+					<string key="id">neD-kx-kdJ</string>
+				</object>
+				<object class="IBConnectionRecord">
+					<object class="IBCocoaTouchOutletConnection" key="connection">
 						<string key="label">delegate</string>
 						<reference key="source" ref="223833178"/>
 						<reference key="destination" ref="233494426"/>
@@ -359,21 +362,25 @@
 						<string key="id">zyt-DR-s8f</string>
 						<reference key="object" ref="127917611"/>
 						<reference key="parent" ref="233494426"/>
+						<string key="objectName">Image View - Separator</string>
 					</object>
 					<object class="IBObjectRecord">
 						<string key="id">YAi-NK-lPx</string>
 						<reference key="object" ref="408912399"/>
 						<reference key="parent" ref="233494426"/>
+						<string key="objectName">Image View - Decoration</string>
 					</object>
 					<object class="IBObjectRecord">
 						<string key="id">99</string>
 						<reference key="object" ref="540558230"/>
 						<reference key="parent" ref="233494426"/>
+						<string key="objectName">Image View - Avatar</string>
 					</object>
 					<object class="IBObjectRecord">
 						<string key="id">4uF-9n-h2e</string>
 						<reference key="object" ref="606452199"/>
 						<reference key="parent" ref="233494426"/>
+						<string key="objectName">Image View - PFPInset</string>
 					</object>
 				</array>
 			</object>
@@ -423,6 +430,7 @@
 						<string key="referencedAuthorLabel">UILabel</string>
 						<string key="referencedMessage">UILabel</string>
 						<string key="referencedProfileImage">UIImageView</string>
+						<string key="separatorImageView">UIImageView</string>
 						<string key="timestampLabel">UILabel</string>
 						<string key="universalImageView">UIImageView</string>
 					</dictionary>
@@ -453,6 +461,10 @@
 						</object>
 						<object class="IBToOneOutletInfo" key="referencedProfileImage">
 							<string key="name">referencedProfileImage</string>
+							<string key="candidateClassName">UIImageView</string>
+						</object>
+						<object class="IBToOneOutletInfo" key="separatorImageView">
+							<string key="name">separatorImageView</string>
 							<string key="candidateClassName">UIImageView</string>
 						</object>
 						<object class="IBToOneOutletInfo" key="timestampLabel">
@@ -489,9 +501,8 @@
 		<bool key="IBDocument.PluginDeclaredDependenciesTrackSystemTargetVersion">YES</bool>
 		<int key="IBDocument.defaultPropertyAccessControl">3</int>
 		<dictionary class="NSMutableDictionary" key="IBDocument.LastKnownImageSizes">
-			<string key="Icon.png">{57, 57}</string>
+			<string key="Icon.png">{38, 38}</string>
 			<string key="PFPInset.png">{38, 39}</string>
-			<string key="separator.png">{320, 4}</string>
 		</dictionary>
 		<string key="IBCocoaTouchPluginVersion">3733</string>
 	</data>

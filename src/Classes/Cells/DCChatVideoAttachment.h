@@ -12,4 +12,7 @@
 @property (strong, nonatomic) IBOutlet UIImageView *playButton;
 @property (weak, nonatomic) IBOutlet UIImageView *thumbnail;
 @property (strong, nonatomic) NSURL *videoURL;
+@property (weak, nonatomic) IBOutlet UILabel *videoWarning;
+
+- (void) prepareForDisplay;
 @end

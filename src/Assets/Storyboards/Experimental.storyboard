@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <document type="com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB" version="2.0" toolsVersion="5056" systemVersion="13F1911" targetRuntime="iOS.CocoaTouch" variant="6xAndEarlier" propertyAccessControl="none" initialViewController="d1B-15-6LU">
     <dependencies>
-        <deployment version="1280" defaultVersion="1280" identifier="iOS"/>
+        <deployment version="1280" defaultVersion="1296" identifier="iOS"/>
         <development version="4600" identifier="xcode"/>
         <plugIn identifier="com.apple.InterfaceBuilder.IBCocoaTouchPlugin" version="3733"/>
     </dependencies>
@@ -58,7 +58,7 @@
                                 <autoresizingMask key="autoresizingMask" widthSizable="YES" flexibleMinY="YES"/>
                                 <items>
                                     <barButtonItem style="plain" systemItem="flexibleSpace" id="dJv-44-ktN"/>
-                                    <barButtonItem image="addbarglyph.png" id="CSM-gy-ZtR">
+                                    <barButtonItem width="31" id="CSM-gy-ZtR">
                                         <connections>
                                             <action selector="chooseImage:" destination="qxH-ig-3gA" id="NEd-cH-VPC"/>
                                         </connections>
@@ -66,15 +66,15 @@
                                     <barButtonItem style="plain" systemItem="flexibleSpace" id="fqX-TB-qGv"/>
                                     <barButtonItem id="lXm-Kp-57O">
                                         <view key="customView" opaque="NO" clipsSubviews="YES" contentMode="scaleToFill" id="KVq-NY-8gY">
-                                            <rect key="frame" x="58" y="6" width="207" height="32"/>
+                                            <rect key="frame" x="43" y="7" width="234" height="31"/>
                                             <autoresizingMask key="autoresizingMask" widthSizable="YES" flexibleMaxY="YES"/>
                                             <subviews>
-                                                <imageView appearanceType="aqua" userInteractionEnabled="NO" contentMode="scaleToFill" horizontalHuggingPriority="251" verticalHuggingPriority="251" image="inputField.png" id="QXc-C6-04f">
-                                                    <rect key="frame" x="0.0" y="0.0" width="207" height="32"/>
+                                                <imageView appearanceType="aqua" userInteractionEnabled="NO" contentMode="scaleToFill" horizontalHuggingPriority="251" verticalHuggingPriority="251" image="MessageField.png" id="QXc-C6-04f">
+                                                    <rect key="frame" x="0.0" y="0.0" width="234" height="31"/>
                                                     <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
                                                 </imageView>
                                                 <label opaque="NO" clipsSubviews="YES" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="Message" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" id="6Xu-ir-qwX">
-                                                    <rect key="frame" x="15" y="5" width="185" height="21"/>
+                                                    <rect key="frame" x="15" y="5" width="185" height="20"/>
                                                     <autoresizingMask key="autoresizingMask" heightSizable="YES"/>
                                                     <fontDescription key="fontDescription" type="system" pointSize="13"/>
                                                     <color key="textColor" red="0.50196078430000002" green="0.51764705879999995" blue="0.56078431370000004" alpha="1" colorSpace="calibratedRGB"/>
@@ -83,7 +83,7 @@
                                                     <size key="shadowOffset" width="0.0" height="1"/>
                                                 </label>
                                                 <textView opaque="NO" clipsSubviews="YES" multipleTouchEnabled="YES" contentMode="scaleToFill" bounces="NO" showsHorizontalScrollIndicator="NO" id="Xkx-S2-fzY">
-                                                    <rect key="frame" x="4" y="2" width="199" height="28"/>
+                                                    <rect key="frame" x="4" y="4" width="226" height="29"/>
                                                     <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
                                                     <color key="backgroundColor" red="1" green="1" blue="1" alpha="0.0" colorSpace="calibratedRGB"/>
                                                     <color key="textColor" white="1" alpha="1" colorSpace="calibratedWhite"/>
@@ -101,7 +101,7 @@
                                         </view>
                                     </barButtonItem>
                                     <barButtonItem style="plain" systemItem="flexibleSpace" id="sbv-Be-Cc7"/>
-                                    <barButtonItem image="Send.png" id="fQx-au-i2Y">
+                                    <barButtonItem width="31" id="fQx-au-i2Y">
                                         <connections>
                                             <action selector="sendMessage:" destination="qxH-ig-3gA" id="FBg-uL-GJV"/>
                                         </connections>
@@ -133,6 +133,7 @@
                         <outlet property="inputFieldPlaceholder" destination="6Xu-ir-qwX" id="Myd-zj-V68"/>
                         <outlet property="inputView" destination="KVq-NY-8gY" id="xHv-BB-f75"/>
                         <outlet property="memberButton" destination="B9T-MA-QNp" id="7t0-nd-RIs"/>
+                        <outlet property="messageFieldBG" destination="QXc-C6-04f" id="UnY-65-xCQ"/>
                         <outlet property="photoButton" destination="CSM-gy-ZtR" id="Pmr-Sb-6BQ"/>
                         <outlet property="searchDisplayController" destination="niR-m5-FP3" id="QQ4-gP-MNh"/>
                         <outlet property="sendButton" destination="fQx-au-i2Y" id="60n-fZ-44b"/>
@@ -976,11 +977,11 @@
                                     <color key="shadowColor" red="0.0" green="0.0" blue="0.0" alpha="1" colorSpace="calibratedRGB"/>
                                     <size key="shadowOffset" width="0.0" height="1"/>
                                 </label>
-                                <imageView userInteractionEnabled="NO" contentMode="scaleToFill" horizontalHuggingPriority="251" verticalHuggingPriority="251" image="Group 111.png" id="zo1-7w-kon">
+                                <imageView userInteractionEnabled="NO" contentMode="scaleToFill" horizontalHuggingPriority="251" verticalHuggingPriority="251" image="Group_111.png" id="zo1-7w-kon">
                                     <rect key="frame" x="14" y="40" width="292" height="90"/>
                                     <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
                                 </imageView>
-                                <imageView userInteractionEnabled="NO" contentMode="scaleToFill" horizontalHuggingPriority="251" verticalHuggingPriority="251" image="Rectangle 431.png" id="Qma-iA-MlP">
+                                <imageView userInteractionEnabled="NO" contentMode="scaleToFill" horizontalHuggingPriority="251" verticalHuggingPriority="251" image="Rectangle_431.png" id="Qma-iA-MlP">
                                     <rect key="frame" x="0.0" y="278" width="320" height="45"/>
                                     <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
                                 </imageView>
@@ -1448,7 +1449,7 @@
                                 <autoresizingMask key="autoresizingMask" widthSizable="YES" flexibleMinY="YES"/>
                                 <items>
                                     <barButtonItem style="plain" systemItem="flexibleSpace" id="Llr-b2-Wah"/>
-                                    <barButtonItem image="addbarglyph.png" id="Uqx-sm-xrQ">
+                                    <barButtonItem width="31" id="Uqx-sm-xrQ">
                                         <connections>
                                             <action selector="chooseImage:" destination="Kb0-Wd-0ea" id="gNy-QA-mP9"/>
                                         </connections>
@@ -1456,15 +1457,15 @@
                                     <barButtonItem style="plain" systemItem="flexibleSpace" id="2RU-PN-bhy"/>
                                     <barButtonItem id="DfF-nB-pwb">
                                         <view key="customView" opaque="NO" clipsSubviews="YES" contentMode="scaleToFill" id="IN0-YN-Cgg">
-                                            <rect key="frame" x="58" y="6" width="207" height="32"/>
+                                            <rect key="frame" x="43" y="7" width="234" height="31"/>
                                             <autoresizingMask key="autoresizingMask" widthSizable="YES" flexibleMaxY="YES"/>
                                             <subviews>
-                                                <imageView appearanceType="aqua" userInteractionEnabled="NO" contentMode="scaleToFill" horizontalHuggingPriority="251" verticalHuggingPriority="251" image="inputField.png" id="dFZ-Jq-qvn">
-                                                    <rect key="frame" x="0.0" y="0.0" width="207" height="32"/>
+                                                <imageView appearanceType="aqua" userInteractionEnabled="NO" contentMode="scaleToFill" horizontalHuggingPriority="251" verticalHuggingPriority="251" image="MessageField.png" id="dFZ-Jq-qvn">
+                                                    <rect key="frame" x="0.0" y="0.0" width="234" height="31"/>
                                                     <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
                                                 </imageView>
                                                 <label opaque="NO" clipsSubviews="YES" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="Message" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" id="yDd-ql-I02">
-                                                    <rect key="frame" x="15" y="5" width="185" height="21"/>
+                                                    <rect key="frame" x="15" y="5" width="185" height="20"/>
                                                     <autoresizingMask key="autoresizingMask" heightSizable="YES"/>
                                                     <fontDescription key="fontDescription" type="system" pointSize="13"/>
                                                     <color key="textColor" red="0.50196078430000002" green="0.51764705879999995" blue="0.56078431370000004" alpha="1" colorSpace="calibratedRGB"/>
@@ -1473,7 +1474,7 @@
                                                     <size key="shadowOffset" width="0.0" height="1"/>
                                                 </label>
                                                 <textView opaque="NO" clipsSubviews="YES" multipleTouchEnabled="YES" contentMode="scaleToFill" bounces="NO" showsHorizontalScrollIndicator="NO" id="WSZ-1g-dsi">
-                                                    <rect key="frame" x="4" y="2" width="199" height="28"/>
+                                                    <rect key="frame" x="4" y="4" width="226" height="29"/>
                                                     <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
                                                     <color key="backgroundColor" red="1" green="1" blue="1" alpha="0.0" colorSpace="calibratedRGB"/>
                                                     <color key="textColor" white="1" alpha="1" colorSpace="calibratedWhite"/>
@@ -1491,7 +1492,7 @@
                                         </view>
                                     </barButtonItem>
                                     <barButtonItem style="plain" systemItem="flexibleSpace" id="kHk-eA-Fjb"/>
-                                    <barButtonItem image="Send.png" id="Hd3-60-ccf">
+                                    <barButtonItem width="31" id="Hd3-60-ccf">
                                         <connections>
                                             <action selector="sendMessage:" destination="Kb0-Wd-0ea" id="D7z-Fl-ajg"/>
                                         </connections>
@@ -1526,6 +1527,7 @@
                         <outlet property="inputFieldPlaceholder" destination="yDd-ql-I02" id="r7w-Zu-F0t"/>
                         <outlet property="inputView" destination="IN0-YN-Cgg" id="Cg1-9k-U4w"/>
                         <outlet property="memberButton" destination="xp4-eD-S0J" id="k9P-kY-USu"/>
+                        <outlet property="messageFieldBG" destination="dFZ-Jq-qvn" id="EtQ-wZ-3Dr"/>
                         <outlet property="nbbar" destination="ews-YN-EAV" id="Ecm-Ix-C0n"/>
                         <outlet property="nbmodaldone" destination="IMN-Ig-KLF" id="mgE-89-XMh"/>
                         <outlet property="photoButton" destination="Uqx-sm-xrQ" id="51i-yo-7bu"/>
@@ -1602,25 +1604,23 @@
         <image name="Border.png" width="264" height="2"/>
         <image name="ConnectionCellBase.png" width="280" height="101"/>
         <image name="ContactsBar.png" width="160" height="57"/>
-        <image name="Group 111.png" width="584" height="179"/>
-        <image name="Group 99.png" width="640" height="256"/>
+        <image name="Group 99.png" width="40" height="40"/>
+        <image name="Group_111.png" width="584" height="179"/>
         <image name="GuildIconBase.png" width="96" height="96"/>
+        <image name="MessageField.png" width="31" height="31"/>
         <image name="No-Header.png" width="264" height="146"/>
-        <image name="Rectangle 431.png" width="640" height="91"/>
-        <image name="Send.png" width="17" height="15"/>
+        <image name="Rectangle_431.png" width="640" height="91"/>
         <image name="Sidebar_glyph.png" width="27" height="25"/>
         <image name="TopLogo.png" width="120" height="30"/>
-        <image name="addbarglyph.png" width="19" height="19"/>
         <image name="bannerBottomShadow.png" width="1" height="30"/>
         <image name="bannerTopShadow.png" width="1" height="60"/>
         <image name="chatButtonInset.png" width="50" height="26"/>
         <image name="hamburgerButton.png" width="23" height="18"/>
-        <image name="inputField.png" width="207" height="30"/>
         <image name="menu.png" width="24" height="24"/>
         <image name="newMessages.png" width="7" height="19"/>
         <image name="offline.png" width="24" height="24"/>
         <image name="pfpOverlay.png" width="82" height="82"/>
-        <image name="separator.png" width="320" height="4"/>
+        <image name="separator.png" width="1" height="2"/>
         <image name="sinkInMask.png" width="30" height="31"/>
     </resources>
     <color key="tintColor" red="0.054901960784313725" green="0.058823529411764705" blue="0.062745098039215685" alpha="1" colorSpace="calibratedRGB"/>
@@ -1632,6 +1632,6 @@
     <inferredMetricsTieBreakers>
         <segue reference="Cm4-wn-GtC"/>
         <segue reference="ZLN-09-gkt"/>
-        <segue reference="cdu-l6-Trp"/>
+        <segue reference="0nX-fC-Muh"/>
     </inferredMetricsTieBreakers>
 </document>
