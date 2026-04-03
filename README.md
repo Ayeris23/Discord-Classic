@@ -7,18 +7,18 @@ Discord Classic is a Discord client for iOS 5.1+. Created in 2018, it allows you
 
 | Compatibility  | iOS version | Remarks |
 | ------------- | ------------- | ------------- |
-| Compatible  | 5.0.x  | SSL issues prevent connection |
+| Incompatible  | 5.0.x  | SSL issues prevent connection |
 | Compatible  | 5.1.x  | None |
 | Compatible  | 6.x  | None |
 | Compatible  | 7.x  | No native UI yet |
-| Compatible  | 8+  | UI starts to break |
+| Questionable  | 8+  | UI starts to break |
 # How do I log in?
 Discord Classic supports email login with two-factor authentication. Use of SMS or backup codes is not available at this time. Token login is also available as a last resort if all else fails.
 
 # Encountering issues, or need support?
 If you're encountering issues you should always take note of what happens, how you triggered it, what your iOS version is, what device type (Doesn't matter if iPod but iPad is more important) you're using Discord Classic on and then open a new issue on the [issues tab](https://github.com/Ayeris23/Discord-Classic/issues).
 
-Additionally to that, you can join the Legacy Apple Lounge community discord on https://discord.gg/eE3XTCEMqr. This is the project server of Discord Classic, and you can get real-time help at any time if you're having issues regarding the app or more. You'll find that most contributors are actually active there.
+Additionally to that, you can join the [Legacy Apple Lounge](https://discord.gg/eE3XTCEMqr) community. This is the project server of Discord Classic, and you can get real-time help at any time if you're having issues regarding the app or more. You'll find that most contributors are actually active there.
 # Credits
 
 ### Contributors
