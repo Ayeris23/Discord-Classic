@@ -25,8 +25,8 @@
 
 // --- Message cache ---
 // Store and retrieve full cache entry for a message
-- (DCMessageCacheEntry *)cacheEntryForSnowflake:(NSString *)snowflake;
-- (void)setCacheEntry:(DCMessageCacheEntry *)entry forSnowflake:(NSString *)snowflake;
+- (DCMessageCacheEntry *)cacheEntryForSnowflake:(NSString *)snowflake width:(CGFloat)width;
+- (void)setCacheEntry:(DCMessageCacheEntry *)entry forSnowflake:(NSString *)snowflake width:(CGFloat)width;
 
 // Targeted invalidation
 - (void)invalidateSnowflake:(NSString *)snowflake;

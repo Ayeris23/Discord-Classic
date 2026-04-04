@@ -734,7 +734,7 @@ Use only as a last resort.</string>
                                 </items>
                             </navigationBar>
                         </subviews>
-                        <color key="backgroundColor" red="0.16078431369999999" green="0.16862745100000001" blue="0.18039215689999999" alpha="1" colorSpace="calibratedRGB"/>
+                        <color key="backgroundColor" red="0.15686274509803921" green="0.16078431372549018" blue="0.1803921568627451" alpha="1" colorSpace="calibratedRGB"/>
                     </view>
                     <connections>
                         <outlet property="doneButton" destination="RNI-VO-awp" id="Otm-he-0gY"/>
@@ -1342,7 +1342,7 @@ Use only as a last resort.</string>
                                             </subviews>
                                             <color key="backgroundColor" white="0.0" alpha="0.0" colorSpace="calibratedWhite"/>
                                         </view>
-                                        <color key="backgroundColor" red="0.00060115562519058585" green="0.027029519900679588" blue="0.051992665976285934" alpha="1" colorSpace="calibratedRGB"/>
+                                        <color key="backgroundColor" red="0.083674031945903712" green="0.086245963879983803" blue="0.096938775510204134" alpha="1" colorSpace="calibratedRGB"/>
                                         <connections>
                                             <outlet property="guildAvatar" destination="W1L-BR-oEJ" id="L4P-zC-w9d"/>
                                             <outlet property="unreadMessages" destination="QdE-01-huK" id="aoQ-X4-8Jg"/>
@@ -1395,7 +1395,7 @@ Use only as a last resort.</string>
                                             </subviews>
                                             <color key="backgroundColor" white="0.0" alpha="0.0" colorSpace="calibratedWhite"/>
                                         </view>
-                                        <color key="backgroundColor" red="0.16078431369999999" green="0.16862745100000001" blue="0.18039215689999999" alpha="1" colorSpace="calibratedRGB"/>
+                                        <color key="backgroundColor" red="0.15686274509803921" green="0.16078431372549018" blue="0.1803921568627451" alpha="1" colorSpace="calibratedRGB"/>
                                         <connections>
                                             <outlet property="channelName" destination="fd3-tG-kA3" id="iiJ-Qg-210"/>
                                             <outlet property="messageIndicator" destination="Uqs-1O-c5f" id="a5z-Uh-K50"/>
@@ -1450,7 +1450,7 @@ Use only as a last resort.</string>
                                             </subviews>
                                             <color key="backgroundColor" white="0.0" alpha="0.0" colorSpace="calibratedWhite"/>
                                         </view>
-                                        <color key="backgroundColor" red="0.16078431369999999" green="0.16862745100000001" blue="0.18039215689999999" alpha="1" colorSpace="calibratedRGB"/>
+                                        <color key="backgroundColor" red="0.15686274509803921" green="0.16078431372549018" blue="0.1803921568627451" alpha="1" colorSpace="calibratedRGB"/>
                                         <connections>
                                             <outlet property="nameLabel" destination="MJ3-jg-AT0" id="4dD-Ip-O21"/>
                                             <outlet property="pfp" destination="c8o-P2-Jc5" id="Vsp-ab-yAU"/>
@@ -1709,6 +1709,6 @@ Use only as a last resort.</string>
     </simulatedMetricsContainer>
     <inferredMetricsTieBreakers>
         <segue reference="2j5-iw-4f9"/>
-        <segue reference="5KW-N7-pd5"/>
+        <segue reference="kLv-He-JOO"/>
     </inferredMetricsTieBreakers>
 </document>

@@ -45,19 +45,33 @@
 // DCMessageCahceEntry contains  4 properties: 
 // cellHeight, contentHeight, textHeight, attributedContent
 
-- (DCMessageCacheEntry *)cacheEntryForSnowflake:(NSString *)snowflake {
+// Private helper
+- (NSString *)cacheKeyForSnowflake:(NSString *)snowflake width:(CGFloat)width {
+    return [NSString stringWithFormat:@"%@_%.0f", snowflake, width];
+}
+
+// Width-aware read
+- (DCMessageCacheEntry *)cacheEntryForSnowflake:(NSString *)snowflake width:(CGFloat)width {
     if (!snowflake) return nil;
-    return self.messageCache[snowflake];
+    return self.messageCache[[self cacheKeyForSnowflake:snowflake width:width]];
 }
 
-- (void)setCacheEntry:(DCMessageCacheEntry *)entry forSnowflake:(NSString *)snowflake {
+// Width-aware write
+- (void)setCacheEntry:(DCMessageCacheEntry *)entry forSnowflake:(NSString *)snowflake width:(CGFloat)width {
     if (!snowflake || !entry) return;
-    self.messageCache[snowflake] = entry;
+    self.messageCache[[self cacheKeyForSnowflake:snowflake width:width]] = entry;
 }
 
+// Updated invalidateSnowflake — clears all width variants
 - (void)invalidateSnowflake:(NSString *)snowflake {
     if (!snowflake) return;
-    [self.messageCache removeObjectForKey:snowflake];
+    NSString *prefix = [snowflake stringByAppendingString:@"_"];
+    NSArray *keys = [self.messageCache.allKeys copy];
+    for (NSString *key in keys) {
+        if ([key hasPrefix:prefix]) {
+            [self.messageCache removeObjectForKey:key];
+        }
+    }
 }
 
 - (void)invalidateAllMessages {

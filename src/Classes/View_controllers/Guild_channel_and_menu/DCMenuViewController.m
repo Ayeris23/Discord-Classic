@@ -778,8 +778,17 @@
                                              (cell.contentView.bounds.size.height - badgeSize.height) / 2 - 1,
                                              badgeSize.width, badgeSize.height);
                     [cell.contentView addSubview:badge];
+                    CGFloat maxNameWidth = badge.frame.origin.x - cell.nameLabel.frame.origin.x - 8;
+                    cell.nameLabel.frame = CGRectMake(cell.nameLabel.frame.origin.x,
+                                                      cell.nameLabel.frame.origin.y,
+                                                      maxNameWidth,
+                                                      cell.nameLabel.frame.size.height);
                 } else {
                     cell.unreadMessages.hidden = !channelAtRowIndex.unread;
+                    cell.nameLabel.frame = CGRectMake(cell.nameLabel.frame.origin.x,
+                                                          cell.nameLabel.frame.origin.y,
+                                                          cell.contentView.bounds.size.width - cell.nameLabel.frame.origin.x - 10,
+                                                          cell.nameLabel.frame.size.height);
                 }
                 cell.nameLabel.text = channelAtRowIndex.name;
 
@@ -854,8 +863,20 @@
                                          (cell.contentView.bounds.size.height - badgeSize.height) / 2 - 1,
                                          badgeSize.width, badgeSize.height);
                 [cell.contentView addSubview:badge];
+
+                // Cap name label to not overlap badge
+                CGFloat maxNameWidth = badge.frame.origin.x - cell.channelName.frame.origin.x - 8;
+                cell.channelName.frame = CGRectMake(cell.channelName.frame.origin.x,
+                                                    cell.channelName.frame.origin.y,
+                                                    maxNameWidth,
+                                                    cell.channelName.frame.size.height);
             } else {
                 cell.messageIndicator.hidden = !(channelAtRowIndex.unread && !channelAtRowIndex.muted);
+                // Restore full width on reuse
+                cell.channelName.frame = CGRectMake(cell.channelName.frame.origin.x,
+                                                    cell.channelName.frame.origin.y,
+                                                    cell.contentView.bounds.size.width - cell.channelName.frame.origin.x - 10,
+                                                    cell.channelName.frame.size.height);
             }
             cell.channelName.text = channelAtRowIndex.name;
 
@@ -1027,12 +1048,7 @@
 
     NSString *formattedChannelName;
 
-    if (selectedChannel.type == 0) {
-        formattedChannelName = [@"#"
-            stringByAppendingString:selectedChannel.name];
-    } else {
-        formattedChannelName = selectedChannel.name;
-    }
+    formattedChannelName = selectedChannel.name;
     chatViewController.navigationItem.title = formattedChannelName;
     [chatViewController getMessages:50 beforeMessage:nil];
     chatViewController.viewingPresentTime = true;
