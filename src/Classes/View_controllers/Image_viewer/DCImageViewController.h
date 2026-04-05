@@ -7,12 +7,17 @@
 //
 
 #import <UIKit/UIKit.h>
+#import <MessageUI/MessageUI.h>
 #import "APLSlideMenuViewController.h"
 
-@interface DCImageViewController : UIViewController<UIScrollViewDelegate>
+@interface DCImageViewController : UIViewController<UIScrollViewDelegate, UIActionSheetDelegate, 
+		MFMailComposeViewControllerDelegate, MFMessageComposeViewControllerDelegate>
 
 @property (weak, nonatomic) IBOutlet UIImageView *imageView;
 @property (strong, nonatomic) IBOutlet UIScrollView *scrollView;
 @property (weak, nonatomic) IBOutlet UIBarButtonItem *share;
+@property (nonatomic, assign) BOOL chromeVisible;
+@property (weak, nonatomic) IBOutlet UINavigationBar *navBar;
+@property (strong, nonatomic) NSURL *fullResURL;
 
 @end

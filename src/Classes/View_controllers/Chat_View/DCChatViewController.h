@@ -47,5 +47,6 @@
 @property (assign, nonatomic) BOOL viewingPresentTime;
 @property (strong, nonatomic) DCMessage *selectedMessage;
 @property (strong, nonatomic) UIPopoverController *imagePopoverController;
+@property (strong, nonatomic) NSURL *selectedImageURL;
 
 @end

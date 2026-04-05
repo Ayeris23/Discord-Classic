@@ -214,10 +214,8 @@
     if (self.displayGuilds == nil || guild == nil) {
         return;
     }
+    // Guard against count mismatch before attempting row reload
     if (self.displayGuilds.count != [self.guildTableView numberOfRowsInSection:0]) {
-        NSLog(@"Guilds count mismatch: %lu != %lu",
-              (unsigned long)self.displayGuilds.count,
-              (unsigned long)[self.guildTableView numberOfRowsInSection:0]);
         [self.guildTableView reloadData];
         return;
     }

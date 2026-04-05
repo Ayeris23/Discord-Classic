@@ -545,17 +545,17 @@ NSTimer *heartbeatTimer = nil;
     });
 
     // Refresh DM channel names with updated friend nicknames
-    for (DCChannel *channel in privateGuild.channels) {
+    NSArray *channelSnapshot = [privateGuild.channels copy];
+    for (DCChannel *channel in channelSnapshot) {
         if (channel.recipients.count == 1) {
-            // True 1-on-1 DM — always use recipient display name
             DCUser *recipient = channel.recipients.firstObject;
             channel.name = [recipient displayName];
         } else if (channel.recipients.count > 1) {
-            // Group DM — only set name if none exists
             if (!channel.name || channel.name.length == 0) {
                 NSMutableString *fullChannelName = [@"" mutableCopy];
-                for (DCUser *recipient in channel.recipients) {
-                    if ([channel.recipients indexOfObject:recipient] != 0) {
+                NSArray *recipientSnapshot = [channel.recipients copy];
+                for (DCUser *recipient in recipientSnapshot) {
+                    if ([recipientSnapshot indexOfObject:recipient] != 0) {
                         [fullChannelName appendString:@", "];
                     }
                     [fullChannelName appendString:[recipient displayName]];

@@ -393,6 +393,7 @@
 		2F11238A2F4EB15F00159D64 /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = 2F1123862F4EB15F00159D64 /* InfoPlist.strings */; };
 		2F11238B2F4EB15F00159D64 /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F1123882F4EB15F00159D64 /* main.m */; };
 		2F11238C2F4EB15F00159D64 /* PSPDFUIKitMainThreadGuard.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F1123892F4EB15F00159D64 /* PSPDFUIKitMainThreadGuard.m */; };
+		2F183E4C2F821CE300DFE70B /* MessageUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2F183E4B2F821CE300DFE70B /* MessageUI.framework */; };
 		2F1DF66C2F52BCAC009C44CE /* MessageField.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F1DF66A2F52BCAC009C44CE /* MessageField.png */; };
 		2F1DF66D2F52BCAC009C44CE /* MessageField@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F1DF66B2F52BCAC009C44CE /* MessageField@2x.png */; };
 		2F1DF6762F52C97F009C44CE /* CameraButton.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F1DF66E2F52C97F009C44CE /* CameraButton.png */; };
@@ -940,6 +941,7 @@
 		2F1123872F4EB15F00159D64 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		2F1123882F4EB15F00159D64 /* main.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = main.m; sourceTree = "<group>"; };
 		2F1123892F4EB15F00159D64 /* PSPDFUIKitMainThreadGuard.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = PSPDFUIKitMainThreadGuard.m; sourceTree = "<group>"; };
+		2F183E4B2F821CE300DFE70B /* MessageUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MessageUI.framework; path = System/Library/Frameworks/MessageUI.framework; sourceTree = SDKROOT; };
 		2F1DF66A2F52BCAC009C44CE /* MessageField.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = MessageField.png; sourceTree = "<group>"; };
 		2F1DF66B2F52BCAC009C44CE /* MessageField@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "MessageField@2x.png"; sourceTree = "<group>"; };
 		2F1DF66E2F52C97F009C44CE /* CameraButton.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = CameraButton.png; sourceTree = "<group>"; };
@@ -982,6 +984,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				2F183E4C2F821CE300DFE70B /* MessageUI.framework in Frameworks */,
 				2F1123042F4EAE2900159D64 /* MapKit.framework in Frameworks */,
 				2F1123022F4EAE2200159D64 /* QuartzCore.framework in Frameworks */,
 				2CF9205D2B02CAB700249D6A /* AssetsLibrary.framework in Frameworks */,
@@ -1016,6 +1019,7 @@
 		09C6B923204A0F54007EAC26 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				2F183E4B2F821CE300DFE70B /* MessageUI.framework */,
 				2F1123032F4EAE2900159D64 /* MapKit.framework */,
 				2F1123012F4EAE2200159D64 /* QuartzCore.framework */,
 				2CF9205C2B02CAB700249D6A /* AssetsLibrary.framework */,

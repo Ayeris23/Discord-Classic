@@ -1515,8 +1515,8 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
             }
             DCUser *user = [DCServerCommunicator.sharedInstance userForSnowflake:[member objectForKey:@"user_id"]];
             NSString *nick = [member objectForKey:@"nick"];
-            if (nick && (NSNull *)nick != [NSNull null] && nick.length > 0 
-                && newGuild.snowflake) { // add nil check for snowflake
+            if (user && nick && (NSNull *)nick != [NSNull null] && nick.length > 0
+                && newGuild.snowflake && (NSNull *)newGuild.snowflake != [NSNull null]) {
                 if (!user.guildNicknames) user.guildNicknames = NSMutableDictionary.new;
                 user.guildNicknames[newGuild.snowflake] = nick;
             }

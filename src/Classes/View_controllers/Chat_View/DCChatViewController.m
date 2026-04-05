@@ -1809,9 +1809,9 @@ static dispatch_queue_t chat_messages_queue;
             }
         }
     }
-    NSLog(@"[Height] snowflake:%@ isGrouped:%d contentHeight:%.0f authorNameHeight:%.0f result:%.0f", 
-            message.snowflake, message.isGrouped, contentHeight, authorNameSize.height,
-            contentHeight + attachmentHeight + (attachmentHeight ? 11 : 0));
+    // NSLog(@"[Height] snowflake:%@ isGrouped:%d contentHeight:%.0f authorNameHeight:%.0f result:%.0f", 
+    //         message.snowflake, message.isGrouped, contentHeight, authorNameSize.height,
+    //         contentHeight + attachmentHeight + (attachmentHeight ? 11 : 0));
     return contentHeight + attachmentHeight + (attachmentHeight ? 11 : 0);
 }
 
@@ -2182,6 +2182,7 @@ static dispatch_queue_t chat_messages_queue;
 - (void)tappedImage:(UITapGestureRecognizer *)sender {
     assertMainThread();
     [self.inputField resignFirstResponder];
+    self.selectedImageURL = ((UILazyImageView *)sender.view).imageURL;
     SDWebImageManager *manager = [SDWebImageManager sharedManager];
     dispatch_async(dispatch_get_main_queue(), ^{
         [UIApplication.sharedApplication setNetworkActivityIndicatorVisible:YES];
@@ -2237,11 +2238,11 @@ static dispatch_queue_t chat_messages_queue;
     if ([segue.identifier isEqualToString:@"Chat to Gallery"]) {
         DCImageViewController *imageViewController =
             [segue destinationViewController];
-
         if ([imageViewController isKindOfClass:[DCImageViewController class]]) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 [imageViewController.imageView setImage:self.selectedImage];
             });
+            imageViewController.fullResURL = self.selectedImageURL;
         }
     } else if ([segue.identifier isEqualToString:@"Chat to Right Sidebar"]) {
         DCCInfoViewController *rightSidebar = [segue destinationViewController];
