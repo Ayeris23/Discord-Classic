@@ -1552,10 +1552,10 @@ static dispatch_queue_t chat_messages_queue;
             if (!messageAtRowIndex.isGrouped && cond) {
                 NSString *authorName = [messageAtRowIndex.author displayNameInGuild:
                     DCServerCommunicator.sharedInstance.selectedChannel.parentGuild];
-                authorNameSize = [authorName
-                         sizeWithFont:[UIFont boldSystemFontOfSize:15]
-                    constrainedToSize:CGSizeMake(contentWidth, MAXFLOAT)
-                        lineBreakMode:NSLineBreakByWordWrapping];
+                authorNameSize = CGSizeMake(
+                    [authorName sizeWithFont:[UIFont boldSystemFontOfSize:15]].width,
+                    [UIFont boldSystemFontOfSize:15].lineHeight
+                );
             }
             CGSize contentSize = [messageAtRowIndex.content
                      sizeWithFont:[UIFont systemFontOfSize:14]
@@ -1726,10 +1726,10 @@ static dispatch_queue_t chat_messages_queue;
     if (!message.isGrouped && cond) {
         NSString *authorName = [message.author displayNameInGuild:
             DCServerCommunicator.sharedInstance.selectedChannel.parentGuild];
-        authorNameSize = [authorName
-                 sizeWithFont:[UIFont boldSystemFontOfSize:15]
-            constrainedToSize:CGSizeMake(contentWidth, MAXFLOAT)
-                lineBreakMode:NSLineBreakByWordWrapping];
+        // Single line measurement — don't allow wrapping
+        CGSize measured = [authorName sizeWithFont:[UIFont boldSystemFontOfSize:15]];
+        CGFloat singleLineHeight = [UIFont boldSystemFontOfSize:15].lineHeight;
+        authorNameSize = CGSizeMake(measured.width, singleLineHeight);
     }
 
     CGSize contentSize = [message.content
