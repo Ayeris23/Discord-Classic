@@ -18,7 +18,7 @@ Discord Classic supports email login with two-factor authentication. Use of SMS 
 # Encountering issues, or need support?
 If you're encountering issues you should always take note of what happens, how you triggered it, what your iOS version is, what device type (Doesn't matter if iPod but iPad is more important) you're using Discord Classic on and then open a new issue on the [issues tab](https://github.com/Ayeris23/Discord-Classic/issues).
 
-Additionally to that, you can join the [Legacy Apple Lounge](https://discord.gg/eE3XTCEMqr) community. This is the project server of Discord Classic, and you can get real-time help at any time if you're having issues regarding the app or more. You'll find that most contributors are actually active there.
+Additionally to that, you can join [bag.xml's projects](https://discord.gg/eE3XTCEMqr) community server. This is the project server of Discord Classic, and you can get real-time help at any time if you're having issues regarding the app or more. You'll find that most contributors are actually active there.
 # Credits
 
 ### Contributors
