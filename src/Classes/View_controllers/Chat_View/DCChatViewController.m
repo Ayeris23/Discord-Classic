@@ -2206,7 +2206,16 @@ static dispatch_queue_t chat_messages_queue;
     [self.inputField resignFirstResponder];
     DBGLOG(@"Tapped video!");
     dispatch_async(dispatch_get_main_queue(), ^{
-        NSURL *url                          = ((DCChatVideoAttachment *)sender.view.superview).videoURL;
+        DCChatVideoAttachment *video = (DCChatVideoAttachment *)sender.view.superview;
+
+        // YouTube (or any embed with a linkURL): open in browser / YouTube app
+        if (video.linkURL) {
+            [[UIApplication sharedApplication] openURL:video.linkURL];
+            return;
+        }
+
+        // All other video embeds — play inline
+        NSURL *url = video.videoURL;
         MPMoviePlayerViewController *player = [[MPMoviePlayerViewController alloc] initWithContentURL:url];
         [[NSNotificationCenter defaultCenter] addObserver:self
                                                  selector:@selector(moviePlaybackDidFinish:)
@@ -2215,7 +2224,6 @@ static dispatch_queue_t chat_messages_queue;
         player.moviePlayer.repeatMode = MPMovieRepeatModeOne;
         UIWindow *backgroundWindow    = [UIApplication sharedApplication].keyWindow;
         player.view.frame             = backgroundWindow.frame;
-        //[self.view addSubview:player.moviePlayer.view];
         [self presentMoviePlayerViewControllerAnimated:player];
         [player.moviePlayer play];
     });

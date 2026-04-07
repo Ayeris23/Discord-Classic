@@ -621,9 +621,19 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
                     // Also catches gifv embeds that aren't from Tenor or Giphy (handled above).
                     // videoURL = the actual playable video URL passed to MPMoviePlayerViewController.
                     // baseURL = the thumbnail image URL for the cell preview.
-                    NSURL *attachmentURL;
+                    NSString *originalEmbedURL = [embed objectForKey:@"url"]; // NEW — captures the URL once for reuse
 
-                    newMessage.content = [newMessage.content stringByReplacingOccurrencesOfString:[embed objectForKey:@"url"] withString:@""];
+                        BOOL isYouTube = originalEmbedURL &&
+                                         ([originalEmbedURL hasPrefix:@"https://www.youtube.com"] ||
+                                          [originalEmbedURL hasPrefix:@"https://m.youtube.com"]   ||
+                                          [originalEmbedURL hasPrefix:@"https://youtube.com"]     ||
+                                          [originalEmbedURL hasPrefix:@"https://youtu.be"]);
+
+                        NSURL *attachmentURL;
+
+                    if (!isYouTube) {
+                        newMessage.content = [newMessage.content stringByReplacingOccurrencesOfString:originalEmbedURL withString:@""];
+                    }
                     // NSLog(@"[Video Embed] full embed: %@", embed);
                     if ([embed valueForKeyPath:@"video.proxy_url"] != nil &&
                         [[embed valueForKeyPath:@"video.proxy_url"]
@@ -633,7 +643,7 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
                                [[embed valueForKeyPath:@"video.url"] isKindOfClass:[NSString class]]) {
                         attachmentURL = [NSURL URLWithString:[embed valueForKeyPath:@"video.url"]];
                     } else {
-                        attachmentURL = [NSURL URLWithString:[embed objectForKey:@"url"]];
+                        attachmentURL = [NSURL URLWithString:originalEmbedURL];
                     }
 
                     //[newMessage.attachments
@@ -645,6 +655,18 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
                              options:nil] objectAtIndex:0];
 
                     video.videoURL = attachmentURL;
+                    // YouTube videos and shorts
+                    if (isYouTube && originalEmbedURL) {
+                        NSURL *ytURL = [NSURL URLWithString:originalEmbedURL];
+                        NSString *finalURLString = originalEmbedURL;
+                        NSArray *pathComponents = ytURL.pathComponents;
+                        NSUInteger shortsIdx = [pathComponents indexOfObject:@"shorts"];
+                        if (shortsIdx != NSNotFound && shortsIdx + 1 < pathComponents.count) {
+                            NSString *videoID = pathComponents[shortsIdx + 1];
+                            finalURLString = [NSString stringWithFormat:@"https://www.youtube.com/watch?v=%@", videoID];
+                        }
+                        video.linkURL = [NSURL URLWithString:finalURLString];
+                    }
 
                     // baseURL resolution
                     // Resolve the best available thumbnail URL in priority order:

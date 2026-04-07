@@ -1466,6 +1466,13 @@ Use only as a last resort.</string>
                                     <outlet property="delegate" destination="xVl-Lb-Tkb" id="sSg-s6-Zku"/>
                                 </connections>
                             </tableView>
+                            <toolbar hidden="YES" opaque="NO" clearsContextBeforeDrawing="NO" contentMode="scaleToFill" barStyle="black" translucent="NO" id="Nk1-x2-N47">
+                                <rect key="frame" x="0.0" y="460" width="320" height="44"/>
+                                <autoresizingMask key="autoresizingMask" widthSizable="YES" flexibleMinY="YES"/>
+                                <items>
+                                    <barButtonItem systemItem="play" id="RrU-hA-YTl"/>
+                                </items>
+                            </toolbar>
                         </subviews>
                         <color key="backgroundColor" red="0.0" green="0.0" blue="0.0" alpha="1" colorSpace="calibratedRGB"/>
                     </view>
@@ -1709,7 +1716,7 @@ Use only as a last resort.</string>
         <simulatedScreenMetrics key="destination" type="retina4"/>
     </simulatedMetricsContainer>
     <inferredMetricsTieBreakers>
-        <segue reference="lt1-BL-bem"/>
-        <segue reference="VIU-Jg-26X"/>
+        <segue reference="2j5-iw-4f9"/>
+        <segue reference="I69-w0-oGL"/>
     </inferredMetricsTieBreakers>
 </document>
