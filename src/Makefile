@@ -1,20 +1,18 @@
 ARCHS = armv7 armv7s arm64
-TARGET := iphone:clang:7.1:5.0
-PREFIX = /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/
+TARGET := iphone:clang:7.1:5.1
 SYSROOT = $(THEOS)/sdks/iPhoneOS7.1.sdk
-MODULES = jailed
 PACKAGE_FORMAT = ipa
 
 include $(THEOS)/makefiles/common.mk
 
 APPLICATION_NAME = Discord
 
-INCLUDE_FLAGS = $(shell find . -type d -not -path "*/.*" -exec gprintf '-iquote %s ' {} \;) 
+INCLUDE_FLAGS = $(shell find . -type d -not -path "*/.*" -exec gprintf '-I%s ' {} \;)
 Discord_PLIST = Assets/Plists/Info.plist
 Discord_FILES = $(shell find . \( -name "*.m" -o -name "*.c" \) ! -path "./Libraries/SDWebImage/MKAnnotationView+WebCache.*")
-Discord_FRAMEWORKS = AssetsLibrary QuickLook ImageIO MediaPlayer AVFoundation Security CFNetwork UIKit Foundation CoreGraphics QuartzCore
+Discord_FRAMEWORKS = AssetsLibrary QuickLook ImageIO MediaPlayer AVFoundation Security CFNetwork UIKit Foundation CoreGraphics QuartzCore MapKit MessageUI
 Discord_BUNDLE_RESOURCES = Assets/
-Discord_CFLAGS = -ObjC -fobjc-arc -DCOCOAPODS -DSD_WEBP=1 -D_THREAD_SAFE -Wno-unused-const-variable -Wno-gnu-folding-constant -Wno-error=\#warnings -include Discord_Classic/Discord_Classic-Prefix.pch $(INCLUDE_FLAGS)
+Discord_CFLAGS = -ObjC -fobjc-arc -DCOCOAPODS -DSD_WEBP=1 -D_THREAD_SAFE -w -include "Discord Classic/Discord_Classic-Prefix.pch" $(INCLUDE_FLAGS)
 
 after-Discord-all::
 	$(ECHO_BEGIN)codesign --force --deep --sign - $(THEOS_OBJ_DIR)/Discord.app$(ECHO_END)

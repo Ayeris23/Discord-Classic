@@ -28,7 +28,8 @@
                                       UIGestureRecognizerDelegate>
 - (void)getMessages:(int)numberOfMessages beforeMessage:(DCMessage *)message;
 
-@property (weak, nonatomic) IBOutlet UIToolbar *toolbar;
+@property (weak, nonatomic) IBOutlet UIView *toolbar;
+@property (weak, nonatomic) IBOutlet UIImageView *toolbarBG;
 @property (weak, nonatomic) IBOutlet UITableView *chatTableView;
 @property (weak, nonatomic) IBOutlet UITextView *inputField;
 @property (weak, nonatomic) IBOutlet UILabel *inputFieldPlaceholder;
@@ -40,8 +41,8 @@
 
 // buttons
 @property (weak, nonatomic) IBOutlet UIBarButtonItem *memberButton;
-@property (weak, nonatomic) IBOutlet UIBarButtonItem *sendButton;
-@property (weak, nonatomic) IBOutlet UIBarButtonItem *photoButton;
+@property (weak, nonatomic) IBOutlet UIButton *sendButton;
+@property (weak, nonatomic) IBOutlet UIButton *photoButton;
 @property (weak, nonatomic) IBOutlet UIBarButtonItem *sidebarButton;
 
 @property (assign, nonatomic) BOOL viewingPresentTime;

@@ -48,8 +48,13 @@
 @property (strong, nonatomic) DCMessage *replyingToMessage;
 @property (assign, nonatomic) BOOL disablePing;
 @property (strong, nonatomic) DCMessage *editingMessage;
-// @property (strong, nonatomic) NSMutableDictionary *heightCache;
 @end
+
+// dynamic message box vars
+CGFloat _baseToolbarHeight;
+CGFloat _baseInputHeight;
+CGFloat _baseMsgFieldBGHeight;
+CGFloat _baseInputOriginY;
 
 @implementation DCChatViewController
 
@@ -91,9 +96,6 @@ static dispatch_queue_t chat_messages_queue;
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-
-    // old cache REMOVE LATER
-    // self.heightCache = [NSMutableDictionary dictionary];
 
     DBGLOG(@"%s: Loading chat view controller", __PRETTY_FUNCTION__);
 
@@ -201,9 +203,25 @@ static dispatch_queue_t chat_messages_queue;
                       forState:UIControlStateHighlighted
                     barMetrics:UIBarMetricsDefault];
 
-        [[UIToolbar appearance] setBackgroundImage:[UIImage imageNamed:@"ToolbarBG"]
-                                forToolbarPosition:UIToolbarPositionAny
-                                        barMetrics:UIBarMetricsDefault];
+        // [[UIToolbar appearance] setBackgroundImage:[UIImage imageNamed:@"ToolbarBG"]
+        //                         forToolbarPosition:UIToolbarPositionAny
+        //                                 barMetrics:UIBarMetricsDefault];
+
+        UIImage *toolbarBG = [UIImage imageNamed:@"ToolbarBG"];
+        UIEdgeInsets toolbarCaps = UIEdgeInsetsMake(23, 0, 20, 0); // top/bottom caps, full width stretches center
+        UIImage *stretchableToolbarBG;
+        if ([toolbarBG respondsToSelector:@selector(resizableImageWithCapInsets:resizingMode:)]) {
+            stretchableToolbarBG = [toolbarBG resizableImageWithCapInsets:toolbarCaps
+                                                             resizingMode:UIImageResizingModeStretch];
+        } else {
+            stretchableToolbarBG = [toolbarBG stretchableImageWithLeftCapWidth:0 topCapHeight:10];
+        }
+        self.toolbarBG.image = stretchableToolbarBG;
+        self.toolbar.layer.shadowColor   = [UIColor blackColor].CGColor;
+        self.toolbar.layer.shadowOffset  = CGSizeMake(0, -1);
+        self.toolbar.layer.shadowOpacity = 0.3f;
+        self.toolbar.layer.shadowRadius  = 1.5f;
+        self.toolbar.clipsToBounds       = NO;
 
         [self.sidebarButton setBackgroundImage:[UIImage imageNamed:@"BarButton"]
                                       forState:UIControlStateNormal
@@ -223,25 +241,14 @@ static dispatch_queue_t chat_messages_queue;
 
 
         [self.sendButton setBackgroundImage:[UIImage imageNamed:@"SendMessageButton"]
-                                   forState:UIControlStateNormal
-                                 barMetrics:UIBarMetricsDefault];
-        [self.sendButton
-            setBackgroundImage:[UIImage imageNamed:@"SendMessageButtonPressed"]
-                      forState:UIControlStateHighlighted
-                    barMetrics:UIBarMetricsDefault];
-        
-        [self.sendButton setBackgroundVerticalPositionAdjustment:-1
-                                                   forBarMetrics:UIBarMetricsDefault];
+                                   forState:UIControlStateNormal];
+        [self.sendButton setBackgroundImage:[UIImage imageNamed:@"SendMessageButtonPressed"]
+                                   forState:UIControlStateHighlighted];
 
         [self.photoButton setBackgroundImage:[UIImage imageNamed:@"CameraButton"]
-                                    forState:UIControlStateNormal
-                                  barMetrics:UIBarMetricsDefault];
-        [self.photoButton
-            setBackgroundImage:[UIImage imageNamed:@"CameraButtonPressed"]
-                      forState:UIControlStateHighlighted
-                    barMetrics:UIBarMetricsDefault];
-        [self.photoButton setBackgroundVerticalPositionAdjustment:-1
-                                                   forBarMetrics:UIBarMetricsDefault];
+                                    forState:UIControlStateNormal];
+        [self.photoButton setBackgroundImage:[UIImage imageNamed:@"CameraButtonPressed"]
+                                    forState:UIControlStateHighlighted];
     }
 
     lastTimeInterval = 0;
@@ -256,6 +263,13 @@ static dispatch_queue_t chat_messages_queue;
             : @"No Permission";
     self.toolbar.userInteractionEnabled = DCServerCommunicator.sharedInstance.selectedChannel.writeable;
     self.inputFieldPlaceholder.hidden   = NO;
+    // resizable inputField
+    _baseInputHeight      = self.inputField.frame.size.height;
+    _baseMsgFieldBGHeight = self.messageFieldBG.frame.size.height;
+    _baseToolbarHeight    = self.toolbar.frame.size.height;
+    _baseInputOriginY = self.inputField.frame.origin.y;
+
+    self.inputField.scrollEnabled = NO;
 
     self.typingIndicatorView                  = [[UIView alloc] initWithFrame:CGRectMake(
                                                                  0,
@@ -336,6 +350,7 @@ static dispatch_queue_t chat_messages_queue;
                 .selectedChannel sendTypingIndicator];
         lastTimeInterval = currentTimeInterval;
     }
+    [self resizeInputField];
 }
 
 - (void)textViewDidEndEditing:(UITextView *)textView {
@@ -2030,6 +2045,90 @@ static dispatch_queue_t chat_messages_queue;
     return [self.messages count];
 }
 
+- (void)resizeInputField {
+    static const CGFloat kMaxLines_iPhone  = 5.0f;
+    static const CGFloat kMaxLines_iPad    = 10.0f;
+    static const CGFloat kSingleLineHeight = 34.0f;
+
+    CGFloat lineHeight     = self.inputField.font.lineHeight;
+    CGFloat maxLines       = (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad)
+                                 ? kMaxLines_iPad : kMaxLines_iPhone;
+    CGFloat maxInputHeight = kSingleLineHeight + ((maxLines - 1) * lineHeight);
+
+    CGFloat desiredHeight = ceilf([self.inputField sizeThatFits:
+        CGSizeMake(self.inputField.frame.size.width, MAXFLOAT)].height);
+
+    BOOL needsScroll = (desiredHeight > maxInputHeight);
+    self.inputField.scrollEnabled = needsScroll;
+
+    CGFloat newInputHeight   = MAX(MIN(desiredHeight, maxInputHeight), _baseInputHeight);
+    CGFloat newToolbarHeight = _baseToolbarHeight + (newInputHeight - _baseInputHeight);
+    CGFloat growth           = newToolbarHeight - _baseToolbarHeight;
+
+    // Reset to single line
+    if (desiredHeight <= kSingleLineHeight) {
+        self.inputField.scrollEnabled = NO;
+
+        CGRect bgFrame      = self.messageFieldBG.frame;
+        bgFrame.size.height = _baseMsgFieldBGHeight;
+        self.messageFieldBG.frame = bgFrame;
+
+        CGRect inputFrame      = self.inputField.frame;
+        inputFrame.size.height = _baseInputHeight;
+        inputFrame.origin.y    = _baseInputOriginY;
+        self.inputField.frame  = inputFrame;
+
+        CGRect toolbarFrame      = self.toolbar.frame;
+        toolbarFrame.size.height = _baseToolbarHeight;
+        toolbarFrame.origin.y    = self.view.bounds.size.height
+                                   - self.keyboardHeight - _baseToolbarHeight;
+        self.toolbar.frame = toolbarFrame;
+
+        CGFloat typingOffset = (self.typingUsers.count > 0) ? 20.0f : 0.0f;
+        [self.chatTableView setHeight:self.view.bounds.size.height
+                                      - self.keyboardHeight
+                                      - _baseToolbarHeight
+                                      - typingOffset];
+        if (self.typingUsers.count > 0) {
+            [self.typingIndicatorView setY:self.view.bounds.size.height
+                                           - self.keyboardHeight
+                                           - _baseToolbarHeight - 20.0f];
+        }
+        return;
+    }
+
+    CGRect bgFrame      = self.messageFieldBG.frame;
+    bgFrame.size.height = _baseMsgFieldBGHeight + growth;
+    self.messageFieldBG.frame = bgFrame;
+
+    CGRect inputFrame      = self.inputField.frame;
+    inputFrame.size.height = newInputHeight;
+    CGFloat bgMidY         = bgFrame.origin.y + bgFrame.size.height / 2.0f;
+    inputFrame.origin.y    = bgMidY - newInputHeight / 2.0f;
+    self.inputField.frame  = inputFrame;
+
+    if (needsScroll) {
+        [self.inputField scrollRangeToVisible:NSMakeRange(self.inputField.text.length, 0)];
+    }
+
+    CGRect toolbarFrame      = self.toolbar.frame;
+    toolbarFrame.size.height = newToolbarHeight;
+    toolbarFrame.origin.y    = self.view.bounds.size.height
+                               - self.keyboardHeight - newToolbarHeight;
+    self.toolbar.frame = toolbarFrame;
+
+    CGFloat typingOffset = (self.typingUsers.count > 0) ? 20.0f : 0.0f;
+    [self.chatTableView setHeight:self.view.bounds.size.height
+                                  - self.keyboardHeight
+                                  - newToolbarHeight
+                                  - typingOffset];
+    if (self.typingUsers.count > 0) {
+        [self.typingIndicatorView setY:self.view.bounds.size.height
+                                       - self.keyboardHeight
+                                       - newToolbarHeight - 20.0f];
+    }
+}
+
 - (void)keyboardWillShow:(NSNotification *)notification {
     // thx to Pierre Legrain
     // http://pyl.io/2015/08/17/animating-in-sync-with-ios-keyboard/
@@ -2088,7 +2187,12 @@ static dispatch_queue_t chat_messages_queue;
 
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
        shouldReceiveTouch:(UITouch *)touch {
-    return ![touch.view.superview isKindOfClass:[UIToolbar class]];
+    UIView *v = touch.view;
+    while (v) {
+        if (v == self.toolbar) return NO;
+        v = v.superview;
+    }
+    return YES;
 }
 
 - (void)dismissKeyboard:(UITapGestureRecognizer *)sender {
@@ -2136,6 +2240,8 @@ static dispatch_queue_t chat_messages_queue;
             }
             self.disablePing = NO;
             [self.inputField setText:@""];
+            self.inputField.scrollEnabled = NO;
+            [self resizeInputField];
             self.inputFieldPlaceholder.hidden = NO;
             lastTimeInterval                  = 0;
         } else {

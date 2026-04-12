@@ -22,6 +22,9 @@
                          @"https://twitter.com/trev3d",
                          @"https://github.com/ndcube", @"https://discord.com",
                          @"https://example.com", @"https://example.com", nil];
+    
+    NSString *version = [[NSUserDefaults standardUserDefaults] stringForKey:@"version"];
+    self.versionLabel.text = [NSString stringWithFormat:@"%@", version];
 }
 
 - (void)didReceiveMemoryWarning {

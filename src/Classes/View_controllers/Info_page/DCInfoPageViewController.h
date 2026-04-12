@@ -9,5 +9,6 @@
 #import <UIKit/UIKit.h>
 
 @interface DCInfoPageViewController : UITableViewController
+@property (weak, nonatomic) IBOutlet UILabel *versionLabel;
 
 @end

@@ -15,6 +15,8 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
+    self.experimentalToggle.on = [[NSUserDefaults standardUserDefaults] boolForKey:@"experimentalMode"];
+    self.dataSaverToggle.on    = [[NSUserDefaults standardUserDefaults] boolForKey:@"dataSaver"];
 
     NSString *token =
         [NSUserDefaults.standardUserDefaults stringForKey:@"token"];
@@ -51,6 +53,38 @@
         [DCTools joinGuild:@"9WjXhTPyRf"];
         [self performSegueWithIdentifier:@"Settings to Test Channel"
                                   sender:self];
+    }
+}
+
+- (IBAction)experimentalSwitchChanged:(UISwitch *)sender {
+    [[NSUserDefaults standardUserDefaults] setBool:sender.on forKey:@"experimentalMode"];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+
+    UIAlertView *alert = [[UIAlertView alloc]
+        initWithTitle:@"Restart Required"
+              message:@"Toggling Experimental Mode requires an app restart. Would you like to restart now?"
+             delegate:self
+    cancelButtonTitle:@"No"
+    otherButtonTitles:@"Yes", nil];
+    [alert show];
+}
+
+- (IBAction)dataSaverSwitchChanged:(UISwitch *)sender {
+    [[NSUserDefaults standardUserDefaults] setBool:sender.on forKey:@"dataSaver"];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+
+    UIAlertView *alert = [[UIAlertView alloc]
+        initWithTitle:@"Restart Required"
+              message:@"Toggling Data Saver Mode requires an app restart. Would you like to restart now?"
+             delegate:self
+    cancelButtonTitle:@"No"
+    otherButtonTitles:@"Yes", nil];
+    [alert show];
+}
+
+- (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)buttonIndex {
+    if (buttonIndex == 1) {
+        exit(0);
     }
 }
 
