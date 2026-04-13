@@ -13,6 +13,7 @@
 
 @interface DCOwnAccountInfoManagementController : UITableViewController
 @property (weak, nonatomic) IBOutlet UIBarButtonItem *doneButton;
+@property (weak, nonatomic) IBOutlet UIBarButtonItem *settingsButton;
 
 @property (weak, nonatomic) IBOutlet UIImageView *pfp;
 @property (weak, nonatomic) IBOutlet UIImageView *banner;

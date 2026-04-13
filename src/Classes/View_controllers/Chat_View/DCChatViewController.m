@@ -92,6 +92,12 @@ static dispatch_queue_t chat_messages_queue;
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
     [[UIApplication sharedApplication] setStatusBarHidden:NO];
+
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"experimentalMode"]) {
+        [self.navigationController.navigationBar
+            setBackgroundImage:[UIImage imageNamed:@"TbarBG"]
+                 forBarMetrics:UIBarMetricsDefault];
+    }
 }
 
 - (void)viewDidLoad {
@@ -107,9 +113,6 @@ static dispatch_queue_t chat_messages_queue;
     gestureRecognizer.delegate             = self;
 
     if ([[NSUserDefaults standardUserDefaults] boolForKey:@"experimentalMode"]) {
-        [UINavigationBar.appearance
-            setBackgroundImage:[UIImage imageNamed:@"TbarBG"]
-                 forBarMetrics:UIBarMetricsDefault];
         self.slideMenuController.bouncing = YES;
         self.slideMenuController.gestureSupport =
             APLSlideMenuGestureSupportDrag;

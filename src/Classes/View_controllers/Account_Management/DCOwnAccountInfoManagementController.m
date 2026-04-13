@@ -77,6 +77,13 @@
     [self.doneButton setBackgroundImage:[UIImage imageNamed:@"BarButtonDonePressed"]
                                forState:UIControlStateHighlighted
                              barMetrics:UIBarMetricsDefault];
+    [self.settingsButton setBackgroundImage:[UIImage imageNamed:@"BarButton"]
+                                  forState:UIControlStateNormal
+                                barMetrics:UIBarMetricsDefault];
+    [self.settingsButton
+     setBackgroundImage:[UIImage imageNamed:@"BarButtonPressed"]
+     forState:UIControlStateHighlighted
+     barMetrics:UIBarMetricsDefault];
 
     DCUserInfo *userInfo =
         DCServerCommunicator.sharedInstance.currentUserInfo;
@@ -101,7 +108,7 @@
             NSURL *avatarURL = [NSURL
                 URLWithString:[NSString
                                   stringWithFormat:
-                                      @"https://cdn.discordapp.com/avatars/%@/%@.png?size=64",
+                                      @"https://cdn.discordapp.com/avatars/%@/%@.png?size=160",
                                       userInfo.id,
                                       userInfo.avatar]];
 
@@ -133,7 +140,7 @@
     if (userInfo.banner && ![userInfo.banner isKindOfClass:[NSNull class]]) {
         NSURL *url   = [NSURL
             URLWithString:[NSString
-                              stringWithFormat:@"https://cdn.discordapp.com/banners/%@/%@.png?size=480",
+                              stringWithFormat:@"https://cdn.discordapp.com/banners/%@/%@.png?size=640",
                                                userInfo.id,
                                                userInfo.banner]];
         NSData *data = [NSData dataWithContentsOfURL:url];

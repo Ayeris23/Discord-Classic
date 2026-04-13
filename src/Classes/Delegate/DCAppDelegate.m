@@ -30,7 +30,7 @@
 
     // App version reporting
     NSString *version = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
-    NSString *build = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleVersion"];
+//    NSString *build = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleVersion"];
     [[NSUserDefaults standardUserDefaults] setObject:[NSString stringWithFormat:@"%@", version]
                                               forKey:@"version"];
     [[NSUserDefaults standardUserDefaults] synchronize];

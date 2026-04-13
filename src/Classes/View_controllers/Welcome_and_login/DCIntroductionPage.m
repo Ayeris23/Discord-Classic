@@ -47,6 +47,12 @@
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
     self.authenticated = NO;
+    
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"experimentalMode"]) {
+        [self.navigationController.navigationBar
+         setBackgroundImage:[UIImage imageNamed:@"TbarBG"]
+         forBarMetrics:UIBarMetricsDefault];
+    }
 }
 
 - (void)viewDidLoad {

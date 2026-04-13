@@ -138,7 +138,7 @@
                         NSURL *url   = [NSURL
                             URLWithString:[NSString
                                               stringWithFormat:
-                                                  @"https://cdn.discordapp.com/banners/%@/%@.png?size=480",
+                                                  @"https://cdn.discordapp.com/banners/%@/%@.png?size=640",
                                                   [userInfo objectForKey:@"id"],
                                                   [userInfo objectForKey:@"banner"]]];
                         NSData *data = [NSData dataWithContentsOfURL:url];
