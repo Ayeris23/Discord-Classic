@@ -984,7 +984,7 @@
                                         <color key="titleShadowColor" red="0.0" green="0.0" blue="0.0" alpha="1" colorSpace="calibratedRGB"/>
                                     </state>
                                     <connections>
-                                        <segue destination="tB1-f6-UJC" kind="modal" id="hcS-WT-XW8"/>
+                                        <segue destination="tB1-f6-UJC" kind="modal" identifier="showToken" id="hcS-WT-XW8"/>
                                     </connections>
                                 </button>
                                 <imageView userInteractionEnabled="NO" contentMode="scaleToFill" horizontalHuggingPriority="251" verticalHuggingPriority="251" image="separator.png" id="fd5-Nn-E2R">
@@ -1033,7 +1033,7 @@ Your place to hang out like it's 2012</string>
                         <outlet property="loginButton" destination="nDX-RT-BAd" id="VgB-Fu-1B0"/>
                         <outlet property="passwordField" destination="BsR-JK-1SL" id="9st-RP-Wdg"/>
                         <segue destination="d1B-15-6LU" kind="modal" identifier="login to guilds" modalTransitionStyle="flipHorizontal" id="Cm4-wn-GtC"/>
-                        <segue destination="0Zp-Ot-Flu" kind="modal" id="agQ-8V-B5f"/>
+                        <segue destination="0Zp-Ot-Flu" kind="modal" identifier="show2FA" id="agQ-8V-B5f"/>
                     </connections>
                 </tableViewController>
                 <placeholder placeholderIdentifier="IBFirstResponder" id="7LD-Q6-Qsj" userLabel="First Responder" sceneMemberID="firstResponder"/>
@@ -1882,11 +1882,6 @@ Use only as a last resort.</string>
                     </connections>
                 </tableViewController>
                 <placeholder placeholderIdentifier="IBFirstResponder" id="Sfe-bS-CiJ" userLabel="First Responder" sceneMemberID="firstResponder"/>
-                <switch opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" on="YES" id="ako-Ag-3GL">
-                    <rect key="frame" x="0.0" y="0.0" width="79" height="27"/>
-                    <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
-                    <color key="onTintColor" red="0.84636124319999995" green="0.0" blue="0.0" alpha="1" colorSpace="calibratedRGB"/>
-                </switch>
             </objects>
             <point key="canvasLocation" x="1836" y="1425"/>
         </scene>

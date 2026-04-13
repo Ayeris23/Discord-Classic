@@ -877,6 +877,13 @@
                                                     cell.channelName.frame.size.height);
             }
             cell.channelName.text = channelAtRowIndex.name;
+            cell.channelName.textColor = channelAtRowIndex.unread
+                ? [UIColor whiteColor]
+                : [UIColor colorWithRed:128.0 / 255.0
+                                  green:132.0 / 255.0
+                                   blue:143.0 / 255.0
+                                  alpha:1.0];
+            cell.alpha = channelAtRowIndex.muted ? 0.05 : 1.0;
 
             return cell;
         }

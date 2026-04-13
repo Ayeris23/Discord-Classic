@@ -35,6 +35,11 @@
                                               forKey:@"version"];
     [[NSUserDefaults standardUserDefaults] synchronize];
 
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(handleLogOut)
+                                                 name:@"DCUserDidLogOut"
+                                               object:nil];
+
     self.window.backgroundColor = [UIColor clearColor];
     self.window.opaque          = NO;
     self.shouldReload           = false;
@@ -152,6 +157,23 @@
             // ok requis
         }
     }
+}
+
+- (void)handleLogOut {
+    UIStoryboard *storyboard = [UIStoryboard storyboardWithName:self.experimental ? @"Experimental" : @"Storyboard" bundle:nil];
+    UIViewController *freshRoot = [storyboard instantiateInitialViewController];
+
+    self.loggingOut = YES;
+    [freshRoot view];
+    [freshRoot.view layoutIfNeeded];
+    
+    [UIView transitionWithView:self.window
+                      duration:0.8
+                       options:UIViewAnimationOptionTransitionFlipFromLeft
+                    animations:^{
+                        self.window.rootViewController = freshRoot;
+                    }
+                    completion:nil];
 }
 
 - (void)applicationWillResignActive:(UIApplication *)application {

@@ -14,4 +14,7 @@
 @property (weak, nonatomic) IBOutlet UISwitch *experimentalToggle;
 @property (weak, nonatomic) IBOutlet UISwitch *dataSaverToggle;
 
+@property (assign, nonatomic) BOOL isLoggingOut;
+- (IBAction)didTapLogOut;
+
 @end

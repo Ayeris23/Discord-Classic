@@ -262,6 +262,7 @@ typedef NS_ENUM(uint64_t, DCGatewayCapabilities) {
 - (void)description;
 - (void)startCommunicator;
 - (void)reconnect;
+- (void)prepareForLogout;
 - (void)sendHeartbeat:(NSTimer*)timer;
 - (void)sendJSON:(NSDictionary*)dictionary;
 - (void)sendGuildSubscriptionWithGuildId:(NSString*)guildId channelId:(NSString*)channelId;

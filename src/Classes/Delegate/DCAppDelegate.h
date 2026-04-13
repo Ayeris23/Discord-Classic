@@ -16,4 +16,6 @@
 
 @property (assign, nonatomic) BOOL experimental;
 @property (assign, nonatomic) BOOL hackyMode;
+
+@property (assign, nonatomic) BOOL loggingOut;
 @end

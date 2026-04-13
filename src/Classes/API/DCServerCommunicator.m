@@ -1447,4 +1447,18 @@ NSTimer *heartbeatTimer = nil;
           (unsigned long)self.channels.count, malloc_size((__bridge const void *)(self.channels.allValues.firstObject)), (unsigned long)self.guilds.count, malloc_size((__bridge const void *)(self.guilds.firstObject)), (unsigned long)self.loadedUsers.count, malloc_size((__bridge const void *)(self.loadedUsers.allValues.firstObject)), (unsigned long)self.loadedRoles.count, malloc_size((__bridge const void *)(self.loadedRoles.allValues.firstObject)));
 }
 
+- (void)prepareForLogout {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [heartbeatTimer invalidate];
+        heartbeatTimer = nil;
+    });
+    [self.cooldownTimer invalidate];
+    self.cooldownTimer  = nil;
+    self.canIdentify    = YES;
+    self.sessionId      = nil;
+    self.sequenceNumber = 0;
+    [self.websocket close];
+    self.websocket = nil;
+}
+
 @end

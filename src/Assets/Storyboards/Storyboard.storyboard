@@ -1838,9 +1838,6 @@ Use only as a last resort.</string>
                                             </subviews>
                                             <color key="backgroundColor" white="0.0" alpha="0.0" colorSpace="calibratedWhite"/>
                                         </view>
-                                        <connections>
-                                            <segue destination="Hrc-Cx-cle" kind="push" identifier="logout" id="YvL-wb-Ys5"/>
-                                        </connections>
                                     </tableViewCell>
                                 </cells>
                             </tableViewSection>
@@ -1860,11 +1857,6 @@ Use only as a last resort.</string>
                     </connections>
                 </tableViewController>
                 <placeholder placeholderIdentifier="IBFirstResponder" id="hqV-rz-Nq4" userLabel="First Responder" sceneMemberID="firstResponder"/>
-                <switch opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" on="YES" id="FeE-Z3-kLL">
-                    <rect key="frame" x="0.0" y="0.0" width="79" height="27"/>
-                    <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
-                    <color key="onTintColor" red="0.84636124319999995" green="0.0" blue="0.0" alpha="1" colorSpace="calibratedRGB"/>
-                </switch>
             </objects>
             <point key="canvasLocation" x="2492" y="774"/>
         </scene>
@@ -2419,8 +2411,7 @@ Use only as a last resort.</string>
         <simulatedScreenMetrics key="destination" type="retina4"/>
     </simulatedMetricsContainer>
     <inferredMetricsTieBreakers>
-        <segue reference="YvL-wb-Ys5"/>
-        <segue reference="2j5-iw-4f9"/>
         <segue reference="I69-w0-oGL"/>
+        <segue reference="2j5-iw-4f9"/>
     </inferredMetricsTieBreakers>
 </document>

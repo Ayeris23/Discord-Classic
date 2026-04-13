@@ -7,6 +7,7 @@
 //
 
 #import "DCIntroductionPage.h"
+#import "DCAppDelegate.h"
 #import "DCLoginManager.h"
 #import "DCTokenLoginPage.h"
 #import "APLSlideMenuViewController.h"
@@ -111,7 +112,17 @@
     [spinnerContainer addSubview:self.spinner];
     self.spinnerItem = [[UIBarButtonItem alloc] initWithCustomView:spinnerContainer];
     
-    [self.emailField becomeFirstResponder];
+    DCAppDelegate *appDelegate = (DCAppDelegate *)[UIApplication sharedApplication].delegate;
+    if (appDelegate.loggingOut) {
+        appDelegate.loggingOut = NO;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [self.emailField becomeFirstResponder];
+        });
+    } else {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [self.emailField becomeFirstResponder];
+        });
+    }
 
 }
 
