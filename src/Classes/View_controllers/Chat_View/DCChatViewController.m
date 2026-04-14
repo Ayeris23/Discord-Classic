@@ -1949,10 +1949,12 @@ static dispatch_queue_t chat_messages_queue;
                 self.editingMessage               = nil;
                 self.inputField.text              = @"";
                 self.inputFieldPlaceholder.hidden = NO;
+                [self resizeInputField];
             } else {
                 self.editingMessage               = self.selectedMessage;
                 self.inputField.text              = self.selectedMessage.content;
                 self.inputFieldPlaceholder.hidden = YES;
+                [self resizeInputField];
             }
             NSIndexPath *indexPath = [NSIndexPath indexPathForRow:[self.messages indexOfObject:self.selectedMessage]
                                                         inSection:0];
@@ -2411,13 +2413,14 @@ static dispatch_queue_t chat_messages_queue;
                     initWithContentViewController:picker];
             self.imagePopoverController = popoverController;
 
-            if ([sender isKindOfClass:[UIBarButtonItem class]]) {
-                // Use the bar button item's view for popover presentation
-                UIBarButtonItem *barButtonItem = (UIBarButtonItem *)sender;
+            if ([sender isKindOfClass:[UIButton class]]) {
+                // Use the button's view for popover presentation
+                UIButton *button = (UIButton *)sender;
                 [popoverController
-                    presentPopoverFromBarButtonItem:barButtonItem
-                           permittedArrowDirections:UIPopoverArrowDirectionAny
-                                           animated:YES];
+                    presentPopoverFromRect:button.bounds
+                                    inView:button
+                  permittedArrowDirections:UIPopoverArrowDirectionAny
+                                  animated:YES];
             }
         }
     } else {
