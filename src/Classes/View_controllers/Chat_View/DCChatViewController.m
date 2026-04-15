@@ -1242,9 +1242,15 @@ static dispatch_queue_t chat_messages_queue;
             }
         } else {
             static NSSet *specialMessageTypes = nil;
+            static UIColor *replyHighlightColor = nil;
+            static UIColor *pingColor = nil;
+            static UIColor *normalColor = nil;
             static dispatch_once_t onceToken;
             dispatch_once(&onceToken, ^{
                 specialMessageTypes = [NSSet setWithArray:@[ @1, @2, @3, @4, @5, @6, @7, @8, @18 ]];
+                replyHighlightColor = [UIColor colorWithRed:55/255.0f green:59/255.0f blue:64/255.0f alpha:1.0f];
+                pingColor           = [UIColor colorWithRed:46/255.0f green:45/255.0f blue:40/255.0f alpha:1.0f];
+                normalColor         = [UIColor colorWithRed:40/255.0f green:41/255.0f blue:46/255.0f alpha:1.0f];
             });
 
             // TICK(init);
@@ -1537,28 +1543,16 @@ static dispatch_queue_t chat_messages_queue;
             }
 
             if ((self.replyingToMessage
-                 && [self.replyingToMessage.snowflake
-                     isEqualToString:messageAtRowIndex.snowflake])
+                     && [self.replyingToMessage.snowflake
+                         isEqualToString:messageAtRowIndex.snowflake])
                 || (self.editingMessage
                     && [self.editingMessage.snowflake
                         isEqualToString:messageAtRowIndex.snowflake])) {
-                cell.contentView.backgroundColor =
-                    [UIColor colorWithRed:55 / 255.0f
-                                    green:59 / 255.0f
-                                     blue:64 / 255.0f
-                                    alpha:1.00f];
+                cell.contentView.backgroundColor = replyHighlightColor;
             } else if (messageAtRowIndex.pingingUser) {
-                cell.contentView.backgroundColor =
-                    [UIColor colorWithRed:46 / 255.0f
-                                    green:45 / 255.0f
-                                     blue:40 / 255.0f
-                                    alpha:1.00f];
+                cell.contentView.backgroundColor = pingColor;
             } else {
-                cell.contentView.backgroundColor =
-                    [UIColor colorWithRed:40 / 255.0f
-                                    green:41 / 255.0f
-                                     blue:46 / 255.0f
-                                    alpha:1.00f];
+                cell.contentView.backgroundColor = normalColor;
             }
 
 
@@ -1907,7 +1901,7 @@ static dispatch_queue_t chat_messages_queue;
                                                  nil];
         messageActionSheet.tag = 1;
         messageActionSheet.delegate = self;
-        [messageActionSheet showFromToolbar:self.toolbar];
+        [messageActionSheet showFromRect:self.toolbar.frame inView:self.view animated:YES];
     } else {
         UIActionSheet *messageActionSheet = [[UIActionSheet alloc]
                      initWithTitle:self.selectedMessage.content
@@ -1927,7 +1921,7 @@ static dispatch_queue_t chat_messages_queue;
         messageActionSheet.cancelButtonIndex = [messageActionSheet addButtonWithTitle:@"Cancel"];
         messageActionSheet.tag = 3;
         messageActionSheet.delegate = self;
-        [messageActionSheet showFromToolbar:self.toolbar];
+        [messageActionSheet showFromRect:self.toolbar.frame inView:self.view animated:YES];
     }
 }
 
@@ -2435,7 +2429,7 @@ static dispatch_queue_t chat_messages_queue;
                                    otherButtonTitles:@"Take Photo or Video",
                                                      @"Choose Existing", nil];
             [imageSourceActionSheet setTag:2];
-            [imageSourceActionSheet showFromToolbar:self.toolbar];
+            [imageSourceActionSheet showFromRect:self.toolbar.frame inView:self.view animated:YES];
         } else {
             // Camera is not supported, use photo library
             UIImagePickerController *picker = UIImagePickerController.new;
@@ -2540,11 +2534,11 @@ static dispatch_queue_t chat_messages_queue;
     }
 }
 
-- (void)willRotateToInterfaceOrientation:(UIInterfaceOrientation)toInterfaceOrientation
-                                duration:(NSTimeInterval)duration {
-    // Heights already precalculated for both orientations — just reload
-    [self.chatTableView reloadData];
-}
+// - (void)willRotateToInterfaceOrientation:(UIInterfaceOrientation)toInterfaceOrientation
+//                                 duration:(NSTimeInterval)duration {
+//     // Heights already precalculated for both orientations — just reload
+//     [self.chatTableView reloadData];
+// }
 
 - (void)didRotateFromInterfaceOrientation:(UIInterfaceOrientation)fromInterfaceOrientation {
     [self.chatTableView reloadData];
@@ -2564,11 +2558,11 @@ static dispatch_queue_t chat_messages_queue;
 - (void)didReceiveMemoryWarning {
     [super didReceiveMemoryWarning];
 
-    // old cache REMOVE LATER
-    // [self.heightCache removeAllObjects];
-    [[DCCacheManager sharedInstance] invalidateAllMessages];
     [[DCCacheManager sharedInstance] handleMemoryWarning];
-    NSLog(@"[DCChatViewController] Memory warning! Cleared height caches");
+    for (DCMessage *message in self.messages) {
+        message.attributedContent = nil;
+    }
+    NSLog(@"[DCChatViewController] Memory warning! Freed attributed content");
 }
 
 - (IBAction)dismissModalPVTONLY:(id)sender {

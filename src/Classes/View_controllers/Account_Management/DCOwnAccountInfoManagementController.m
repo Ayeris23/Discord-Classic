@@ -10,6 +10,7 @@
 #include "DCUser.h"
 #include <Foundation/Foundation.h>
 #import "SDWebImageManager.h"
+#import "DCContentManager.h"
 
 @interface DCOwnAccountInfoManagementController ()
 
@@ -121,18 +122,10 @@
                                         NSLog(@"Failed to download avatar with URL %@: %@", avatarURL, error);
                                         return;
                                     }
-                                    dispatch_async(
-                                        dispatch_get_main_queue(),
-                                        ^{
-                                            self.pfp.image =
-                                                retrievedImage;
-                                            self.pfp.layer.cornerRadius =
-                                                self.pfp.frame.size.width
-                                                / 2.0;
-                                            self.pfp.layer.masksToBounds =
-                                                YES;
-                                        }
-                                    );
+                                    UIImage *rounded = [DCContentManager roundedImage:retrievedImage size:80];
+                                    dispatch_async(dispatch_get_main_queue(), ^{
+                                        self.pfp.image = rounded;
+                                    });
                                 }}];
         }
     );

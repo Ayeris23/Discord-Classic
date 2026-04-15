@@ -416,6 +416,7 @@
 		2F74240D2F7771D600FAF3D9 /* Badge.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F74240B2F7771D600FAF3D9 /* Badge.png */; };
 		2F74240E2F7771D600FAF3D9 /* Badge@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F74240C2F7771D600FAF3D9 /* Badge@2x.png */; };
 		2F7424112F78A50100FAF3D9 /* MentionBadge.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F7424102F78A50100FAF3D9 /* MentionBadge.m */; };
+		2F9B1C732F8F0C9D00B296A1 /* DCContentManager.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F9B1C722F8F0C9D00B296A1 /* DCContentManager.m */; };
 		2FD079B22F6E79660021205C /* DCCacheManager.m in Sources */ = {isa = PBXBuildFile; fileRef = 2FD079B12F6E79660021205C /* DCCacheManager.m */; };
 		2FE82DDD2F5D363900375F28 /* separator@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = 2FE82DDC2F5D363900375F28 /* separator@2x.png */; };
 		2FE82DE32F62998300375F28 /* DCChatGifAttachment.xib in Resources */ = {isa = PBXBuildFile; fileRef = 2FE82DE22F62998300375F28 /* DCChatGifAttachment.xib */; };
@@ -968,6 +969,8 @@
 		2F74240C2F7771D600FAF3D9 /* Badge@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Badge@2x.png"; sourceTree = "<group>"; };
 		2F74240F2F78A50100FAF3D9 /* MentionBadge.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = MentionBadge.h; sourceTree = "<group>"; };
 		2F7424102F78A50100FAF3D9 /* MentionBadge.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = MentionBadge.m; sourceTree = "<group>"; };
+		2F9B1C712F8F0C9D00B296A1 /* DCContentManager.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCContentManager.h; sourceTree = "<group>"; };
+		2F9B1C722F8F0C9D00B296A1 /* DCContentManager.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCContentManager.m; sourceTree = "<group>"; };
 		2FD079B02F6E79660021205C /* DCCacheManager.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCCacheManager.h; sourceTree = "<group>"; };
 		2FD079B12F6E79660021205C /* DCCacheManager.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCCacheManager.m; sourceTree = "<group>"; };
 		2FE82DDC2F5D363900375F28 /* separator@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "separator@2x.png"; sourceTree = "<group>"; };
@@ -2100,6 +2103,8 @@
 		2FD079AF2F6E79650021205C /* Content_Management */ = {
 			isa = PBXGroup;
 			children = (
+				2F9B1C712F8F0C9D00B296A1 /* DCContentManager.h */,
+				2F9B1C722F8F0C9D00B296A1 /* DCContentManager.m */,
 				2FD079B02F6E79660021205C /* DCCacheManager.h */,
 				2FD079B12F6E79660021205C /* DCCacheManager.m */,
 			);
@@ -2534,6 +2539,7 @@
 				2F11237D2F4EB0AE00159D64 /* DCInfoPageViewController.m in Sources */,
 				2F1122CB2F4EA03000159D64 /* picture_tools_enc.c in Sources */,
 				2F1122BE2F4EA03000159D64 /* backward_references_enc.c in Sources */,
+				2F9B1C732F8F0C9D00B296A1 /* DCContentManager.m in Sources */,
 				2F1122CD2F4EA03000159D64 /* quant_enc.c in Sources */,
 				2F1122F82F4EA03000159D64 /* ThumbHash.m in Sources */,
 				2F11236B2F4EB0AD00159D64 /* DCChatTableCell.m in Sources */,

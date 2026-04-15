@@ -1135,32 +1135,32 @@ Use only as a last resort.</string>
         <scene sceneID="8hE-6e-T5s">
             <objects>
                 <tableViewController id="Q91-6Y-rD0" customClass="DCCInfoViewController" sceneMemberID="viewController">
-                    <tableView key="view" opaque="NO" clipsSubviews="YES" clearsContextBeforeDrawing="NO" contentMode="scaleToFill" alwaysBounceVertical="YES" dataMode="prototypes" style="plain" separatorStyle="none" rowHeight="52" sectionHeaderHeight="22" sectionFooterHeight="22" id="PLX-qY-QsQ">
+                    <tableView key="view" opaque="NO" clipsSubviews="YES" clearsContextBeforeDrawing="NO" contentMode="scaleToFill" alwaysBounceVertical="YES" dataMode="prototypes" style="plain" separatorStyle="none" rowHeight="44" sectionHeaderHeight="22" sectionFooterHeight="22" id="PLX-qY-QsQ">
                         <rect key="frame" x="0.0" y="64" width="320" height="504"/>
                         <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
                         <color key="backgroundColor" red="0.15686274509803921" green="0.16078431372549018" blue="0.1803921568627451" alpha="1" colorSpace="calibratedRGB"/>
                         <prototypes>
-                            <tableViewCell contentMode="scaleToFill" selectionStyle="gray" hidesAccessoryWhenEditing="NO" indentationLevel="1" indentationWidth="0.0" reuseIdentifier="Members cell" rowHeight="52" id="XNI-2j-GmS" customClass="DCRecipientTableCell">
-                                <rect key="frame" x="0.0" y="22" width="320" height="52"/>
+                            <tableViewCell contentMode="scaleToFill" selectionStyle="gray" hidesAccessoryWhenEditing="NO" indentationLevel="1" indentationWidth="0.0" reuseIdentifier="Members cell" rowHeight="44" id="XNI-2j-GmS" customClass="DCRecipientTableCell">
+                                <rect key="frame" x="0.0" y="22" width="320" height="44"/>
                                 <autoresizingMask key="autoresizingMask"/>
                                 <view key="contentView" opaque="NO" clipsSubviews="YES" multipleTouchEnabled="YES" contentMode="center">
-                                    <rect key="frame" x="0.0" y="0.0" width="320" height="52"/>
+                                    <rect key="frame" x="0.0" y="0.0" width="320" height="44"/>
                                     <autoresizingMask key="autoresizingMask"/>
                                     <subviews>
-                                        <imageView userInteractionEnabled="NO" contentMode="scaleToFill" horizontalHuggingPriority="251" verticalHuggingPriority="251" id="ebn-fX-Bfx">
-                                            <rect key="frame" x="15" y="9" width="35" height="35"/>
+                                        <imageView userInteractionEnabled="NO" contentMode="scaleToFill" horizontalHuggingPriority="251" verticalHuggingPriority="251" id="ebn-fX-Bfx" userLabel="Image View - Avatar">
+                                            <rect key="frame" x="5" y="3" width="36" height="36"/>
                                             <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
                                         </imageView>
-                                        <imageView userInteractionEnabled="NO" contentMode="scaleToFill" horizontalHuggingPriority="251" verticalHuggingPriority="251" image="sinkInMask.png" id="K4p-pS-UQt">
-                                            <rect key="frame" x="15" y="8" width="35" height="36"/>
+                                        <imageView userInteractionEnabled="NO" contentMode="scaleToFill" horizontalHuggingPriority="251" verticalHuggingPriority="251" image="offline.png" id="Fgk-ds-i7a">
+                                            <rect key="frame" x="28" y="27" width="13" height="13"/>
                                             <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
                                         </imageView>
                                         <imageView userInteractionEnabled="NO" contentMode="scaleToFill" horizontalHuggingPriority="251" verticalHuggingPriority="251" image="separator.png" id="IzL-Ip-P8I">
-                                            <rect key="frame" x="0.0" y="50" width="320" height="2"/>
+                                            <rect key="frame" x="0.0" y="42" width="320" height="2"/>
                                             <autoresizingMask key="autoresizingMask" widthSizable="YES" flexibleMaxY="YES"/>
                                         </imageView>
                                         <label opaque="NO" clipsSubviews="YES" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="User" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" id="3Fv-Hf-ZBj">
-                                            <rect key="frame" x="60" y="14" width="248" height="22"/>
+                                            <rect key="frame" x="48" y="9" width="260" height="22"/>
                                             <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
                                             <fontDescription key="fontDescription" type="boldSystem" pointSize="17"/>
                                             <color key="textColor" red="1" green="1" blue="1" alpha="1" colorSpace="calibratedRGB"/>
@@ -1172,6 +1172,7 @@ Use only as a last resort.</string>
                                     <color key="backgroundColor" white="0.0" alpha="0.0" colorSpace="calibratedWhite"/>
                                 </view>
                                 <connections>
+                                    <outlet property="statusLight" destination="Fgk-ds-i7a" id="pGu-Ui-6EP"/>
                                     <outlet property="userName" destination="3Fv-Hf-ZBj" id="1Sg-9j-lhj"/>
                                     <outlet property="userPFP" destination="ebn-fX-Bfx" id="QQA-Sz-2SP"/>
                                 </connections>
@@ -1435,11 +1436,7 @@ Use only as a last resort.</string>
                                                     <autoresizingMask key="autoresizingMask" widthSizable="YES" flexibleMaxY="YES"/>
                                                 </imageView>
                                                 <imageView userInteractionEnabled="NO" contentMode="scaleToFill" horizontalHuggingPriority="251" verticalHuggingPriority="251" id="c8o-P2-Jc5">
-                                                    <rect key="frame" x="8" y="6" width="30" height="30"/>
-                                                    <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
-                                                </imageView>
-                                                <imageView userInteractionEnabled="NO" contentMode="scaleToFill" horizontalHuggingPriority="251" verticalHuggingPriority="251" image="sinkInMask.png" id="iE2-a6-MzA">
-                                                    <rect key="frame" x="8" y="5" width="30" height="31"/>
+                                                    <rect key="frame" x="5" y="3" width="36" height="36"/>
                                                     <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
                                                 </imageView>
                                                 <label opaque="NO" clipsSubviews="YES" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" id="Gy0-PU-qtv">
@@ -2402,7 +2399,6 @@ Use only as a last resort.</string>
         <image name="preferences.png" width="23" height="23"/>
         <image name="privateGuildLogo.png" width="40" height="40"/>
         <image name="separator.png" width="1" height="2"/>
-        <image name="sinkInMask.png" width="30" height="31"/>
     </resources>
     <color key="tintColor" red="0.054901960784313725" green="0.058823529411764705" blue="0.062745098039215685" alpha="1" colorSpace="calibratedRGB"/>
     <simulatedMetricsContainer key="defaultSimulatedMetrics">
@@ -2411,7 +2407,7 @@ Use only as a last resort.</string>
         <simulatedScreenMetrics key="destination" type="retina4"/>
     </simulatedMetricsContainer>
     <inferredMetricsTieBreakers>
-        <segue reference="I69-w0-oGL"/>
         <segue reference="2j5-iw-4f9"/>
+        <segue reference="5KW-N7-pd5"/>
     </inferredMetricsTieBreakers>
 </document>

@@ -11,6 +11,7 @@
 #include <objc/NSObjCRuntime.h>
 #include "DCServerCommunicator.h"
 #include "DCGuild.h"
+#import "DCContentManager.h"
 
 
 @interface DCContactViewController ()
@@ -75,12 +76,7 @@
         [UIImage imageNamed:[self imageNameForStatus:user.status]];
     // image
     if (user.profileImage) {
-        self.profileImageView.image = user.profileImage;
-        if ([[NSUserDefaults standardUserDefaults] boolForKey:@"hackyMode"] == NO) {
-            self.profileImageView.layer.cornerRadius =
-                self.profileImageView.frame.size.width / 2.0;
-        }
-        self.profileImageView.layer.masksToBounds = YES;
+        self.profileImageView.image = [DCContentManager processedAvatarForUser:user context:DCAssetContextProfile];
     } else {
         [DCTools getUserAvatar:user];
     }

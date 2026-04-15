@@ -15,6 +15,7 @@
 #include "DCRecipientTableCell.h"
 #include "DCRole.h"
 #include <Foundation/Foundation.h>
+#import "DCContentManager.h"
 
 @interface DCCInfoViewController ()
 
@@ -50,6 +51,11 @@
                selector:@selector(guildMemberListUpdated:)
                    name:@"GuildMemberListUpdated"
                  object:nil];
+    [NSNotificationCenter.defaultCenter
+        addObserver:self
+           selector:@selector(handleReloadUser:)
+               name:@"RELOAD USER DATA"
+             object:nil];
 
     if (DCServerCommunicator.sharedInstance.selectedChannel && [DCServerCommunicator.sharedInstance.selectedChannel.parentGuild.snowflake length] > 0) {
         // If a guild is selected, get the members from the guild
@@ -74,6 +80,11 @@
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
     [self.tableView reloadData];
+}
+
+- (void)viewWillDisappear:(BOOL)animated {
+    [super viewWillDisappear:animated];
+    [NSNotificationCenter.defaultCenter removeObserver:self name:@"RELOAD USER DATA" object:nil];
 }
 
 - (void)guildMemberListUpdated:(NSNotification *)notification {
@@ -120,26 +131,17 @@
         if ([item isKindOfClass:[DCUser class]]) {
             DCUser *user = item;
             cell.userName.text               = [user displayNameInGuild:DCServerCommunicator.sharedInstance.selectedChannel.parentGuild];
-            if (user.profileImage) {
+            if (user.profileImage && user.profileImage.size.width > 0) {
                 cell.userPFP.image = user.profileImage;
             } else {
+                cell.userPFP.image = nil;
                 [DCTools getUserAvatar:user];
             }
-            cell.userPFP.layer.cornerRadius  = cell.userPFP.frame.size.width / 2.0;
-            cell.userPFP.layer.masksToBounds = YES;
             if ([DCServerCommunicator.sharedInstance.selectedChannel.parentGuild.snowflake length] > 0) {
-                NSString *statusImageName = [DCMenuViewController imageNameForStatus:user.status];
-                UIImageView *statusImageView = [[UIImageView alloc] initWithImage:[UIImage imageNamed:statusImageName]];
-                statusImageView.contentMode = UIViewContentModeScaleAspectFit;
-                CGFloat statusSize = 13;
-                CGFloat padding = 2;
-                statusImageView.frame = CGRectMake(
-                    CGRectGetMaxX(cell.userPFP.frame) - statusSize + padding,
-                    CGRectGetMaxY(cell.userPFP.frame) - statusSize + padding,
-                    statusSize,
-                    statusSize
-                );
-                [cell addSubview:statusImageView];
+                cell.statusLight.hidden = NO;
+                cell.statusLight.image  = [UIImage imageNamed:[DCMenuViewController imageNameForStatus:user.status]];
+            } else {
+                cell.statusLight.hidden = YES;
             }
         } else if ([item isKindOfClass:[DCRole class]]) {
             UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"Roles Cell"];
@@ -203,6 +205,19 @@
     self.selectedUser = self.recipients[indexPath.row];
     [self performSegueWithIdentifier:@"channelinfo to contact" sender:self];
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
+}
+
+- (void)handleReloadUser:(NSNotification *)notification {
+    DCUser *user = notification.object;
+    if (!user) return;
+    NSUInteger index = [self.recipients indexOfObject:user];
+    if (index == NSNotFound) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSIndexPath *indexPath = [NSIndexPath indexPathForRow:index inSection:0];
+        [self.tableView beginUpdates];
+        [self.tableView reloadRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationNone];
+        [self.tableView endUpdates];
+    });
 }
 
 - (void)prepareForSegue:(UIStoryboardSegue *)segue sender:(id)sender {

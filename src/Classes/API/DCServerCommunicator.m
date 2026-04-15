@@ -23,6 +23,7 @@
 #include "DCRole.h"
 #include "DCTools.h"
 #include "SDWebImageManager.h"
+#import "DCContentManager.h"
 
 @implementation DCServerCommunicator
 UIActivityIndicatorView *spinner;
@@ -366,13 +367,7 @@ NSTimer *heartbeatTimer = nil;
             { // default icon
                 NSNumber *longId = @([newChannel.snowflake longLongValue]);
                 int selector     = (int)(([longId longLongValue] >> 22) % 6);
-                newChannel.icon  = [[DCUser defaultAvatars] objectAtIndex:selector];
-                CGSize itemSize  = CGSizeMake(32, 32);
-                UIGraphicsBeginImageContextWithOptions(itemSize, NO, UIScreen.mainScreen.scale);
-                CGRect imageRect = CGRectMake(0.0, 0.0, itemSize.width, itemSize.height);
-                [newChannel.icon drawInRect:imageRect];
-                newChannel.icon = UIGraphicsGetImageFromCurrentImageContext();
-                UIGraphicsEndImageContext();
+                newChannel.icon  = [DCContentManager processedIcon:[[DCUser defaultAvatars] objectAtIndex:selector] context:DCAssetContextList];
             }
             NSArray *recipientIds = [privateChannel objectForKey:@"recipient_ids"];
             if (recipientIds && recipientIds.count > 0) {
@@ -390,8 +385,8 @@ NSTimer *heartbeatTimer = nil;
                 newChannel.users = mUsers;
             }
             if ([privateChannel objectForKey:@"icon"] && [privateChannel objectForKey:@"icon"] != [NSNull null]) {
-                NSURL *iconURL             = [NSURL URLWithString:[NSString stringWithFormat:@"https://cdn.discordapp.com/channel-icons/%@/%@.png?size=64",
-                                                                                 newChannel.snowflake, [privateChannel objectForKey:@"icon"]]];
+                NSURL *iconURL = [NSURL URLWithString:[NSString stringWithFormat:@"https://cdn.discordapp.com/channel-icons/%@/%@.png?size=64",
+                    newChannel.snowflake, [privateChannel objectForKey:@"icon"]]];
                 SDWebImageManager *manager = [SDWebImageManager sharedManager];
                 [manager downloadImageWithURL:iconURL
                                       options:0
@@ -402,65 +397,53 @@ NSTimer *heartbeatTimer = nil;
                                                 NSLog(@"Failed to load channel icon with URL %@: %@", iconURL, error);
                                                 return;
                                             }
-                                            newChannel.icon = icon;
-                                            CGSize itemSize = CGSizeMake(32, 32);
                                             dispatch_async(dispatch_get_main_queue(), ^{
-                                                UIGraphicsBeginImageContextWithOptions(itemSize, NO, UIScreen.mainScreen.scale);
-                                                CGRect imageRect = CGRectMake(0.0, 0.0, itemSize.width, itemSize.height);
-                                                [newChannel.icon drawInRect:imageRect];
-                                                newChannel.icon = UIGraphicsGetImageFromCurrentImageContext();
-                                                UIGraphicsEndImageContext();
+                                                newChannel.icon = [DCContentManager processedIcon:icon context:DCAssetContextList];
+                                                [NSNotificationCenter.defaultCenter postNotificationName:@"RELOAD CHANNEL LIST" object:nil];
                                             });
                                         }
                                     }];
             } else {
                 if (newChannel.recipients.count > 0) {
-                    DCUser *user = [newChannel.recipients objectAtIndex:0];
-
-                    NSURL *avatarURL           = [NSURL URLWithString:[NSString
-                                                                stringWithFormat:@"https://cdn.discordapp.com/avatars/%@/%@.png?size=64",
-                                                                                 user.snowflake,
-                                                                                 user.avatarID]];
-                    SDWebImageManager *manager = [SDWebImageManager sharedManager];
-                    [manager downloadImageWithURL:avatarURL
-                                          options:0
-                                         progress:nil
-                                        completed:^(UIImage *image, NSError *error, SDImageCacheType cacheType, BOOL finished, NSURL *imageURL) {
-                                            @autoreleasepool {
-                                                if (image && finished) {
-                                                    newChannel.icon = image;
-                                                    CGSize itemSize = CGSizeMake(32, 32);
-                                                    dispatch_async(dispatch_get_main_queue(), ^{
-                                                        UIGraphicsBeginImageContextWithOptions(itemSize, NO, UIScreen.mainScreen.scale);
-                                                        CGRect imageRect = CGRectMake(0.0, 0.0, itemSize.width, itemSize.height);
-                                                        [newChannel.icon drawInRect:imageRect];
-                                                        newChannel.icon = UIGraphicsGetImageFromCurrentImageContext();
-                                                        UIGraphicsEndImageContext();
-                                                        [NSNotificationCenter.defaultCenter postNotificationName:@"RELOAD CHANNEL LIST" object:nil];
-                                                    });
-                                                } else {
-                                                    // NSLog(@"Failed to download user avatar with URL %@: %@", avatarURL, error);
-                                                    int selector            = 0;
-                                                    NSNumber *discriminator = @(user.discriminator);
-                                                    if ([discriminator integerValue] == 0) {
-                                                        NSNumber *longId = @([user.snowflake longLongValue]);
-                                                        selector         = (int)(([longId longLongValue] >> 22) % 6);
+                    NSInteger channelType = [[privateChannel objectForKey:@"type"] integerValue];
+                    if (channelType == 1) {
+                        // 1-on-1 DM — use buddy's avatar via getUserAvatar:
+                        DCUser *user = [newChannel.recipients objectAtIndex:0];
+                        [DCTools getUserAvatar:user];
+                    } else {
+                        // Group DM — download and process first recipient's avatar as icon
+                        DCUser *user = [newChannel.recipients objectAtIndex:0];
+                        NSURL *avatarURL = [NSURL URLWithString:[NSString stringWithFormat:
+                            @"https://cdn.discordapp.com/avatars/%@/%@.png?size=64",
+                            user.snowflake, user.avatarID]];
+                        SDWebImageManager *manager = [SDWebImageManager sharedManager];
+                        [manager downloadImageWithURL:avatarURL
+                                              options:0
+                                             progress:nil
+                                            completed:^(UIImage *image, NSError *error, SDImageCacheType cacheType, BOOL finished, NSURL *imageURL) {
+                                                @autoreleasepool {
+                                                    if (image && finished) {
+                                                        dispatch_async(dispatch_get_main_queue(), ^{
+                                                            newChannel.icon = [DCContentManager processedIcon:image context:DCAssetContextList];
+                                                            [NSNotificationCenter.defaultCenter postNotificationName:@"RELOAD CHANNEL LIST" object:nil];
+                                                        });
                                                     } else {
-                                                        selector = (int)([discriminator integerValue] % 5);
+                                                        int selector = 0;
+                                                        NSNumber *discriminator = @(user.discriminator);
+                                                        if ([discriminator integerValue] == 0) {
+                                                            NSNumber *longId = @([user.snowflake longLongValue]);
+                                                            selector = (int)(([longId longLongValue] >> 22) % 6);
+                                                        } else {
+                                                            selector = (int)([discriminator integerValue] % 5);
+                                                        }
+                                                        dispatch_async(dispatch_get_main_queue(), ^{
+                                                            newChannel.icon = [DCContentManager processedIcon:[[DCUser defaultAvatars] objectAtIndex:selector] context:DCAssetContextList];
+                                                            [NSNotificationCenter.defaultCenter postNotificationName:@"RELOAD CHANNEL LIST" object:nil];
+                                                        });
                                                     }
-                                                    newChannel.icon = [[DCUser defaultAvatars] objectAtIndex:selector];
-                                                    CGSize itemSize = CGSizeMake(32, 32);
-                                                    dispatch_async(dispatch_get_main_queue(), ^{
-                                                        UIGraphicsBeginImageContextWithOptions(itemSize, NO, UIScreen.mainScreen.scale);
-                                                        CGRect imageRect = CGRectMake(0.0, 0.0, itemSize.width, itemSize.height);
-                                                        [newChannel.icon drawInRect:imageRect];
-                                                        newChannel.icon = UIGraphicsGetImageFromCurrentImageContext();
-                                                        UIGraphicsEndImageContext();
-                                                        [NSNotificationCenter.defaultCenter postNotificationName:@"RELOAD CHANNEL LIST" object:nil];
-                                                    });
                                                 }
-                                            }
-                                        }];
+                                            }];
+                    }
                 }
             }
             NSString *privateChannelName = [privateChannel objectForKey:@"name"];

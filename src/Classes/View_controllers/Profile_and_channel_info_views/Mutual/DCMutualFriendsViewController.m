@@ -8,6 +8,7 @@
 
 #import "DCMutualFriendsViewController.h"
 #include <UIKit/UIKit.h>
+#import "DCContentManager.h"
 
 @interface DCMutualFriendsViewController ()
 
@@ -78,8 +79,6 @@
     } else {
         [DCTools getUserAvatar:user];
     }
-    cell.userPFP.layer.cornerRadius  = cell.userPFP.frame.size.width / 2.0;
-    cell.userPFP.layer.masksToBounds = YES;
     return cell;
 }
 

@@ -34,6 +34,7 @@ typedef NS_ENUM(NSInteger, DCUserStatus) {
 @property (strong, nonatomic) UIImage* profileBanner;
 @property (assign, nonatomic) NSInteger discriminator;
 @property (strong, nonatomic) UIImage* avatarDecoration;
+@property (strong, nonatomic) UIImage *rawProfileImage;
 
 + (DCUserStatus)statusFromString:(NSString *)statusString;
 + (NSString *)stringFromStatus:(DCUserStatus)status;

@@ -26,22 +26,23 @@
 #import "ThumbHash.h"
 #import "UIImage+animatedGIF.h"
 #import "UILazyImage.h"
+#import "DCContentManager.h"
 
 // https://discord.gg/X4NSsMC
 
 @implementation DCTools
 
 // Avatar image roundinator
-static UIImage *roundedImage(UIImage *image) {
-    CGFloat size = MIN(image.size.width, image.size.height);
-    CGRect rect  = CGRectMake(0, 0, size, size);
-    UIGraphicsBeginImageContextWithOptions(rect.size, NO, 0);
-    [[UIBezierPath bezierPathWithOvalInRect:rect] addClip];
-    [image drawInRect:rect];
-    UIImage *result = UIGraphicsGetImageFromCurrentImageContext();
-    UIGraphicsEndImageContext();
-    return result;
-}
+// static UIImage *roundedImage(UIImage *image) {
+//     CGFloat size = MIN(image.size.width, image.size.height);
+//     CGRect rect  = CGRectMake(0, 0, size, size);
+//     UIGraphicsBeginImageContextWithOptions(rect.size, NO, 0);
+//     [[UIBezierPath bezierPathWithOvalInRect:rect] addClip];
+//     [image drawInRect:rect];
+//     UIImage *result = UIGraphicsGetImageFromCurrentImageContext();
+//     UIGraphicsEndImageContext();
+//     return result;
+// }
 
 // Attachment image roundinator
 static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
@@ -129,7 +130,6 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
         user.profileImage     = [UIImage new];
         user.avatarDecoration = [UIImage new];
 
-        // If no avatarID, go straight to default avatar
         if (!user.avatarID || (NSNull *)user.avatarID == [NSNull null]) {
             int selector = 0;
             if (user.discriminator == 0) {
@@ -138,7 +138,7 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
             } else {
                 selector = user.discriminator % 5;
             }
-            user.profileImage = roundedImage([DCUser defaultAvatars][selector]);
+            user.profileImage = [DCContentManager processedIcon:[DCUser defaultAvatars][selector] context:DCAssetContextChat];
             dispatch_async(dispatch_get_main_queue(), ^{
                 [NSNotificationCenter.defaultCenter
                     postNotificationName:@"RELOAD USER DATA"
@@ -148,63 +148,74 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
         }
 
         SDWebImageManager *manager = [SDWebImageManager sharedManager];
-        // Load profile image
-        NSURL *avatarURL =
-            [NSURL URLWithString:[NSString stringWithFormat:
-                                               @"https://cdn.discordapp.com/avatars/%@/%@.png?size=80",
-                                               user.snowflake, user.avatarID]];
+        NSURL *avatarURL = [NSURL URLWithString:[NSString stringWithFormat:
+            @"https://cdn.discordapp.com/avatars/%@/%@.png?size=80",
+            user.snowflake, user.avatarID]];
+
         [manager downloadImageWithURL:avatarURL
                               options:SDWebImageRetryFailed
                              progress:nil
                             completed:^(UIImage *retrievedImage, NSError *error, SDImageCacheType cacheType, BOOL finished, NSURL *imageURL) {
                                 @autoreleasepool {
-                                    if (retrievedImage && finished) {
-                                        user.profileImage = roundedImage(retrievedImage);
-                                        dispatch_async(dispatch_get_main_queue(), ^{
-                                            [NSNotificationCenter.defaultCenter
-                                                postNotificationName:
-                                                    @"RELOAD USER DATA"
-                                                              object:user];
-                                        });
-                                    } else {
-                                        // NSLog(@"Failed to download user profile image with URL %@: %@", avatarURL, error);
+                                    if (!retrievedImage || !finished) {
                                         int selector = 0;
-
                                         if (user.discriminator == 0) {
                                             NSNumber *longId = @([user.snowflake longLongValue]);
-                                            selector         = ([longId longLongValue] >> 22) % 6;
+                                            selector = ([longId longLongValue] >> 22) % 6;
                                         } else {
                                             selector = user.discriminator % 5;
                                         }
-                                        user.profileImage = roundedImage([DCUser defaultAvatars][selector]);
+                                        user.profileImage = [DCContentManager processedIcon:[DCUser defaultAvatars][selector] context:DCAssetContextChat];
                                         dispatch_async(dispatch_get_main_queue(), ^{
                                             [NSNotificationCenter.defaultCenter
                                                 postNotificationName:@"RELOAD USER DATA"
                                                               object:user];
                                         });
+                                        return;
                                     }
+
+                                    // Process avatar — if decoration is already loaded, composite now
+                                    // Otherwise just round and store, decoration will composite when it arrives
+                                    if (user.avatarDecoration && [user.avatarDecoration isKindOfClass:[UIImage class]]
+                                        && user.avatarDecoration.size.width > 0) {
+                                        user.profileImage = retrievedImage;
+                                        user.profileImage = [DCContentManager processedAvatarForUser:user context:DCAssetContextChat];
+                                    } else {
+                                        // avatar completion block — store raw, then process
+                                        user.rawProfileImage = retrievedImage;
+                                        user.profileImage = [DCContentManager processedAvatarForUser:user context:DCAssetContextChat];
+                                    }
+
+                                    dispatch_async(dispatch_get_main_queue(), ^{
+                                        [NSNotificationCenter.defaultCenter
+                                            postNotificationName:@"RELOAD USER DATA"
+                                                          object:user];
+                                    });
                                 }
                             }];
 
         if (!user.avatarDecorationID || (NSNull *)user.avatarDecorationID == [NSNull null]) {
             return;
         }
-        NSURL *avatarDecorationURL = [NSURL URLWithString:[NSString
-                                                              stringWithFormat:@"https://cdn.discordapp.com/avatar-decoration-presets/%@.png?size=96&passthrough=false",
-                                                                               user.avatarDecorationID]];
+
+        NSURL *avatarDecorationURL = [NSURL URLWithString:[NSString stringWithFormat:
+            @"https://cdn.discordapp.com/avatar-decoration-presets/%@.png?size=96&passthrough=false",
+            user.avatarDecorationID]];
+
         [manager downloadImageWithURL:avatarDecorationURL
                               options:SDWebImageRetryFailed
                              progress:nil
                             completed:^(UIImage *retrievedImage, NSError *error, SDImageCacheType cacheType, BOOL finished, NSURL *imageURL) {
                                 if (!retrievedImage || !finished) {
-                                    NSLog(@"Failed to download user avatar decoration with URL %@: %@", avatarDecorationURL, error);
+                                    NSLog(@"Failed to download avatar decoration: %@", error);
                                     return;
                                 }
                                 user.avatarDecoration = retrievedImage;
+                                // Recomposite — avatar may already be rounded and waiting
+                                user.profileImage = [DCContentManager processedAvatarForUser:user context:DCAssetContextChat];
                                 dispatch_async(dispatch_get_main_queue(), ^{
                                     [NSNotificationCenter.defaultCenter
-                                        postNotificationName:
-                                            @"RELOAD USER DATA"
+                                        postNotificationName:@"RELOAD USER DATA"
                                                       object:user];
                                 });
                             }];

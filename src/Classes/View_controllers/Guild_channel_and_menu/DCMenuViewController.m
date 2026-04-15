@@ -18,6 +18,7 @@
 #include "DCServerCommunicator.h"
 #include "DCUser.h"
 #import "MentionBadge.h"
+#import "DCContentManager.h"
 
 @interface DCMenuViewController ()
 @property NSMutableArray *displayGuilds;
@@ -790,11 +791,16 @@
                 }
                 cell.nameLabel.text = channelAtRowIndex.name;
 
-                if (channelAtRowIndex.icon != nil &&
-                    [channelAtRowIndex.icon isKindOfClass:[UIImage class]]) {
+                if (channelAtRowIndex.type == 1 && channelAtRowIndex.users.count == 2) {
+                    DCUser *buddy = [channelAtRowIndex.users firstObject];
+                    if (buddy.profileImage && buddy.profileImage.size.width > 0) {
+                        cell.pfp.image = buddy.profileImage;
+                    } else {
+                        cell.pfp.image = channelAtRowIndex.icon;
+                    }
+                } else if (channelAtRowIndex.icon != nil &&
+                           [channelAtRowIndex.icon isKindOfClass:[UIImage class]]) {
                     cell.pfp.image = channelAtRowIndex.icon;
-                    cell.pfp.layer.cornerRadius  = cell.pfp.frame.size.width / 2.0;
-                    cell.pfp.layer.masksToBounds = YES;
                 }
 
                 // Presence indicator logic for DM channels (type 1, one-on-one)
