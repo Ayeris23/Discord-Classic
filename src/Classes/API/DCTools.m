@@ -127,6 +127,11 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
 
 + (void)getUserAvatar:(DCUser *)user {
     @autoreleasepool {
+        // Bail if already downloading
+        if (user.profileImage && user.profileImage.size.width == 0) {
+            return; // placeholder is set, download already in flight
+        }
+        
         user.profileImage     = [UIImage new];
         user.avatarDecoration = [UIImage new];
 
@@ -178,7 +183,7 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
                                     // Otherwise just round and store, decoration will composite when it arrives
                                     if (user.avatarDecoration && [user.avatarDecoration isKindOfClass:[UIImage class]]
                                         && user.avatarDecoration.size.width > 0) {
-                                        user.profileImage = retrievedImage;
+                                        user.rawProfileImage = retrievedImage;
                                         user.profileImage = [DCContentManager processedAvatarForUser:user context:DCAssetContextChat];
                                     } else {
                                         // avatar completion block — store raw, then process
@@ -211,7 +216,11 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
                                     return;
                                 }
                                 user.avatarDecoration = retrievedImage;
-                                // Recomposite — avatar may already be rounded and waiting
+                                // Only recomposite if the base avatar has already arrived
+                                // If not, the avatar completion block will composite both when it finishes
+                                if (!user.rawProfileImage || user.rawProfileImage.size.width == 0) {
+                                    return;
+                                }
                                 user.profileImage = [DCContentManager processedAvatarForUser:user context:DCAssetContextChat];
                                 dispatch_async(dispatch_get_main_queue(), ^{
                                     [NSNotificationCenter.defaultCenter

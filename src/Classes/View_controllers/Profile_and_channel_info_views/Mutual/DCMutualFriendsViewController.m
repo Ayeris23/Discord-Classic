@@ -65,7 +65,7 @@
 
 - (NSInteger)tableView:(UITableView *)tableView
     numberOfRowsInSection:(NSInteger)section {
-    return self.mutualFriendsList.count;
+    return self.recipients.count;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
@@ -74,11 +74,11 @@
         [tableView dequeueReusableCellWithIdentifier:@"Members cell"];
     DCUser *user                     = self.recipients[indexPath.row];
     cell.userName.text               = user.displayName;
-    if (user.profileImage) {
-        cell.userPFP.image = user.profileImage;
-    } else {
-        [DCTools getUserAvatar:user];
-    }
+    // if (user.profileImage) {
+    //     cell.userPFP.image = user.profileImage;
+    // } else {
+    //     [DCTools getUserAvatar:user];
+    // }
     return cell;
 }
 

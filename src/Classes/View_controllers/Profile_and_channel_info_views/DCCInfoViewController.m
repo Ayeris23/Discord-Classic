@@ -213,6 +213,8 @@
     NSUInteger index = [self.recipients indexOfObject:user];
     if (index == NSNotFound) return;
     dispatch_async(dispatch_get_main_queue(), ^{
+        // Guard against stale index after async dispatch
+        if (index >= [self.tableView numberOfRowsInSection:0]) return;
         NSIndexPath *indexPath = [NSIndexPath indexPathForRow:index inSection:0];
         [self.tableView beginUpdates];
         [self.tableView reloadRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationNone];

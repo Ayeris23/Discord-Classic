@@ -15,6 +15,7 @@
 			<string>IBUIImageView</string>
 			<string>IBUITableViewCell</string>
 			<string>IBUITextView</string>
+			<string>IBUIView</string>
 		</array>
 		<array key="IBDocument.PluginDependencies">
 			<string>com.apple.InterfaceBuilder.IBCocoaTouchPlugin</string>
@@ -84,10 +85,36 @@
 								<int key="NSvFlags">290</int>
 								<string key="NSFrameSize">{321, 2}</string>
 								<reference key="NSSuperview" ref="494805391"/>
-								<reference key="NSNextKeyView" ref="1025506783"/>
+								<reference key="NSNextKeyView" ref="245748541"/>
 								<string key="NSReuseIdentifierKey">_NS:9</string>
 								<string key="NSHuggingPriority">{251, 251}</string>
 								<bool key="IBUIUserInteractionEnabled">NO</bool>
+								<string key="targetRuntimeIdentifier">IBCocoaTouchFramework</string>
+							</object>
+							<object class="IBUIView" id="245748541">
+								<reference key="NSNextResponder" ref="494805391"/>
+								<int key="NSvFlags">290</int>
+								<string key="NSFrame">{{0, 1}, {320, 1}}</string>
+								<reference key="NSSuperview" ref="494805391"/>
+								<reference key="NSNextKeyView" ref="223572171"/>
+								<string key="NSReuseIdentifierKey">_NS:9</string>
+								<object class="NSColor" key="IBUIBackgroundColor">
+									<int key="NSColorSpace">1</int>
+									<bytes key="NSRGB">MC4xODgyMzUyOTQxIDAuMTkyMTU2ODYyNyAwLjIxOTYwNzg0MzEAA</bytes>
+								</object>
+								<string key="targetRuntimeIdentifier">IBCocoaTouchFramework</string>
+							</object>
+							<object class="IBUIView" id="223572171">
+								<reference key="NSNextResponder" ref="494805391"/>
+								<int key="NSvFlags">290</int>
+								<string key="NSFrameSize">{320, 1}</string>
+								<reference key="NSSuperview" ref="494805391"/>
+								<reference key="NSNextKeyView" ref="1025506783"/>
+								<string key="NSReuseIdentifierKey">_NS:9</string>
+								<object class="NSColor" key="IBUIBackgroundColor">
+									<int key="NSColorSpace">1</int>
+									<bytes key="NSRGB">MC4xMjE1Njg2Mjc1IDAuMTI1NDkwMTk2MSAwLjE0MTE3NjQ3MDYAA</bytes>
+								</object>
 								<string key="targetRuntimeIdentifier">IBCocoaTouchFramework</string>
 							</object>
 							<object class="IBUIImageView" id="1025506783">
@@ -193,6 +220,8 @@
 							<reference ref="256396676"/>
 							<reference ref="299797561"/>
 							<reference ref="1025506783"/>
+							<reference ref="245748541"/>
+							<reference ref="223572171"/>
 						</array>
 						<reference key="parent" ref="0"/>
 					</object>
@@ -211,6 +240,18 @@
 						<reference key="object" ref="1025506783"/>
 						<reference key="parent" ref="116778014"/>
 					</object>
+					<object class="IBObjectRecord">
+						<string key="id">gpE-49-adJ</string>
+						<reference key="object" ref="245748541"/>
+						<reference key="parent" ref="116778014"/>
+						<string key="objectName">View - Separator low</string>
+					</object>
+					<object class="IBObjectRecord">
+						<string key="id">9TN-xY-Pjk</string>
+						<reference key="object" ref="223572171"/>
+						<reference key="parent" ref="116778014"/>
+						<string key="objectName">View - Separator high</string>
+					</object>
 				</array>
 			</object>
 			<dictionary class="NSMutableDictionary" key="flattenedProperties">
@@ -222,8 +263,10 @@
 				<string key="0OV-Ok-pYe.IBPluginDependency">com.apple.InterfaceBuilder.IBCocoaTouchPlugin</string>
 				<reference key="0OV-Ok-pYe.IBUserGuides" ref="0"/>
 				<boolean value="NO" key="0OV-Ok-pYe.showNotes"/>
+				<string key="9TN-xY-Pjk.IBPluginDependency">com.apple.InterfaceBuilder.IBCocoaTouchPlugin</string>
 				<string key="S4P-Hk-FRv.IBPluginDependency">com.apple.InterfaceBuilder.IBCocoaTouchPlugin</string>
 				<string key="VFQ-Sx-FLN.IBPluginDependency">com.apple.InterfaceBuilder.IBCocoaTouchPlugin</string>
+				<string key="gpE-49-adJ.IBPluginDependency">com.apple.InterfaceBuilder.IBCocoaTouchPlugin</string>
 				<string key="kE3-kD-wrQ.CustomClassName">DCChatTableCell</string>
 				<string key="kE3-kD-wrQ.IBPluginDependency">com.apple.InterfaceBuilder.IBCocoaTouchPlugin</string>
 				<reference key="kE3-kD-wrQ.IBUserGuides" ref="0"/>
