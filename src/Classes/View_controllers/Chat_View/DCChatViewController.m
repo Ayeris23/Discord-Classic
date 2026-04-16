@@ -1241,6 +1241,7 @@ static dispatch_queue_t chat_messages_queue;
                 }
             }
         } else {
+            CFAbsoluteTime cellStart = CFAbsoluteTimeGetCurrent();
             static NSSet *specialMessageTypes = nil;
             static UIColor *replyHighlightColor = nil;
             static UIColor *pingColor = nil;
@@ -1259,17 +1260,43 @@ static dispatch_queue_t chat_messages_queue;
                     containsObject:@(messageAtRowIndex.messageType)]) {
                 cell = [tableView
                     dequeueReusableCellWithIdentifier:@"Grouped Message Cell"];
+                if ([cell.configuredSnowflake isEqualToString:messageAtRowIndex.snowflake]
+                    && cell.configuredWidth == self.chatTableView.bounds.size.width
+                    && !(self.replyingToMessage && [self.replyingToMessage.snowflake isEqualToString:messageAtRowIndex.snowflake])
+                    && !(self.editingMessage && [self.editingMessage.snowflake isEqualToString:messageAtRowIndex.snowflake])) {
+                    return cell;
+                }
             } else if (messageAtRowIndex.referencedMessage != nil) {
                 cell = [tableView
                     dequeueReusableCellWithIdentifier:@"Reply Message Cell"];
+                if ([cell.configuredSnowflake isEqualToString:messageAtRowIndex.snowflake]
+                    && cell.configuredWidth == self.chatTableView.bounds.size.width
+                    && !(self.replyingToMessage && [self.replyingToMessage.snowflake isEqualToString:messageAtRowIndex.snowflake])
+                    && !(self.editingMessage && [self.editingMessage.snowflake isEqualToString:messageAtRowIndex.snowflake])) {
+                    return cell;
+                }
             } else if ([specialMessageTypes
                            containsObject:@(messageAtRowIndex.messageType)]) {
                 cell = [tableView dequeueReusableCellWithIdentifier:
                                       @"Universal Typehandler Cell"];
+                if ([cell.configuredSnowflake isEqualToString:messageAtRowIndex.snowflake]
+                    && cell.configuredWidth == self.chatTableView.bounds.size.width
+                    && !(self.replyingToMessage && [self.replyingToMessage.snowflake isEqualToString:messageAtRowIndex.snowflake])
+                    && !(self.editingMessage && [self.editingMessage.snowflake isEqualToString:messageAtRowIndex.snowflake])) {
+                    return cell;
+                }
             } else {
                 cell = [tableView dequeueReusableCellWithIdentifier:@"Message Cell"];
+
+                if ([cell.configuredSnowflake isEqualToString:messageAtRowIndex.snowflake]
+                    && cell.configuredWidth == self.chatTableView.bounds.size.width
+                    && !(self.replyingToMessage && [self.replyingToMessage.snowflake isEqualToString:messageAtRowIndex.snowflake])
+                    && !(self.editingMessage && [self.editingMessage.snowflake isEqualToString:messageAtRowIndex.snowflake])) {
+                    return cell;
+                }
             }
             // TOCK(init);
+            cell.configuredSnowflake = nil;
             // cleanup loop
             for (UIView *subView in cell.subviews) {
                 @autoreleasepool {
@@ -1385,12 +1412,10 @@ static dispatch_queue_t chat_messages_queue;
             cell.contentTextView.text            = @"";
             cell.contentTextView.textColor       = [UIColor whiteColor];
             cell.contentTextView.font            = [UIFont systemFontOfSize:14];
-            cell.contentTextView.backgroundColor = [UIColor clearColor];
-            cell.contentTextView.textAlignment   = NSTextAlignmentLeft;
 
             // TICK(content);
             cell.contentTextView.text = messageAtRowIndex.content;
-            if ([cell.contentTextView respondsToSelector:@selector(setAttributedText:)] && messageAtRowIndex.attributedContent) {
+            if (messageAtRowIndex.attributedContent) {
                 NSMutableAttributedString *colored = [messageAtRowIndex.attributedContent mutableCopy];
                 [colored enumerateAttribute:NSForegroundColorAttributeName
                                     inRange:NSMakeRange(0, colored.length)
@@ -1404,14 +1429,27 @@ static dispatch_queue_t chat_messages_queue;
                 }];
                 cell.contentTextView.attributedText = colored;
             }
-            if (VERSION_MIN(@"7.0")) {
-                cell.contentTextView.linkTextAttributes = @{
-                    NSForegroundColorAttributeName: [UIColor colorWithRed:148/255.0f
-                                                                    green:197/255.0f
-                                                                     blue:250/255.0f
-                                                                    alpha:1.0f]
-                };
+
+            // URL detection and coloring — iOS 6+ only
+            if (VERSION_MIN(@"6.0")) {
+                NSMutableAttributedString *linked = cell.contentTextView.attributedText
+                    ? [cell.contentTextView.attributedText mutableCopy]
+                    : [[NSMutableAttributedString alloc] initWithString:cell.contentTextView.text
+                                                             attributes:@{
+                                                                 NSForegroundColorAttributeName: [UIColor whiteColor],
+                                                                 NSFontAttributeName: [UIFont systemFontOfSize:14]
+                                                             }];
+                NSDataDetector *detector = [NSDataDetector dataDetectorWithTypes:NSTextCheckingTypeLink error:nil];
+                NSArray *matches = [detector matchesInString:linked.string options:0 range:NSMakeRange(0, linked.string.length)];
+                for (NSTextCheckingResult *match in matches) {
+                    [linked addAttribute:NSForegroundColorAttributeName
+                                   value:[UIColor colorWithRed:148/255.0f green:197/255.0f blue:250/255.0f alpha:1.0f]
+                                   range:match.range];
+                }
+                cell.contentTextView.attributedText = linked;
             }
+            
+            float contentWidth = self.chatTableView.width - 63;
             NSCharacterSet *invisibleChars = [NSCharacterSet characterSetWithCharactersInString:@"\u00A0\u200B\n\r\t "];
             BOOL hasVisibleContent = [[messageAtRowIndex.content stringByTrimmingCharactersInSet:invisibleChars] length] > 0 
                 || messageAtRowIndex.emojis.count > 0;
@@ -1423,19 +1461,25 @@ static dispatch_queue_t chat_messages_queue;
                     cell.contentTextView.width,
                     9999
                 );
-            } else if (!VERSION_MIN(@"6.0")) {
-                // Recalculate textHeight for current width instead of using stale parse-time value
-                float contentWidth = self.chatTableView.width - 63;
-                CGSize textSize = [messageAtRowIndex.content
-                         sizeWithFont:[UIFont systemFontOfSize:14]
-                    constrainedToSize:CGSizeMake(contentWidth, MAXFLOAT)
-                        lineBreakMode:NSLineBreakByWordWrapping];
-                CGFloat currentTextHeight = ceil(textSize.height) + 2;
-                
+            } else {
+                CGFloat currentTextHeight;
+                if (VERSION_MIN(@"6.0") && messageAtRowIndex.attributedContent) {
+                    CGRect boundingRect = [messageAtRowIndex.attributedContent
+                        boundingRectWithSize:CGSizeMake(contentWidth, MAXFLOAT)
+                                     options:NSStringDrawingUsesLineFragmentOrigin
+                                     context:nil];
+                    currentTextHeight = ceil(boundingRect.size.height) + 2;
+                } else {
+                    CGSize textSize = [messageAtRowIndex.content
+                             sizeWithFont:[UIFont systemFontOfSize:14]
+                        constrainedToSize:CGSizeMake(contentWidth, MAXFLOAT)
+                            lineBreakMode:NSLineBreakByWordWrapping];
+                    currentTextHeight = ceil(textSize.height) + 2;
+                }
                 cell.contentTextView.frame = CGRectMake(
                     cell.contentTextView.x,
                     cell.contentTextView.y,
-                    cell.contentTextView.width,
+                    contentWidth,
                     currentTextHeight
                 );
             }
@@ -1444,7 +1488,7 @@ static dispatch_queue_t chat_messages_queue;
             if (messageAtRowIndex.emojis.count > 0) {
                 UIFont *font = [UIFont systemFontOfSize:14];
                 CGFloat lineHeight = font.lineHeight;
-                CGFloat textViewWidth = cell.contentTextView.width;
+                CGFloat textViewWidth = contentWidth;
 
                 for (NSArray *emojiInfo in messageAtRowIndex.emojis) {
                     DCEmoji *emoji     = emojiInfo[0];
@@ -1485,62 +1529,9 @@ static dispatch_queue_t chat_messages_queue;
                 }
             }
 
-            // Emoji Handling iOS 6
-            if (VERSION_MIN(@"6.0") && messageAtRowIndex.emojis.count > 0) {
-                cell.messageSnowflake = messageAtRowIndex.snowflake;
-                NSString *snowflake = messageAtRowIndex.snowflake;
-                __weak DCChatTableCell *weakCell = cell;
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    DCChatTableCell *strongCell = weakCell;
-                    if (!strongCell || ![strongCell.messageSnowflake isEqualToString:snowflake]) return;
-                    for (NSArray *emojiInfo in messageAtRowIndex.emojis) {
-                        DCEmoji *emoji     = emojiInfo[0];
-                        NSNumber *location = emojiInfo[1];
-                        UITextPosition *start = [strongCell.contentTextView
-                            positionFromPosition:strongCell.contentTextView.beginningOfDocument
-                                          offset:location.unsignedIntegerValue];
-                        UITextPosition *end = [strongCell.contentTextView
-                            positionFromPosition:start
-                                          offset:4];
-                        UITextRange *txtRange = [strongCell.contentTextView textRangeFromPosition:start toPosition:end];
-                        CGRect rect = [strongCell.contentTextView firstRectForRange:txtRange];
-                        rect.origin.y += 1;
-                        rect.size.width  = MAX(rect.size.width, 16);
-                        rect.size.height = rect.size.width;
-                        UIImageView *emojiImageView = [[UIImageView alloc] initWithFrame:rect];
-                        emojiImageView.image = emoji.image;
-                        emojiImageView.tag   = 9001;
-                        emojiImageView.frame = CGRectMake(
-                            emojiImageView.frame.origin.x,
-                            emojiImageView.frame.origin.y,
-                            18,
-                            18
-                        );
-                        [strongCell.contentTextView addSubview:emojiImageView];
-                    }
-                });
-            }
             // TOCK(content);
 
-            // double height = [cell.contentTextView
-            //                     sizeThatFits:CGSizeMake(cell.contentTextView.width, MAXFLOAT)]
-            //                     .height;
-            // cell.contentTextView.height = height;
-
-            if (!messageAtRowIndex.isGrouped) {
-                if (messageAtRowIndex.author.avatarDecoration &&
-                    [messageAtRowIndex.author.avatarDecoration isKindOfClass:[UIImage class]]) {
-                    cell.avatarDecoration.image        = messageAtRowIndex.author.avatarDecoration;
-                    cell.avatarDecoration.layer.hidden = NO;
-                    cell.avatarDecoration.opaque       = NO;
-                } else {
-                    cell.avatarDecoration.layer.hidden = YES;
-                }
-                cell.profileImage.image = messageAtRowIndex.author.profileImage;
-//                cell.profileImage.layer.cornerRadius =
-//                    cell.profileImage.frame.size.height / 2;
-//                cell.profileImage.layer.masksToBounds = YES;
-            }
+            cell.profileImage.image = messageAtRowIndex.author.profileImage;
 
             if ((self.replyingToMessage
                      && [self.replyingToMessage.snowflake
@@ -1556,7 +1547,6 @@ static dispatch_queue_t chat_messages_queue;
             }
 
 
-            float contentWidth = self.chatTableView.width - 63;
             BOOL cond = (messageAtRowIndex.messageType == 6
                 || (messageAtRowIndex.messageType != 18
                     && (messageAtRowIndex.messageType < 1 || messageAtRowIndex.messageType > 8)));
@@ -1720,6 +1710,10 @@ static dispatch_queue_t chat_messages_queue;
                     }
                 }
             }
+        cell.configuredSnowflake = messageAtRowIndex.snowflake;
+        cell.configuredWidth = self.chatTableView.bounds.size.width;
+        CFAbsoluteTime cellEnd = CFAbsoluteTimeGetCurrent();
+            NSLog(@"[Cell] configuration took %.2fms", (cellEnd - cellStart) * 1000);
         }
     }
     return cell;
@@ -2541,7 +2535,9 @@ static dispatch_queue_t chat_messages_queue;
 // }
 
 - (void)didRotateFromInterfaceOrientation:(UIInterfaceOrientation)fromInterfaceOrientation {
-    [self.chatTableView reloadData];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self.chatTableView reloadData];
+    });
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
