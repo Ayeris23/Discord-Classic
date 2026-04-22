@@ -13,6 +13,7 @@
 #import "DCServerCommunicator.h"
 #import "DCUser.h"
 #import "DCRole.h"
+#import "DCServerCommunicator.h"
 
 @interface DCAppDelegate ()
 @property (assign, nonatomic) BOOL shouldReload;
@@ -128,6 +129,12 @@
     [[UIBarButtonItem appearance] setBackButtonBackgroundImage:backPressed
                                                       forState:UIControlStateHighlighted
                                                     barMetrics:UIBarMetricsDefault];
+    
+    [[UIApplication sharedApplication] registerForRemoteNotificationTypes:
+     UIRemoteNotificationTypeBadge |
+     UIRemoteNotificationTypeSound |
+     UIRemoteNotificationTypeAlert];
+    
     return YES;
 }
 
@@ -157,6 +164,24 @@
             // ok requis
         }
     }
+}
+
+- (void)application:(UIApplication *)application
+didRegisterForRemoteNotificationsWithDeviceToken:(NSData *)deviceToken {
+    
+    NSMutableString *token = [NSMutableString stringWithCapacity:deviceToken.length * 2];
+    const unsigned char *bytes = deviceToken.bytes;
+    for (NSInteger i = 0; i < deviceToken.length; i++) {
+        [token appendFormat:@"%02x", bytes[i]];
+    }
+    
+    NSLog(@"APNs device token: %@", token);
+    [DCServerCommunicator.sharedInstance registerPushToken:token];
+}
+
+- (void)application:(UIApplication *)application
+didFailToRegisterForRemoteNotificationsWithError:(NSError *)error {
+    NSLog(@"Failed to register for push: %@", error);
 }
 
 - (void)handleLogOut {

@@ -422,6 +422,21 @@
 		2FE82DE32F62998300375F28 /* DCChatGifAttachment.xib in Resources */ = {isa = PBXBuildFile; fileRef = 2FE82DE22F62998300375F28 /* DCChatGifAttachment.xib */; };
 		2FE82DE62F629C3400375F28 /* DCChatGifAttachment.m in Sources */ = {isa = PBXBuildFile; fileRef = 2FE82DE52F629C3400375F28 /* DCChatGifAttachment.m */; };
 		2FE82DE92F6697E100375F28 /* DCGifInfo.m in Sources */ = {isa = PBXBuildFile; fileRef = 2FE82DE82F6697E100375F28 /* DCGifInfo.m */; };
+		2FFA38BC2F95E11500E67A40 /* icon100.png in Resources */ = {isa = PBXBuildFile; fileRef = 2FFA38AC2F95E11500E67A40 /* icon100.png */; };
+		2FFA38BD2F95E11500E67A40 /* icon114.png in Resources */ = {isa = PBXBuildFile; fileRef = 2FFA38AD2F95E11500E67A40 /* icon114.png */; };
+		2FFA38BE2F95E11500E67A40 /* icon144.png in Resources */ = {isa = PBXBuildFile; fileRef = 2FFA38AE2F95E11500E67A40 /* icon144.png */; };
+		2FFA38BF2F95E11500E67A40 /* icon29.png in Resources */ = {isa = PBXBuildFile; fileRef = 2FFA38AF2F95E11500E67A40 /* icon29.png */; };
+		2FFA38C02F95E11500E67A40 /* icon50.png in Resources */ = {isa = PBXBuildFile; fileRef = 2FFA38B02F95E11500E67A40 /* icon50.png */; };
+		2FFA38C12F95E11500E67A40 /* icon57.png in Resources */ = {isa = PBXBuildFile; fileRef = 2FFA38B12F95E11500E67A40 /* icon57.png */; };
+		2FFA38C22F95E11500E67A40 /* icon58.png in Resources */ = {isa = PBXBuildFile; fileRef = 2FFA38B22F95E11500E67A40 /* icon58.png */; };
+		2FFA38C32F95E11500E67A40 /* icon72.png in Resources */ = {isa = PBXBuildFile; fileRef = 2FFA38B32F95E11500E67A40 /* icon72.png */; };
+		2FFA38C42F95E11500E67A40 /* icon120-ios7.png in Resources */ = {isa = PBXBuildFile; fileRef = 2FFA38B52F95E11500E67A40 /* icon120-ios7.png */; };
+		2FFA38C52F95E11500E67A40 /* icon152-ios7.png in Resources */ = {isa = PBXBuildFile; fileRef = 2FFA38B62F95E11500E67A40 /* icon152-ios7.png */; };
+		2FFA38C62F95E11500E67A40 /* icon29-ios7.png in Resources */ = {isa = PBXBuildFile; fileRef = 2FFA38B72F95E11500E67A40 /* icon29-ios7.png */; };
+		2FFA38C72F95E11500E67A40 /* icon40-ios7.png in Resources */ = {isa = PBXBuildFile; fileRef = 2FFA38B82F95E11500E67A40 /* icon40-ios7.png */; };
+		2FFA38C82F95E11500E67A40 /* icon58-ios7.png in Resources */ = {isa = PBXBuildFile; fileRef = 2FFA38B92F95E11500E67A40 /* icon58-ios7.png */; };
+		2FFA38C92F95E11500E67A40 /* icon76-ios7.png in Resources */ = {isa = PBXBuildFile; fileRef = 2FFA38BA2F95E11500E67A40 /* icon76-ios7.png */; };
+		2FFA38CA2F95E11500E67A40 /* icon80-ios7.png in Resources */ = {isa = PBXBuildFile; fileRef = 2FFA38BB2F95E11500E67A40 /* icon80-ios7.png */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -979,7 +994,22 @@
 		2FE82DE52F629C3400375F28 /* DCChatGifAttachment.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCChatGifAttachment.m; sourceTree = "<group>"; };
 		2FE82DE72F6697E100375F28 /* DCGifInfo.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCGifInfo.h; sourceTree = "<group>"; };
 		2FE82DE82F6697E100375F28 /* DCGifInfo.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCGifInfo.m; sourceTree = "<group>"; };
-		5BA0983D2D2058E4009F7726 /* Discord.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Discord.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		2FFA38AC2F95E11500E67A40 /* icon100.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = icon100.png; sourceTree = "<group>"; };
+		2FFA38AD2F95E11500E67A40 /* icon114.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = icon114.png; sourceTree = "<group>"; };
+		2FFA38AE2F95E11500E67A40 /* icon144.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = icon144.png; sourceTree = "<group>"; };
+		2FFA38AF2F95E11500E67A40 /* icon29.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = icon29.png; sourceTree = "<group>"; };
+		2FFA38B02F95E11500E67A40 /* icon50.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = icon50.png; sourceTree = "<group>"; };
+		2FFA38B12F95E11500E67A40 /* icon57.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = icon57.png; sourceTree = "<group>"; };
+		2FFA38B22F95E11500E67A40 /* icon58.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = icon58.png; sourceTree = "<group>"; };
+		2FFA38B32F95E11500E67A40 /* icon72.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = icon72.png; sourceTree = "<group>"; };
+		2FFA38B52F95E11500E67A40 /* icon120-ios7.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "icon120-ios7.png"; sourceTree = "<group>"; };
+		2FFA38B62F95E11500E67A40 /* icon152-ios7.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "icon152-ios7.png"; sourceTree = "<group>"; };
+		2FFA38B72F95E11500E67A40 /* icon29-ios7.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "icon29-ios7.png"; sourceTree = "<group>"; };
+		2FFA38B82F95E11500E67A40 /* icon40-ios7.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "icon40-ios7.png"; sourceTree = "<group>"; };
+		2FFA38B92F95E11500E67A40 /* icon58-ios7.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "icon58-ios7.png"; sourceTree = "<group>"; };
+		2FFA38BA2F95E11500E67A40 /* icon76-ios7.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "icon76-ios7.png"; sourceTree = "<group>"; };
+		2FFA38BB2F95E11500E67A40 /* icon80-ios7.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "icon80-ios7.png"; sourceTree = "<group>"; };
+		5BA0983D2D2058E4009F7726 /* discord.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = discord.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1015,7 +1045,7 @@
 				2F1121282F4EA02F00159D64 /* Libraries */,
 				2F111FC82F4E913F00159D64 /* Assets */,
 				09C6B923204A0F54007EAC26 /* Frameworks */,
-				5BA0983D2D2058E4009F7726 /* Discord.app */,
+				5BA0983D2D2058E4009F7726 /* discord.app */,
 			);
 			sourceTree = "<group>";
 		};
@@ -1072,6 +1102,7 @@
 		2F111FCD2F4E913F00159D64 /* Images */ = {
 			isa = PBXGroup;
 			children = (
+				2FFA38AB2F95E11500E67A40 /* AppIcons */,
 				2F74240B2F7771D600FAF3D9 /* Badge.png */,
 				2F74240C2F7771D600FAF3D9 /* Badge@2x.png */,
 				2F1DF66A2F52BCAC009C44CE /* MessageField.png */,
@@ -2111,6 +2142,36 @@
 			path = Content_Management;
 			sourceTree = "<group>";
 		};
+		2FFA38AB2F95E11500E67A40 /* AppIcons */ = {
+			isa = PBXGroup;
+			children = (
+				2FFA38AC2F95E11500E67A40 /* icon100.png */,
+				2FFA38AD2F95E11500E67A40 /* icon114.png */,
+				2FFA38AE2F95E11500E67A40 /* icon144.png */,
+				2FFA38AF2F95E11500E67A40 /* icon29.png */,
+				2FFA38B02F95E11500E67A40 /* icon50.png */,
+				2FFA38B12F95E11500E67A40 /* icon57.png */,
+				2FFA38B22F95E11500E67A40 /* icon58.png */,
+				2FFA38B32F95E11500E67A40 /* icon72.png */,
+				2FFA38B42F95E11500E67A40 /* ios7 */,
+			);
+			path = AppIcons;
+			sourceTree = "<group>";
+		};
+		2FFA38B42F95E11500E67A40 /* ios7 */ = {
+			isa = PBXGroup;
+			children = (
+				2FFA38B52F95E11500E67A40 /* icon120-ios7.png */,
+				2FFA38B62F95E11500E67A40 /* icon152-ios7.png */,
+				2FFA38B72F95E11500E67A40 /* icon29-ios7.png */,
+				2FFA38B82F95E11500E67A40 /* icon40-ios7.png */,
+				2FFA38B92F95E11500E67A40 /* icon58-ios7.png */,
+				2FFA38BA2F95E11500E67A40 /* icon76-ios7.png */,
+				2FFA38BB2F95E11500E67A40 /* icon80-ios7.png */,
+			);
+			path = ios7;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -2130,7 +2191,7 @@
 			);
 			name = Discord;
 			productName = "Discord Classic";
-			productReference = 5BA0983D2D2058E4009F7726 /* Discord.app */;
+			productReference = 5BA0983D2D2058E4009F7726 /* discord.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -2141,7 +2202,7 @@
 			attributes = {
 				CLASSPREFIX = DC;
 				LastUpgradeCheck = 0510;
-				ORGANIZATIONNAME = bag.xml;
+				ORGANIZATIONNAME = hammerandchisel;
 			};
 			buildConfigurationList = 09C6B91A204A0F54007EAC26 /* Build configuration list for PBXProject "Discord Classic" */;
 			compatibilityVersion = "Xcode 3.2";
@@ -2189,16 +2250,19 @@
 				2F1120C02F4E913F00159D64 /* DefaultAvatar0.png in Resources */,
 				2F1120F62F4E913F00159D64 /* pfpOverlay@2x.png in Resources */,
 				2F1120D72F4E913F00159D64 /* Group 99.png in Resources */,
+				2FFA38C02F95E11500E67A40 /* icon50.png in Resources */,
 				2F1120F42F4E913F00159D64 /* privateGuildLogo@2x.png in Resources */,
 				2F1DF6782F52C97F009C44CE /* CameraButtonPressed.png in Resources */,
 				2F1120DA2F4E913F00159D64 /* GuildIconBase.png in Resources */,
 				2F1120AF2F4E913F00159D64 /* C-PSN@2x.png in Resources */,
 				2F1120B12F4E913F00159D64 /* C-Reddit@2x.png in Resources */,
 				2F1121002F4E913F00159D64 /* offline@2x.png in Resources */,
+				2FFA38BD2F95E11500E67A40 /* icon114.png in Resources */,
 				2F11209C2F4E913F00159D64 /* BarButtonPressed.png in Resources */,
 				2F11210D2F4E913F00159D64 /* WelcomeBanner.png in Resources */,
 				2F1120D32F4E913F00159D64 /* U-Pin@2x.png in Resources */,
 				2F1121182F4E913F00159D64 /* Video-play-button@2x.png in Resources */,
+				2FFA38C32F95E11500E67A40 /* icon72.png in Resources */,
 				2F1120D02F4E913F00159D64 /* U-Pen.png in Resources */,
 				2F1120B72F4E913F00159D64 /* C-Twitch@2x.png in Resources */,
 				2F1DF66D2F52BCAC009C44CE /* MessageField@2x.png in Resources */,
@@ -2213,7 +2277,9 @@
 				2F1DF67A2F52C97F009C44CE /* SendMessageButton.png in Resources */,
 				2F1122542F4EA03000159D64 /* FontAwesome.ttf in Resources */,
 				2F1120FD2F4E913F00159D64 /* dnd.png in Resources */,
+				2FFA38C82F95E11500E67A40 /* icon58-ios7.png in Resources */,
 				2F1120922F4E913F00159D64 /* CBarButtonMap@2x.png in Resources */,
+				2FFA38BF2F95E11500E67A40 /* icon29.png in Resources */,
 				2F1120FC2F4E913F00159D64 /* absent@2x.png in Resources */,
 				2F1120982F4E913F00159D64 /* Sidebar_glyph.png in Resources */,
 				2F1120F22F4E913F00159D64 /* PLVideoOverlayPlayDown@2x.png in Resources */,
@@ -2221,7 +2287,9 @@
 				2F1121232F4E913F00159D64 /* DCUniversalTableCell.xib in Resources */,
 				2F11208A2F4E913F00159D64 /* bannerTopShadow@2x.png in Resources */,
 				2F1120FE2F4E913F00159D64 /* dnd@2x.png in Resources */,
+				2FFA38C12F95E11500E67A40 /* icon57.png in Resources */,
 				2F1120A12F4E913F00159D64 /* NavigationButtonPressed@2x.png in Resources */,
+				2FFA38C62F95E11500E67A40 /* icon29-ios7.png in Resources */,
 				2F11208D2F4E913F00159D64 /* No-header.png in Resources */,
 				2F1120B52F4E913F00159D64 /* C-Steam@2x.png in Resources */,
 				2F1120B42F4E913F00159D64 /* C-Steam.png in Resources */,
@@ -2242,6 +2310,7 @@
 				2F1121112F4E913F00159D64 /* OldTitlebarTexture.png in Resources */,
 				2F11211F2F4E913F00159D64 /* DCChatGroupedTableCell.xib in Resources */,
 				2F1120A02F4E913F00159D64 /* NavigationButtonPressed.png in Resources */,
+				2FFA38CA2F95E11500E67A40 /* icon80-ios7.png in Resources */,
 				2F1120992F4E913F00159D64 /* Sidebar_glyph@2x.png in Resources */,
 				2F1120F32F4E913F00159D64 /* privateGuildLogo.png in Resources */,
 				2F1120A52F4E913F00159D64 /* userInfoButton@2x.png in Resources */,
@@ -2254,6 +2323,7 @@
 				2F1121042F4E913F00159D64 /* DirectMessages@2x.png in Resources */,
 				2F1120872F4E913F00159D64 /* bannerBottomShadow.png in Resources */,
 				2F1120F02F4E913F00159D64 /* PLVideoOverlayPlay@2x.png in Resources */,
+				2FFA38C72F95E11500E67A40 /* icon40-ios7.png in Resources */,
 				2F1120FA2F4E913F00159D64 /* sinkInMask@2x.png in Resources */,
 				2F1120E32F4E913F00159D64 /* border.png in Resources */,
 				2F11238A2F4EB15F00159D64 /* InfoPlist.strings in Resources */,
@@ -2267,6 +2337,7 @@
 				2F1121142F4E913F00159D64 /* TbarBG@2x.png in Resources */,
 				2F1121072F4E913F00159D64 /* commandbar-bg@2x.png in Resources */,
 				2F1122592F4EA03000159D64 /* emoji.json in Resources */,
+				2FFA38BC2F95E11500E67A40 /* icon100.png in Resources */,
 				2F7424082F70DA7E00FAF3D9 /* Settings.bundle in Resources */,
 				2F1120942F4E913F00159D64 /* preferences.png in Resources */,
 				2F1121122F4E913F00159D64 /* OldTitlebarTexture@2x.png in Resources */,
@@ -2287,11 +2358,13 @@
 				2F1121262F4E913F00159D64 /* O-DCChatTableCell.xib in Resources */,
 				2F11209E2F4E913F00159D64 /* NavigationButton.png in Resources */,
 				2F1121032F4E913F00159D64 /* DirectMessages.png in Resources */,
+				2FFA38C22F95E11500E67A40 /* icon58.png in Resources */,
 				2F1120C72F4E913F00159D64 /* DefaultAvatar3@2x.png in Resources */,
 				2F1120912F4E913F00159D64 /* CBarButtonMap.png in Resources */,
 				2F1120BD2F4E913F00159D64 /* C-Xbox@2x.png in Resources */,
 				2F1121092F4E913F00159D64 /* ContactsBar@2x.png in Resources */,
 				2F11209D2F4E913F00159D64 /* BarButtonPressed@2x.png in Resources */,
+				2FFA38C52F95E11500E67A40 /* icon152-ios7.png in Resources */,
 				2F1121172F4E913F00159D64 /* Video-play-button.png in Resources */,
 				2F11208F2F4E913F00159D64 /* addbarglyph.png in Resources */,
 				2F1120EA2F4E913F00159D64 /* Sar_izmeli_Mehmet_Aa.mp3 in Resources */,
@@ -2303,6 +2376,7 @@
 				2F1120892F4E913F00159D64 /* bannerTopShadow.png in Resources */,
 				2F1120C92F4E913F00159D64 /* DefaultAvatar4@2x.png in Resources */,
 				2F1120D12F4E913F00159D64 /* U-Pen@2x.png in Resources */,
+				2FFA38C42F95E11500E67A40 /* icon120-ios7.png in Resources */,
 				2F1121222F4E913F00159D64 /* DCChatVideoAttachment.xib in Resources */,
 				2F1120902F4E913F00159D64 /* addbarglyph@2x.png in Resources */,
 				2F1DF66C2F52BCAC009C44CE /* MessageField.png in Resources */,
@@ -2311,6 +2385,7 @@
 				2F11208E2F4E913F00159D64 /* No-Header@2x.png in Resources */,
 				2F1120E72F4E913F00159D64 /* menu@2x.png in Resources */,
 				2F1122D52F4EA03000159D64 /* libwebpmux.rc in Resources */,
+				2FFA38BE2F95E11500E67A40 /* icon144.png in Resources */,
 				2F1120A32F4E913F00159D64 /* hamburgerButton@2x.png in Resources */,
 				2F1120CC2F4E913F00159D64 /* U-Add.png in Resources */,
 				2F1121252F4E913F00159D64 /* O-DCChatReplyTableCell.xib in Resources */,
@@ -2358,6 +2433,7 @@
 				2F1DF6852F537FBE009C44CE /* BarButtonDonePressed@2x.png in Resources */,
 				2F1120E62F4E913F00159D64 /* menu.png in Resources */,
 				2F1120E22F4E913F00159D64 /* TestCallEmbed.png in Resources */,
+				2FFA38C92F95E11500E67A40 /* icon76-ios7.png in Resources */,
 				2F1120AA2F4E913F00159D64 /* C-BlueSky.png in Resources */,
 				2F11211B2F4E913F00159D64 /* iOS-7.storyboard in Resources */,
 				2FE82DDD2F5D363900375F28 /* separator@2x.png in Resources */,
@@ -2686,7 +2762,6 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ARCHS = "$(ARCHS_STANDARD_32_BIT)";
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_LAUNCHIMAGE_NAME = LaunchImage;
 				CLANG_WARN_OBJCPP_ARC_ABI = YES;
 				CLANG_WARN_OBJC_MISSING_PROPERTY_SYNTHESIS = NO;
@@ -2706,7 +2781,7 @@
 				INFOPLIST_FILE = Assets/Plists/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 5.1;
 				ONLY_ACTIVE_ARCH = NO;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = discord;
 				SDKROOT = iphoneos7.1;
 				SUPPORTED_PLATFORMS = "iphonesimulator iphoneos";
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -2719,7 +2794,6 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ARCHS = "$(ARCHS_STANDARD_32_BIT)";
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_LAUNCHIMAGE_NAME = LaunchImage;
 				CLANG_WARN_OBJCPP_ARC_ABI = YES;
 				CLANG_WARN_OBJC_MISSING_PROPERTY_SYNTHESIS = NO;
@@ -2739,7 +2813,7 @@
 				INFOPLIST_FILE = Assets/Plists/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 5.1;
 				ONLY_ACTIVE_ARCH = NO;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = discord;
 				SDKROOT = iphoneos7.1;
 				SUPPORTED_PLATFORMS = "iphonesimulator iphoneos";
 				TARGETED_DEVICE_FAMILY = "1,2";

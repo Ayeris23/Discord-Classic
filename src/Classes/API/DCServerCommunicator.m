@@ -95,6 +95,36 @@ NSTimer *heartbeatTimer = nil;
     return req;
 }
 
+- (void)registerPushToken:(NSString *)token {
+    NSMutableURLRequest *request = [DCServerCommunicator requestWithPath:@"/users/@me/devices" 
+                                                                   token:self.token];
+    request.HTTPMethod = @"POST";
+    
+    NSDictionary *body = @{
+        @"provider": @"apns",
+        @"token": token
+    };
+    request.HTTPBody = [NSJSONSerialization dataWithJSONObject:body 
+                                                       options:0 
+                                                         error:nil];
+    
+    [NSURLConnection sendAsynchronousRequest:request
+                                       queue:[NSOperationQueue mainQueue]
+                           completionHandler:^(NSURLResponse *response, 
+                                               NSData *data, 
+                                               NSError *error) {
+        NSHTTPURLResponse *http = (NSHTTPURLResponse *)response;
+        NSLog(@"Push token registration status: %ld", (long)http.statusCode);
+        if (error) {
+            NSLog(@"Push token registration error: %@", error.localizedDescription);
+        }
+        if (data) {
+            NSString *responseBody = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+            NSLog(@"Push token registration response: %@", responseBody);
+        }
+    }];
+}
+
 + (DCServerCommunicator *)sharedInstance {
     static DCServerCommunicator *sharedInstance = nil;
 

@@ -41,7 +41,9 @@
 
 - (void)handleLabelTap:(UITapGestureRecognizer *)recognizer {
     UILabel *label = (UILabel *)recognizer.view;
-    NSString *text = label.attributedText ? label.attributedText.string : label.text;
+    NSString *text = [label respondsToSelector:@selector(attributedText)] && label.attributedText
+        ? label.attributedText.string
+        : label.text;
     if (!text.length) return;
 
     CGPoint tapLocation = [recognizer locationInView:label];

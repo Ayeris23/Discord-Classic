@@ -273,6 +273,7 @@ typedef NS_ENUM(uint64_t, DCGatewayCapabilities) {
 - (void)setRole:(DCRole *)role forSnowflake:(NSString *)snowflake;
 - (DCEmoji *)emojiForSnowflake:(NSString *)snowflake;
 - (void)setEmoji:(DCEmoji *)emoji forSnowflake:(NSString *)snowflake;
+- (void)registerPushToken:(NSString *)token;
 
 // Shared networking helpers
 + (NSString *)superPropertiesBase64;
