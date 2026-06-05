@@ -2431,7 +2431,7 @@ Use only as a last resort.</string>
         <simulatedScreenMetrics key="destination" type="retina4"/>
     </simulatedMetricsContainer>
     <inferredMetricsTieBreakers>
+        <segue reference="I69-w0-oGL"/>
         <segue reference="2j5-iw-4f9"/>
-        <segue reference="kLv-He-JOO"/>
     </inferredMetricsTieBreakers>
 </document>

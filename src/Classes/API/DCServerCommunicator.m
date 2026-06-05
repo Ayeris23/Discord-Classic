@@ -952,22 +952,22 @@ NSTimer *heartbeatTimer = nil;
                 // #endif
                 [guild.members replaceObjectAtIndex:(NSUInteger)index withObject:(id)member];
             } else if ([[op objectForKey:@"op"] isEqualToString:DELETE]) {
-                NSUInteger index = [[op objectForKey:@"index"] intValue];
-                if (index >= [guild.members count]) {
-                    index = [guild.members count] - 1;
-                } else if (index < 0) {
-                    index = 0;
+                NSUInteger count = [guild.members count];
+                if (count == 0) {
+                    DBGLOG(@"Guild member list update DELETE op on empty members array");
+                    continue;
                 }
-                // #ifdef DEBUG
-                //              NSLog(@"Deleting at index: %lu", (unsigned long)index);
-                // #endif
+                NSUInteger index = (NSUInteger)[[op objectForKey:@"index"] intValue];
+                if (index >= count) {
+                    index = count - 1;
+                }
                 [guild.members removeObjectAtIndex:index];
+
             } else if ([[op objectForKey:@"op"] isEqualToString:INSERT]) {
-                NSUInteger index = [[op objectForKey:@"index"] intValue];
-                if (index > [guild.members count]) {
-                    index = [guild.members count] - 1;
-                } else if (index < 0) {
-                    index = 0;
+                NSUInteger count = [guild.members count];
+                NSUInteger index = (NSUInteger)[[op objectForKey:@"index"] intValue];
+                if (index > count) {
+                    index = count;  // clamp to append position, not count-1
                 }
                 NSDictionary *item = [op objectForKey:@"item"];
                 id member          = [self handleGuildMemberItemWithItem:item guild:guild];
@@ -975,9 +975,6 @@ NSTimer *heartbeatTimer = nil;
                     DBGLOG(@"Guild member list update INSERT op with invalid item: %@", item);
                     continue;
                 }
-                // #ifdef DEBUG
-                //              NSLog(@"Inserting %s at index: %lu", [member isKindOfClass:[DCUser class]] ? "user" : "role", (unsigned long)index);
-                // #endif
                 [guild.members insertObject:member atIndex:index];
             } else {
                 DBGLOG(@"Unhandled guild member list update op: %@", op);
@@ -1113,7 +1110,7 @@ NSTimer *heartbeatTimer = nil;
     }
 
     if ([t isEqualToString:@"READY"]) {
-        dispatch_async(dispatch_get_main_queue(), ^{
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
             [weakSelf handleReadyWithData:d];
         });
         return;

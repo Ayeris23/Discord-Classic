@@ -78,9 +78,12 @@
 
 - (void)awakeFromNib {
     [super awakeFromNib];
-    // UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleLabelTap:)];
-    // [self.contentTextView addGestureRecognizer:tap];
-    // self.contentTextView.userInteractionEnabled = YES;
+    UITapGestureRecognizer *profileTap = [[UITapGestureRecognizer alloc]
+        initWithTarget:nil
+                action:@selector(profileImageTapped:)];
+    profileTap.numberOfTapsRequired = 1;
+    self.profileImage.userInteractionEnabled = YES;
+    [self.profileImage addGestureRecognizer:profileTap];
     
     self.profileImage.backgroundColor = [UIColor clearColor];
     self.profileImage.opaque = NO;
@@ -90,11 +93,13 @@
     
     self.contentTextView.frame = self.contentTextView.frame;
     self.contentTextView.backgroundColor = [UIColor clearColor];
+    self.contentTextView.shouldLayoutCustomSubviews = NO;
     self.contentTextView.numberOfLines = 0;
     self.contentTextView.shouldDrawLinks = YES;
     self.contentTextView.userInteractionEnabled = YES;
-    self.contentTextView.relayoutMask = DTAttributedTextContentViewRelayoutOnWidthChanged 
-        | DTAttributedTextContentViewRelayoutOnHeightChanged;
+    self.contentTextView.relayoutMask = DTAttributedTextContentViewRelayoutOnWidthChanged;
+    // self.contentTextView.layer.shouldRasterize = YES;
+    // self.contentTextView.layer.rasterizationScale = [UIScreen mainScreen].scale;
 }
 
 @end

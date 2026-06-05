@@ -286,7 +286,7 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
                                             [NSNotificationCenter
                                                     .defaultCenter
                                                 postNotificationName:
-                                                    @"RELOAD CHAT DATA"
+                                                    @"RELOAD MESSAGE DATA"
                                                               object:nil];
                                         }
                                     );
@@ -603,7 +603,7 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
                                                             gif.staticThumbnail    = scaled;
                                                             [newMessage.attachments replaceObjectAtIndex:idx withObject:gif];
                                                             [NSNotificationCenter.defaultCenter
-                                                                postNotificationName:@"RELOAD CHAT DATA"
+                                                                postNotificationName:@"RELOAD MESSAGE DATA"
                                                                               object:newMessage];
                                                         });
                                                     }
@@ -791,7 +791,7 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
                                                             video.videoWarning.text = @"Unsupported Embed";
                                                             [newMessage.attachments replaceObjectAtIndex:idx withObject:video];
                                                             [NSNotificationCenter.defaultCenter
-                                                                postNotificationName:@"RELOAD CHAT DATA"
+                                                                postNotificationName:@"RELOAD MESSAGE DATA"
                                                                               object:newMessage];
                                                         });
                                                         return;
@@ -804,7 +804,7 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
                                                             video.thumbnail.image = roundedCornerImage(scaled, 6);
                                                             [newMessage.attachments replaceObjectAtIndex:idx withObject:video];
                                                             [NSNotificationCenter.defaultCenter
-                                                                postNotificationName:@"RELOAD CHAT DATA"
+                                                                postNotificationName:@"RELOAD MESSAGE DATA"
                                                                               object:newMessage];
                                                         }
                                                     );
@@ -922,7 +922,7 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
                                                             gif.staticThumbnail    = scaled;
                                                             [newMessage.attachments replaceObjectAtIndex:idx withObject:gif];
                                                             [NSNotificationCenter.defaultCenter
-                                                                postNotificationName:@"RELOAD CHAT DATA"
+                                                                postNotificationName:@"RELOAD MESSAGE DATA"
                                                                               object:newMessage];
                                                         });
                                                     }
@@ -1047,7 +1047,7 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
                                                                 video.videoWarning.text = @"Unsupported Attachment";
                                                                 [newMessage.attachments replaceObjectAtIndex:idx withObject:video];
                                                                 [NSNotificationCenter.defaultCenter
-                                                                    postNotificationName:@"RELOAD CHAT DATA"
+                                                                    postNotificationName:@"RELOAD MESSAGE DATA"
                                                                                   object:newMessage];
                                                             });
                                                             return;

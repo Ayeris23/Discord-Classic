@@ -285,6 +285,10 @@
     if (self.displayGuilds == nil || guild == nil) {
         return;
     }
+    if (!DCServerCommunicator.sharedInstance.guildsIsSorted) {
+        return;
+    }
+    
     // Guard against count mismatch — fall back to full reload
     if (self.displayGuilds.count != [self.guildTableView numberOfRowsInSection:0]) {
         [self.guildTableView reloadData];

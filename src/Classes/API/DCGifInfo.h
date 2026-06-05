@@ -8,8 +8,11 @@
 
 #import <UIKit/UIKit.h>
 
+@class DCChatGifAttachment;
+
 @interface DCGifInfo : NSObject
 @property (strong, nonatomic) UIImage *staticThumbnail;
 @property (strong, nonatomic) NSURL *gifURL;
+@property (strong, nonatomic) DCChatGifAttachment *view;
 
 @end
