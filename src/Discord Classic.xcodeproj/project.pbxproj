@@ -418,6 +418,8 @@
 		2F7424112F78A50100FAF3D9 /* MentionBadge.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F7424102F78A50100FAF3D9 /* MentionBadge.m */; };
 		2F97F5572FC2658E00A645B1 /* DCMarkdownParser.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F97F5562FC2658E00A645B1 /* DCMarkdownParser.m */; };
 		2F97F5592FC3F6FD00A645B1 /* libz.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = 2F97F5582FC3F6FD00A645B1 /* libz.dylib */; };
+		2F97F55E2FD62A3300A645B1 /* DCChannelWindow.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F97F55B2FD62A3300A645B1 /* DCChannelWindow.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
+		2F97F55F2FD62A3300A645B1 /* DCMessageStore.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F97F55D2FD62A3300A645B1 /* DCMessageStore.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
 		2F9B1C732F8F0C9D00B296A1 /* DCContentManager.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F9B1C722F8F0C9D00B296A1 /* DCContentManager.m */; };
 		2FD079B22F6E79660021205C /* DCCacheManager.m in Sources */ = {isa = PBXBuildFile; fileRef = 2FD079B12F6E79660021205C /* DCCacheManager.m */; };
 		2FE82DDD2F5D363900375F28 /* separator@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = 2FE82DDC2F5D363900375F28 /* separator@2x.png */; };
@@ -1098,6 +1100,10 @@
 		2F97F5552FC2658E00A645B1 /* DCMarkdownParser.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCMarkdownParser.h; sourceTree = "<group>"; };
 		2F97F5562FC2658E00A645B1 /* DCMarkdownParser.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCMarkdownParser.m; sourceTree = "<group>"; };
 		2F97F5582FC3F6FD00A645B1 /* libz.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libz.dylib; path = usr/lib/libz.dylib; sourceTree = SDKROOT; };
+		2F97F55A2FD62A3300A645B1 /* DCChannelWindow.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCChannelWindow.h; sourceTree = "<group>"; };
+		2F97F55B2FD62A3300A645B1 /* DCChannelWindow.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCChannelWindow.m; sourceTree = "<group>"; };
+		2F97F55C2FD62A3300A645B1 /* DCMessageStore.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCMessageStore.h; sourceTree = "<group>"; };
+		2F97F55D2FD62A3300A645B1 /* DCMessageStore.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCMessageStore.m; sourceTree = "<group>"; };
 		2F9B1C712F8F0C9D00B296A1 /* DCContentManager.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCContentManager.h; sourceTree = "<group>"; };
 		2F9B1C722F8F0C9D00B296A1 /* DCContentManager.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCContentManager.m; sourceTree = "<group>"; };
 		2FD079B02F6E79660021205C /* DCCacheManager.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCCacheManager.h; sourceTree = "<group>"; };
@@ -2474,6 +2480,10 @@
 		2FD079AF2F6E79650021205C /* Content_Management */ = {
 			isa = PBXGroup;
 			children = (
+				2F97F55A2FD62A3300A645B1 /* DCChannelWindow.h */,
+				2F97F55B2FD62A3300A645B1 /* DCChannelWindow.m */,
+				2F97F55C2FD62A3300A645B1 /* DCMessageStore.h */,
+				2F97F55D2FD62A3300A645B1 /* DCMessageStore.m */,
 				2F97F5552FC2658E00A645B1 /* DCMarkdownParser.h */,
 				2F97F5562FC2658E00A645B1 /* DCMarkdownParser.m */,
 				2F9B1C712F8F0C9D00B296A1 /* DCContentManager.h */,
@@ -3122,6 +3132,7 @@
 				2F1122C82F4EA03000159D64 /* picture_enc.c in Sources */,
 				2F11236A2F4EB0AD00159D64 /* DCChannelViewCell.m in Sources */,
 				2FFA395C2F987C2C00E67A40 /* DTColorFunctions.m in Sources */,
+				2F97F55E2FD62A3300A645B1 /* DCChannelWindow.m in Sources */,
 				2F1122E92F4EA03000159D64 /* NSData+ImageContentType.m in Sources */,
 				2FFA39662F987C2C00E67A40 /* DTCoreTextLayoutLine.m in Sources */,
 				2F1123722F4EB0AD00159D64 /* NSArray+Indexing.m in Sources */,
@@ -3397,6 +3408,7 @@
 				2FFA3A612F98879E00E67A40 /* DTSmartPagingScrollView.m in Sources */,
 				2FFA396B2F987C2C00E67A40 /* DTDictationPlaceholderView.m in Sources */,
 				2FFA39712F987C2C00E67A40 /* DTHTMLWriter.m in Sources */,
+				2F97F55F2FD62A3300A645B1 /* DCMessageStore.m in Sources */,
 				2F1122562F4EA03000159D64 /* CKParagraphStyle.m in Sources */,
 				2F1122872F4EA03000159D64 /* dec_mips32.c in Sources */,
 				2F1122A82F4EA03000159D64 /* rescaler_mips32.c in Sources */,

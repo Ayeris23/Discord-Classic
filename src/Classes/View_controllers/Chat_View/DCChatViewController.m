@@ -39,13 +39,17 @@
 #import "DTCoreTextLayouter.h"
 #import "DTCoreTextLayoutFrame.h"
 #import "DTImageTextAttachment.h"
+#import "DCMessageStore.h"
+#import "DCChannelWindow.h"
 
 @interface DCChatViewController ()
-@property (strong, nonatomic) NSMutableArray *messages;
+@property (nonatomic, readonly) NSMutableArray *messages;
+@property (nonatomic, strong) DCChannelWindow *currentWindow;
 @property (assign, nonatomic) NSUInteger numberOfMessagesLoaded;
 @property (strong, nonatomic) UIImage *selectedImage;
 @property (assign, nonatomic) BOOL oldMode;
-@property (strong, nonatomic) UIRefreshControl *refreshControl;
+// @property (strong, nonatomic) UIRefreshControl *refreshControl;
+@property (assign, nonatomic) BOOL loadingOlderMessages;
 @property (strong, nonatomic) UIView *typingIndicatorView;
 @property (strong, nonatomic) UILabel *typingLabel;
 @property (strong, nonatomic) NSMutableDictionary *typingUsers;
@@ -65,7 +69,12 @@ CGFloat _baseInputHeight;
 CGFloat _baseMsgFieldBGHeight;
 CGFloat _baseInputOriginY;
 
+static const int kProximityLoadBurst = 15;
+
 @implementation DCChatViewController
+@synthesize currentWindow = _currentWindow;
+
+int lastTimeInterval = 0; // for typing indicator
 
 - (BOOL)shouldAutorotateToInterfaceOrientation:(UIInterfaceOrientation)interfaceOrientation {
     if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
@@ -85,8 +94,6 @@ CGFloat _baseInputOriginY;
     return UIInterfaceOrientationMaskPortrait;
 }
 
-int lastTimeInterval = 0; // for typing indicator
-
 static dispatch_queue_t chat_messages_queue;
 - (dispatch_queue_t)get_chat_messages_queue {
     if (chat_messages_queue == nil) {
@@ -96,6 +103,25 @@ static dispatch_queue_t chat_messages_queue;
         );
     }
     return chat_messages_queue;
+}
+
+- (DCChannelWindow *)currentWindow {
+    if (!_currentWindow) {
+        NSString *cid = DCServerCommunicator.sharedInstance.selectedChannel.snowflake;
+        if (cid) _currentWindow = [[DCMessageStore sharedInstance] windowForChannel:cid];
+    }
+    return _currentWindow;
+}
+
+- (NSMutableArray *)messages {
+    return self.currentWindow.messages;
+}
+
+// Point the controller at the window for whatever channel is now selected.
+// Called at every channel-entry point so the cached window can't go stale.
+- (void)syncWindowForSelectedChannel {
+    NSString *cid = DCServerCommunicator.sharedInstance.selectedChannel.snowflake;
+    self.currentWindow = cid ? [[DCMessageStore sharedInstance] windowForChannel:cid] : nil;
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -147,8 +173,6 @@ static dispatch_queue_t chat_messages_queue;
             [self performSegueWithIdentifier:@"to Tokenpage" sender:self];
         }
     }
-
-    self.messages = NSMutableArray.new;
 
     [NSNotificationCenter.defaultCenter
         addObserver:self
@@ -211,11 +235,11 @@ static dispatch_queue_t chat_messages_queue;
                                                name:@"READY"
                                              object:nil];
     [NSNotificationCenter.defaultCenter addObserver:self
-                                           selector:@selector(handleConnectionRestored)
+                                           selector:@selector(handleForwardReconcile)
                                                name:@"CONNECTION_RESTORED"
                                              object:nil];
     [NSNotificationCenter.defaultCenter addObserver:self
-                                           selector:@selector(handleBackgroundReconnect)
+                                           selector:@selector(handleForwardReconcile)
                                                name:@"BACKGROUND_RECONNECT"
                                              object:nil];
 
@@ -389,6 +413,18 @@ static dispatch_queue_t chat_messages_queue;
     }
 }
 
+- (BOOL)viewingPresentTime {
+    NSString *cid = DCServerCommunicator.sharedInstance.selectedChannel.snowflake;
+    if (!cid) return NO;
+    return [[DCMessageStore sharedInstance] windowForChannel:cid].atPresentTime;
+}
+
+- (void)setViewingPresentTime:(BOOL)viewingPresentTime {
+    NSString *cid = DCServerCommunicator.sharedInstance.selectedChannel.snowflake;
+    if (!cid) return;
+    [[DCMessageStore sharedInstance] windowForChannel:cid].atPresentTime = viewingPresentTime;
+}
+
 - (BOOL)textViewShouldBeginEditing:(UITextView *)textView {
     self.inputFieldPlaceholder.hidden = self.inputField.text.length != 0;
     lastTimeInterval                  = 0;
@@ -414,6 +450,7 @@ static dispatch_queue_t chat_messages_queue;
 - (void)handleChatReset {
     assertMainThread();
     DBGLOG(@"%s: Resetting chat data", __PRETTY_FUNCTION__);
+    [self syncWindowForSelectedChannel];
     @autoreleasepool {
         self.selectedMessage = nil;
         self.selectedImage = nil;
@@ -460,32 +497,10 @@ static dispatch_queue_t chat_messages_queue;
     });
 }
 
-// - (void)handleReady {
-//     assertMainThread();
-//     if (DCServerCommunicator.sharedInstance.selectedChannel) {
-//         @autoreleasepool {
-//             [self.messages removeAllObjects];
-//         }
-//         self.inputFieldPlaceholder.text     = DCServerCommunicator.sharedInstance.selectedChannel.writeable
-//                 ? [NSString stringWithFormat:@"Message%@%@",
-//                                          ![DCServerCommunicator.sharedInstance.selectedChannel.parentGuild.name isEqualToString:@"Direct Messages"]
-//                                                  ? @" #"
-//                                                  : (DCServerCommunicator.sharedInstance.selectedChannel.recipients.count > 2 ? @" " : @" @"),
-//                                          DCServerCommunicator.sharedInstance.selectedChannel.name]
-//                 : @"No Permission";
-//         self.toolbar.userInteractionEnabled = DCServerCommunicator.sharedInstance.selectedChannel.writeable;
-//         [self handleAsyncReload];
-//         [self getMessages:50 beforeMessage:nil];
-//     }
-
-//     if (VERSION_MIN(@"6.0") && self.refreshControl) {
-//         [self.refreshControl endRefreshing];
-//     }
-// }
-
 - (void)handleReady {
     assertMainThread();
     if (DCServerCommunicator.sharedInstance.selectedChannel) {
+        [self syncWindowForSelectedChannel];
         if (self.messages.count == 0) {
             @autoreleasepool {
                 [self.messages removeAllObjects];
@@ -509,112 +524,69 @@ static dispatch_queue_t chat_messages_queue;
         self.toolbar.userInteractionEnabled = DCServerCommunicator.sharedInstance.selectedChannel.writeable;
         self.typingIndicatorView.hidden = YES;
     }
-    if (VERSION_MIN(@"6.0") && self.refreshControl) {
-        [self.refreshControl endRefreshing];
-    }
 }
     
-- (void)handleConnectionRestored {
+- (void)handleForwardReconcile {
     assertMainThread();
+    if (self.backgroundRefreshInProgress) return;
 
-    // Only backfill if we have messages loaded and are watching present time
-    if (!self.messages || self.messages.count == 0 || !self.viewingPresentTime) {
-        return;
-    }
+    DCChannel *channel      = DCServerCommunicator.sharedInstance.selectedChannel;
+    DCChannelWindow *window = self.currentWindow;
+    if (!channel || !window || window.messages.count == 0) return;
+    if (!self.viewingPresentTime) return;  // reading history — don't yank them to the tail
 
-    DCChannel *channel    = DCServerCommunicator.sharedInstance.selectedChannel;
-    DCMessage *lastMessage = [self.messages lastObject];
-    if (!channel || !lastMessage) {
-        return;
-    }
+    DCMessage *anchor = [window.messages lastObject];
+    if (!anchor) return;
 
-    NSString *lastSnowflake = lastMessage.snowflake;
-
-    dispatch_async([self get_chat_messages_queue], ^{
-        NSArray *newMessages = [channel getMessages:50 afterMessage:lastMessage];
-        if (!newMessages || newMessages.count == 0) {
-            return;
-        }
-
-        dispatch_async(dispatch_get_main_queue(), ^{
-            // Dedup — gateway replay may have already inserted some of these
-            // via MESSAGE_CREATE before the REST backfill completed
-            NSMutableArray *toInsert = NSMutableArray.new;
-            for (DCMessage *msg in newMessages) {
-                BOOL alreadyPresent = NO;
-                for (DCMessage *existing in self.messages) {
-                    if ([existing.snowflake isEqualToString:msg.snowflake]) {
-                        alreadyPresent = YES;
-                        break;
-                    }
-                }
-                if (!alreadyPresent) {
-                    [toInsert addObject:msg];
-                }
-            }
-
-            if (toInsert.count == 0) {
-                return;
-            }
-
-            // Verify we're still in the same channel before touching the table
-            if (DCServerCommunicator.sharedInstance.selectedChannel != channel) {
-                return;
-            }
-
-            NSMutableArray *indexPaths = NSMutableArray.new;
-            for (DCMessage *msg in toInsert) {
-                NSIndexPath *path = [NSIndexPath indexPathForRow:self.messages.count inSection:0];
-                [self.messages addObject:msg];
-                [indexPaths addObject:path];
-            }
-
-            [self.chatTableView beginUpdates];
-            [self.chatTableView insertRowsAtIndexPaths:indexPaths
-                                     withRowAnimation:UITableViewRowAnimationNone];
-            [self.chatTableView endUpdates];
-
-            // Scroll to bottom since we were at present time
-            [self scrollWithIndex:[indexPaths lastObject]];
-
-            NSLog(@"[CONNECTION_RESTORED] Backfilled %lu messages after %@",
-                  (unsigned long)toInsert.count, lastSnowflake);
-        });
-    });
-}
-
-- (void)handleBackgroundReconnect {
-    assertMainThread();
-    if (self.backgroundRefreshInProgress) {
-        return;
-    }
-    if (!self.messages || self.messages.count == 0) {
-        return;
-    }
-    DCChannel *channel = DCServerCommunicator.sharedInstance.selectedChannel;
-    if (!channel) {
-        return;
-    }
     self.backgroundRefreshInProgress = YES;
 
     dispatch_async([self get_chat_messages_queue], ^{
-        NSArray *freshMessages = [channel getMessages:50 beforeMessage:nil];
+        DCMessageDelta *delta =
+            [[DCMessageStore sharedInstance] reconcileForwardForChannel:channel
+                                                           afterMessage:anchor];
 
         dispatch_async(dispatch_get_main_queue(), ^{
             self.backgroundRefreshInProgress = NO;
 
-            if (!freshMessages || freshMessages.count == 0) {
+            if (!delta) return;
+            if (DCServerCommunicator.sharedInstance.selectedChannel != channel) return;
+
+            if (delta.requiresFullReload) {
+                [self.messages removeAllObjects];
+                [self.messages addObjectsFromArray:delta.replacementMessages];
+                [self.chatTableView reloadData];
+                if (self.viewingPresentTime && self.messages.count > 0) {
+                    [self scrollWithIndex:[NSIndexPath indexPathForRow:self.messages.count - 1
+                                                             inSection:0]];
+                }
                 return;
             }
-            if (DCServerCommunicator.sharedInstance.selectedChannel != channel) {
-                return;
+
+            // Dedup against the live tail — gateway replay may have already
+            // inserted some of these via MESSAGE CREATE before the fetch returned.
+            NSMutableArray *toInsert = NSMutableArray.new;
+            for (DCMessage *msg in delta.candidateMessages) {
+                BOOL present = NO;
+                for (DCMessage *existing in self.messages) {
+                    if ([existing.snowflake isEqualToString:msg.snowflake]) { present = YES; break; }
+                }
+                if (!present) [toInsert addObject:msg];
             }
-            [self.messages removeAllObjects];
-            [self.messages addObjectsFromArray:freshMessages];
-            [[DCCacheManager sharedInstance] invalidateAllMessages];
-            [self.chatTableView reloadData];
-            [self scrollWithIndex:[NSIndexPath indexPathForRow:self.messages.count - 1
-                                                     inSection:0]];
+            if (toInsert.count == 0) return;
+
+            NSMutableArray *indexPaths = NSMutableArray.new;
+            for (DCMessage *msg in toInsert) {
+                [indexPaths addObject:[NSIndexPath indexPathForRow:self.messages.count inSection:0]];
+                [self.messages addObject:msg];
+            }
+            [self.chatTableView beginUpdates];
+            [self.chatTableView insertRowsAtIndexPaths:indexPaths
+                                      withRowAnimation:UITableViewRowAnimationNone];
+            [self.chatTableView endUpdates];
+
+            if (self.viewingPresentTime) {
+                [self scrollWithIndex:[indexPaths lastObject]];
+            }
         });
     });
 }
@@ -955,6 +927,32 @@ static dispatch_queue_t chat_messages_queue;
     [self updateTypingIndicator];
 }
 
+- (void)handleStopTyping:(NSNotification *)notification {
+    if (!self.typingIndicatorView) {
+        DBGLOG(@"%s: Typing indicator view is not initialized", __PRETTY_FUNCTION__);
+        return;
+    }
+
+    NSString *typingUserId = notification.object;
+    if (!typingUserId) {
+        DBGLOG(@"%s: No typing user provided", __PRETTY_FUNCTION__);
+        return;
+    }
+
+    if ([typingUserId isEqualToString:DCServerCommunicator.sharedInstance.snowflake]) {
+        // Ignore typing events from the current user
+        return;
+    }
+
+    NSTimer *existingTimer = [self.typingUsers objectForKey:typingUserId];
+    if (existingTimer) {
+        [existingTimer invalidate];
+        [self.typingUsers removeObjectForKey:typingUserId];
+    }
+    // NSLog(@"%s: User %@ stopped typing, count: %lu", __PRETTY_FUNCTION__, ((DCUser *)[DCServerCommunicator.sharedInstance.loadedUsers objectForKey:typingUserId]).globalName, (unsigned long)self.typingUsers.count);
+    [self updateTypingIndicator];
+}
+
 - (void)handleCellLongPress:(UILongPressGestureRecognizer *)recognizer {
     if (recognizer.state != UIGestureRecognizerStateBegan) return;
 
@@ -1050,32 +1048,6 @@ static dispatch_queue_t chat_messages_queue;
                       object:typingUserId];
 }
 
-- (void)handleStopTyping:(NSNotification *)notification {
-    if (!self.typingIndicatorView) {
-        DBGLOG(@"%s: Typing indicator view is not initialized", __PRETTY_FUNCTION__);
-        return;
-    }
-
-    NSString *typingUserId = notification.object;
-    if (!typingUserId) {
-        DBGLOG(@"%s: No typing user provided", __PRETTY_FUNCTION__);
-        return;
-    }
-
-    if ([typingUserId isEqualToString:DCServerCommunicator.sharedInstance.snowflake]) {
-        // Ignore typing events from the current user
-        return;
-    }
-
-    NSTimer *existingTimer = [self.typingUsers objectForKey:typingUserId];
-    if (existingTimer) {
-        [existingTimer invalidate];
-        [self.typingUsers removeObjectForKey:typingUserId];
-    }
-    // NSLog(@"%s: User %@ stopped typing, count: %lu", __PRETTY_FUNCTION__, ((DCUser *)[DCServerCommunicator.sharedInstance.loadedUsers objectForKey:typingUserId]).globalName, (unsigned long)self.typingUsers.count);
-    [self updateTypingIndicator];
-}
-
 - (void)updateTypingIndicator {
     assertMainThread();
     if (self.typingUsers.count == 0) {
@@ -1119,120 +1091,81 @@ static dispatch_queue_t chat_messages_queue;
 
 - (void)getMessages:(int)numberOfMessages beforeMessage:(DCMessage *)message {
     dispatch_async([self get_chat_messages_queue], ^{
+        DCChannel *channel = DCServerCommunicator.sharedInstance.selectedChannel;
         NSArray *newMessages =
-            [DCServerCommunicator.sharedInstance.selectedChannel
-                  getMessages:numberOfMessages
-                beforeMessage:message];
+            [[DCMessageStore sharedInstance] loadBeforeForChannel:channel
+                                                    beforeMessage:message
+                                                            limit:numberOfMessages];
 
         if (!newMessages) {
+            dispatch_async(dispatch_get_main_queue(), ^{ self.loadingOlderMessages = NO; });
             return;
         }
 
-        int scrollOffset = -self.chatTableView.height;
+        // Warm avatars for the incoming batch. Heights are the table's job now.
         for (DCMessage *newMessage in newMessages) {
             @autoreleasepool {
                 if (!newMessage.author.profileImage) {
                     [DCTools getUserAvatar:newMessage.author];
                 }
-
-                if (newMessage.referencedMessage && 
+                if (newMessage.referencedMessage &&
                     newMessage.referencedMessage.author &&
                     !newMessage.referencedMessage.author.profileImage) {
                     [DCTools getUserAvatar:newMessage.referencedMessage.author];
                 }
-
-                int attachmentHeight = 0;
-                for (id attachment in newMessage.attachments) {
-                    if ([attachment isKindOfClass:[UILazyImage class]]) {
-                        UIImage *image      = ((UILazyImage *)attachment).image;
-                        CGFloat aspectRatio = image.size.width
-                            / image.size.height;
-                        int newWidth  = 200 * aspectRatio;
-                        int newHeight = 200;
-                        if (newWidth > self.chatTableView.width - 66) {
-                            newWidth  = self.chatTableView.width - 66;
-                            newHeight = newWidth / aspectRatio;
-                        }
-                        attachmentHeight += newHeight;
-                    } else if ([attachment isKindOfClass:[DCChatVideoAttachment class]]) {
-                        DCChatVideoAttachment *video = attachment;
-                        CGFloat aspectRatio          = video.thumbnail.image.size.width
-                            / video.thumbnail.image.size.height;
-                        int newWidth  = 200 * aspectRatio;
-                        int newHeight = 200;
-                        if (newWidth > self.chatTableView.width - 66) {
-                            newWidth  = self.chatTableView.width - 66;
-                            newHeight = newWidth / aspectRatio;
-                        }
-                        attachmentHeight += newHeight;
-                    } else if ([attachment isKindOfClass:[NSArray class]]) {
-                        NSArray *dimensions = attachment;
-                        if (dimensions.count == 2) {
-                            int width  = [dimensions[0] intValue];
-                            int height = [dimensions[1] intValue];
-                            if (width <= 0 || height <= 0) {
-                                continue;
-                            }
-                            CGFloat aspectRatio = (CGFloat)width / height;
-                            int newWidth        = 200 * aspectRatio;
-                            int newHeight       = 200;
-                            if (newWidth > self.chatTableView.width - 66) {
-                                newWidth  = self.chatTableView.width - 66;
-                                newHeight = newWidth / aspectRatio;
-                            }
-                            attachmentHeight += newHeight;
-                        }
-                    }
-                }
-                scrollOffset += newMessage.contentHeight
-                    + attachmentHeight
-                    + (attachmentHeight ? 11 : 0);
             }
         }
 
         dispatch_async(dispatch_get_main_queue(), ^{
-            NSRange range        = NSMakeRange(0, [newMessages count]);
+            if (newMessages.count == 0) {
+                self.loadingOlderMessages = NO;
+                return;
+            }
+
+            CGFloat oldOffsetY = self.chatTableView.contentOffset.y;
+
+            NSRange range        = NSMakeRange(0, newMessages.count);
             NSIndexSet *indexSet = [NSIndexSet indexSetWithIndexesInRange:range];
 
             NSInteger rowCount = [self.chatTableView numberOfRowsInSection:0];
             if (rowCount != self.messages.count) {
-                NSLog(@"%s: Row count mismatch! Expected %ld but got %ld", __PRETTY_FUNCTION__, (long)self.messages.count, (long)rowCount);
+                NSLog(@"%s: Row count mismatch! Expected %ld but got %ld",
+                      __PRETTY_FUNCTION__, (long)self.messages.count, (long)rowCount);
                 [self.messages insertObjects:newMessages atIndexes:indexSet];
-                [self handleAsyncReload];
+                [[DCCacheManager sharedInstance] invalidateAllMessages];
+                [self.chatTableView reloadData];   // synchronous — see note below
             } else {
                 NSMutableArray *indexPaths = [[NSMutableArray alloc] init];
                 [indexSet enumerateIndexesUsingBlock:^(NSUInteger idx, BOOL *stop) {
-                    NSIndexPath *indexPath = [NSIndexPath indexPathForRow:idx inSection:0];
-                    [indexPaths addObject:indexPath];
+                    [indexPaths addObject:[NSIndexPath indexPathForRow:idx inSection:0]];
                 }];
                 [self.chatTableView beginUpdates];
                 [self.messages insertObjects:newMessages atIndexes:indexSet];
-                [self.chatTableView insertRowsAtIndexPaths:indexPaths withRowAnimation:UITableViewRowAnimationAutomatic];
+                [self.chatTableView insertRowsAtIndexPaths:indexPaths
+                                          withRowAnimation:UITableViewRowAnimationNone];
                 [self.chatTableView endUpdates];
             }
-            [self.chatTableView
-                setContentOffset:CGPointMake(0, scrollOffset)
-                        animated:NO];
 
-            if ([newMessages count] > 0 && !self.refreshControl) {
-                self.refreshControl = UIRefreshControl.new;
-                self.refreshControl.attributedTitle =
-                    [[NSAttributedString alloc]
-                        initWithString:@"Earlier messages"];
-
-                [self.chatTableView addSubview:self.refreshControl];
-
-                [self.refreshControl addTarget:self
-                                        action:@selector(get50MoreMessages:)
-                              forControlEvents:UIControlEventValueChanged];
-
-                self.refreshControl.autoresizingMask =
-                    UIViewAutoresizingFlexibleLeftMargin
-                    | UIViewAutoresizingFlexibleRightMargin;
+            if (message == nil) {
+                // Cold load — open at the newest message, like entering a channel.
+                [self.chatTableView
+                    scrollToRowAtIndexPath:[NSIndexPath indexPathForRow:self.messages.count - 1
+                                                              inSection:0]
+                          atScrollPosition:UITableViewScrollPositionBottom
+                                  animated:NO];
+            } else {
+                // Prepend — shift down by exactly the height we inserted above, so
+                // the reader's row stays put. Summed from the table's real height
+                // method, so it can't drift the way the estimate did.
+                CGFloat insertedHeight = 0;
+                for (NSUInteger i = 0; i < newMessages.count; i++) {
+                    insertedHeight += [self tableView:self.chatTableView
+                              heightForRowAtIndexPath:[NSIndexPath indexPathForRow:i inSection:0]];
+                }
+                self.chatTableView.contentOffset = CGPointMake(0, oldOffsetY + insertedHeight);
             }
-            if (self.refreshControl) {
-                [self.refreshControl endRefreshing];
-            }
+
+            self.loadingOlderMessages = NO;
         });
         // Precalculate heights for both orientations on iPad
         if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
@@ -1304,7 +1237,6 @@ static dispatch_queue_t chat_messages_queue;
         }
     });
 }
-
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
          cellForRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -2343,7 +2275,6 @@ static dispatch_queue_t chat_messages_queue;
     return result;
 }
 
-
 - (void)tableView:(UITableView *)tableView
     didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:NO];
@@ -2460,6 +2391,17 @@ static dispatch_queue_t chat_messages_queue;
     self.viewingPresentTime =
         (scrollView.contentOffset.y
          >= scrollView.contentSize.height - scrollView.height - 10);
+
+    if (self.messages.count == 0) return;
+    if (self.loadingOlderMessages) return;
+    if (!self.currentWindow.hasMoreBefore) return;
+
+    // Fire as the user comes within ~a screenful of the top, so the fetch lands
+    // before they reach the edge instead of stalling at it.
+    if (scrollView.contentOffset.y <= self.chatTableView.height) {
+        self.loadingOlderMessages = YES;
+        [self getMessages:kProximityLoadBurst beforeMessage:[self.messages objectAtIndex:0]];
+    }
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
@@ -2590,7 +2532,6 @@ static dispatch_queue_t chat_messages_queue;
                     animated:NO];
     }
 }
-
 
 - (void)keyboardWillHide:(NSNotification *)notification {
     self.keyboardHeight             = 0;
@@ -2825,6 +2766,7 @@ static dispatch_queue_t chat_messages_queue;
 - (IBAction)openSidebar:(id)sender {
     [self.slideMenuController showLeftMenu:YES];
 }
+
 - (IBAction)clickMemberButton:(id)sender {
     [self.slideMenuController showRightMenu:YES];
 }
@@ -2982,12 +2924,6 @@ static dispatch_queue_t chat_messages_queue;
     }
 }
 
-// - (void)willRotateToInterfaceOrientation:(UIInterfaceOrientation)toInterfaceOrientation
-//                                 duration:(NSTimeInterval)duration {
-//     // Heights already precalculated for both orientations — just reload
-//     [self.chatTableView reloadData];
-// }
-
 - (void)didRotateFromInterfaceOrientation:(UIInterfaceOrientation)fromInterfaceOrientation {
     CGFloat typingOffset = (self.typingUsers.count > 0) ? 20.0f : 0.0f;
     self.chatTableView.frame = CGRectMake(
@@ -3092,18 +3028,4 @@ static dispatch_queue_t chat_messages_queue;
     [self dismissViewControllerAnimated:YES completion:nil];
 }
 
-- (void)get50MoreMessages:(UIRefreshControl *)control {
-    assertMainThread();
-    if (self.messages == nil || self.messages.count == 0) {
-        [control endRefreshing];
-        return;
-    }
-
-    // dispatch_queue_t apiQueue = dispatch_queue_create([[NSString
-    // stringWithFormat:@"Discord::API::Receive::getMessages%i",
-    // arc4random_uniform(4)] UTF8String], NULL); dispatch_async(apiQueue, ^{
-    [self getMessages:50 beforeMessage:[self.messages objectAtIndex:0]];
-    //});
-    // dispatch_release(apiQueue);
-}
 @end

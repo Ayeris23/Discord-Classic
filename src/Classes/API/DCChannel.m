@@ -887,6 +887,46 @@ static dispatch_queue_t channel_send_queue;
                 [messages addObject:convertedMessage];
             }
         }
+
+        // Group exactly as a cold load does, so a refresh produces an identical
+        // table. messages is ascending (oldest first); the row above messages[0]
+        // is the anchor we loaded after, so the anchor is its grouping context.
+        for (int i = 0; i < messages.count; i++) {
+            DCMessage *prevMessage    = (i == 0) ? message : [messages objectAtIndex:i - 1];
+            DCMessage *currentMessage = [messages objectAtIndex:i];
+            if (prevMessage == nil) {
+                continue;
+            }
+            NSDate *currentTimeStamp = currentMessage.timestamp;
+
+            if (prevMessage.author.snowflake != currentMessage.author.snowflake
+                || ([currentMessage.timestamp timeIntervalSince1970] -
+                        [prevMessage.timestamp timeIntervalSince1970]
+                    >= 420)
+                || ![[NSCalendar currentCalendar]
+                    rangeOfUnit:NSCalendarUnitDay
+                      startDate:&currentTimeStamp
+                       interval:NULL
+                        forDate:prevMessage.timestamp]
+                || (prevMessage.messageType != DCMessageTypeDefault && prevMessage.messageType != DCMessageTypeReply)) {
+                continue;
+            }
+
+            currentMessage.isGrouped = (currentMessage.messageType == DCMessageTypeDefault || currentMessage.messageType == DCMessageTypeReply)
+                && (currentMessage.referencedMessage == nil);
+            if (!currentMessage.isGrouped) {
+                continue;
+            }
+
+            float contentWidth =
+                UIScreen.mainScreen.bounds.size.width - 63;
+            CGSize authorNameSize = [[currentMessage.author displayName]
+                     sizeWithFont:[UIFont boldSystemFontOfSize:15]
+                constrainedToSize:CGSizeMake(contentWidth, MAXFLOAT)
+                    lineBreakMode:(NSLineBreakMode)UILineBreakModeWordWrap];
+
+            currentMessage.contentHeight -= authorNameSize.height + 4;
+        }
     });
 
     return messages.count > 0 ? messages : nil;
