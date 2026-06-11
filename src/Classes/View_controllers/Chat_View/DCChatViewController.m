@@ -139,6 +139,7 @@ static dispatch_queue_t chat_messages_queue;
     [super viewDidLoad];
     [NSNotificationCenter.defaultCenter removeObserver:self];
     self.view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    self.chatTableView.transform = CGAffineTransformMakeScale(1, -1);
 
     DBGLOG(@"%s: Loading chat view controller", __PRETTY_FUNCTION__);
 
@@ -556,8 +557,7 @@ static dispatch_queue_t chat_messages_queue;
                 [self.messages addObjectsFromArray:delta.replacementMessages];
                 [self.chatTableView reloadData];
                 if (self.viewingPresentTime && self.messages.count > 0) {
-                    [self scrollWithIndex:[NSIndexPath indexPathForRow:self.messages.count - 1
-                                                             inSection:0]];
+                    [self.chatTableView setContentOffset:CGPointZero animated:NO];
                 }
                 return;
             }
@@ -575,9 +575,10 @@ static dispatch_queue_t chat_messages_queue;
             if (toInsert.count == 0) return;
 
             NSMutableArray *indexPaths = NSMutableArray.new;
-            for (DCMessage *msg in toInsert) {
-                [indexPaths addObject:[NSIndexPath indexPathForRow:self.messages.count inSection:0]];
-                [self.messages addObject:msg];
+            NSUInteger insertCount = toInsert.count;
+            for (NSUInteger i = 0; i < insertCount; i++) {
+                [indexPaths addObject:[NSIndexPath indexPathForRow:i inSection:0]];
+                [self.messages addObject:toInsert[i]];
             }
             [self.chatTableView beginUpdates];
             [self.chatTableView insertRowsAtIndexPaths:indexPaths
@@ -585,26 +586,10 @@ static dispatch_queue_t chat_messages_queue;
             [self.chatTableView endUpdates];
 
             if (self.viewingPresentTime) {
-                [self scrollWithIndex:[indexPaths lastObject]];
+                [self.chatTableView setContentOffset:CGPointZero animated:YES];
             }
         });
     });
-}
-
-- (BOOL)scrollWithIndex:(NSIndexPath *)idx {
-    [self.chatTableView visibleCells];
-    NSArray *visibleIdx = [self.chatTableView indexPathsForVisibleRows];
-    if ([visibleIdx containsObject:idx]) {
-        [self.chatTableView
-            setContentOffset:CGPointMake(
-                                 0,
-                                 self.chatTableView.contentSize.height
-                                     - self.chatTableView.frame.size.height
-                             )
-                    animated:NO];
-        return YES;
-    }
-    return NO;
 }
 
 - (void)handleReloadUser:(NSNotification *)notification {
@@ -618,7 +603,7 @@ static dispatch_queue_t chat_messages_queue;
         BOOL refAuthorMatches = [message.referencedMessage.author.snowflake isEqualToString:user.snowflake];
         if (!authorMatches && !refAuthorMatches) continue;
 
-        NSIndexPath *indexPath = [NSIndexPath indexPathForRow:i inSection:0];
+        NSIndexPath *indexPath = [NSIndexPath indexPathForRow:[self rowForModelIndex:i] inSection:0];
         DCChatTableCell *cell = (DCChatTableCell *)[self.chatTableView cellForRowAtIndexPath:indexPath];
         if (!cell) {
             // Cell is off-screen — clear configuredSnowflake so it 
@@ -661,11 +646,11 @@ static dispatch_queue_t chat_messages_queue;
         return;
     }
     [[DCCacheManager sharedInstance] invalidateSnowflake:message.snowflake];
-    NSIndexPath *indexPath = [NSIndexPath indexPathForRow:index inSection:0];
+    NSIndexPath *indexPath = [NSIndexPath indexPathForRow:[self rowForModelIndex:index] inSection:0];
     [self.chatTableView beginUpdates];
     [self.chatTableView reloadRowsAtIndexPaths:@[ indexPath ] withRowAnimation:UITableViewRowAnimationNone];
     [self.chatTableView endUpdates];
-    [self scrollWithIndex:indexPath];
+    // [self scrollWithIndex:indexPath];
 }
 
 - (void)handleMessageCreate:(NSNotification *)notification {
@@ -694,24 +679,13 @@ static dispatch_queue_t chat_messages_queue;
                 && (prevMessage.messageType == DCMessageTypeDefault || prevMessage.messageType == DCMessageTypeReply)) {
                 newMessage.isGrouped = (newMessage.messageType == DCMessageTypeDefault || newMessage.messageType == DCMessageTypeReply)
                     && (newMessage.referencedMessage == nil);
-
-                // if (newMessage.isGrouped) {
-                //     float contentWidth =
-                //         UIScreen.mainScreen.bounds.size.width - 63;
-                //     CGSize authorNameSize = [[newMessage.author displayNameInGuild:DCServerCommunicator.sharedInstance.selectedChannel.parentGuild]
-                //              sizeWithFont:[UIFont boldSystemFontOfSize:15]
-                //         constrainedToSize:CGSizeMake(contentWidth, MAXFLOAT)
-                //             lineBreakMode:(NSLineBreakMode)UILineBreakModeWordWrap];
-
-                //     newMessage.contentHeight -= authorNameSize.height + 4;
-                // }
             }
         }
     }
 
     NSInteger rowCount = [self.chatTableView numberOfRowsInSection:0];
     [self.messages addObject:newMessage];
-    NSIndexPath *newIndexPath = [NSIndexPath indexPathForRow:self.messages.count - 1 inSection:0];
+    NSIndexPath *newIndexPath = [NSIndexPath indexPathForRow:0 inSection:0];
     if (rowCount != self.messages.count - 1) {
         NSLog(@"%s: Row count mismatch! Expected %ld but got %ld", __PRETTY_FUNCTION__, (long)self.messages.count, (long)rowCount);
         [self handleAsyncReload];
@@ -721,7 +695,9 @@ static dispatch_queue_t chat_messages_queue;
         [self.chatTableView endUpdates];
     }
 
-    [self scrollWithIndex:newIndexPath];
+    if (self.viewingPresentTime) {
+        [self.chatTableView setContentOffset:CGPointZero animated:YES];
+    }
 
     [NSNotificationCenter.defaultCenter
         postNotificationName:@"TYPING STOP"
@@ -789,17 +765,6 @@ static dispatch_queue_t chat_messages_queue;
                         forDate:prevMessage.timestamp]
                 && (prevMessage.messageType == DCMessageTypeDefault || prevMessage.messageType == DCMessageTypeReply)) {
                 newMessage.isGrouped = (newMessage.messageType == DCMessageTypeDefault || newMessage.messageType == DCMessageTypeReply) && (newMessage.referencedMessage == nil);
-
-                // if (newMessage.isGrouped) {
-                //     float contentWidth =
-                //         UIScreen.mainScreen.bounds.size.width - 63;
-                //     CGSize authorNameSize = [[newMessage.author displayNameInGuild:DCServerCommunicator.sharedInstance.selectedChannel.parentGuild]
-                //              sizeWithFont:[UIFont boldSystemFontOfSize:15]
-                //         constrainedToSize:CGSizeMake(contentWidth, MAXFLOAT)
-                //             lineBreakMode:(NSLineBreakMode)UILineBreakModeWordWrap];
-
-                //     newMessage.contentHeight -= authorNameSize.height + 4;
-                // }
             }
         }
     }
@@ -816,10 +781,10 @@ static dispatch_queue_t chat_messages_queue;
     [self.chatTableView beginUpdates];
     [self.messages replaceObjectAtIndex:idx
                              withObject:newMessage];
-    NSIndexPath *indexPath = [NSIndexPath indexPathForRow:idx inSection:0];
+    NSIndexPath *indexPath = [NSIndexPath indexPathForRow:[self rowForModelIndex:idx] inSection:0];
     [self.chatTableView reloadRowsAtIndexPaths:@[ indexPath ] withRowAnimation:UITableViewRowAnimationAutomatic];
     [self.chatTableView endUpdates];
-    [self scrollWithIndex:indexPath];
+    // [self scrollWithIndex:indexPath];
 }
 
 - (void)handleMessageDelete:(NSNotification *)notification {
@@ -841,9 +806,9 @@ static dispatch_queue_t chat_messages_queue;
         [self.messages removeObjectAtIndex:index];
         [self handleAsyncReload];
     } else {
+        NSIndexPath *indexPath = [NSIndexPath indexPathForRow:[self rowForModelIndex:index] inSection:0];
         [self.chatTableView beginUpdates];
         [self.messages removeObjectAtIndex:index];
-        NSIndexPath *indexPath = [NSIndexPath indexPathForRow:index inSection:0];
         [self.chatTableView deleteRowsAtIndexPaths:@[ indexPath ] withRowAnimation:UITableViewRowAnimationAutomatic];
         [self.chatTableView endUpdates];
     }
@@ -963,7 +928,8 @@ static dispatch_queue_t chat_messages_queue;
     self.longPressedIndexPath        = self.touchHighlightIndexPath;
     self.touchHighlightIndexPath     = nil;
 
-    self.selectedMessage = self.messages[indexPath.row];
+    DCMessage *pressed = [self.messages objectAtIndex:[self modelIndexForRow:indexPath.row]];
+    self.selectedMessage = pressed;
 
     NSString *replyButton = self.replyingToMessage
             && [self.replyingToMessage.snowflake isEqualToString:self.selectedMessage.snowflake]
@@ -1080,10 +1046,6 @@ static dispatch_queue_t chat_messages_queue;
     BOOL wasHidden                  = self.typingIndicatorView.hidden;
     self.typingIndicatorView.hidden = NO;
     [self.typingIndicatorView setNeedsDisplay];
-    self.chatTableView.contentOffset = CGPointMake(
-        0,
-        self.chatTableView.contentOffset.y + (wasHidden ? 20 : 0)
-    );
     [self.chatTableView
         setHeight:self.view.height - self.keyboardHeight - 20 - self.toolbar.height];
     [self.typingIndicatorView setY:self.view.height - self.keyboardHeight - self.toolbar.height - 20];
@@ -1122,47 +1084,29 @@ static dispatch_queue_t chat_messages_queue;
                 return;
             }
 
-            CGFloat oldOffsetY = self.chatTableView.contentOffset.y;
-
-            NSRange range        = NSMakeRange(0, newMessages.count);
-            NSIndexSet *indexSet = [NSIndexSet indexSetWithIndexesInRange:range];
+            NSUInteger oldCount = self.messages.count;
+            [self.messages insertObjects:newMessages
+                               atIndexes:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, newMessages.count)]];
 
             NSInteger rowCount = [self.chatTableView numberOfRowsInSection:0];
-            if (rowCount != self.messages.count) {
-                NSLog(@"%s: Row count mismatch! Expected %ld but got %ld",
-                      __PRETTY_FUNCTION__, (long)self.messages.count, (long)rowCount);
-                [self.messages insertObjects:newMessages atIndexes:indexSet];
-                [[DCCacheManager sharedInstance] invalidateAllMessages];
-                [self.chatTableView reloadData];   // synchronous — see note below
+            if (rowCount != (NSInteger)oldCount) {
+                [self.chatTableView reloadData];   // desync fallback
             } else {
-                NSMutableArray *indexPaths = [[NSMutableArray alloc] init];
-                [indexSet enumerateIndexesUsingBlock:^(NSUInteger idx, BOOL *stop) {
-                    [indexPaths addObject:[NSIndexPath indexPathForRow:idx inSection:0]];
-                }];
+                // Oldest messages sit at the HIGHEST row indices in the flipped
+                // table, so prepending to the model is an append at the content
+                // end — the viewport doesn't move, no offset correction needed.
+                NSMutableArray *indexPaths = [NSMutableArray array];
+                for (NSUInteger r = oldCount; r < self.messages.count; r++) {
+                    [indexPaths addObject:[NSIndexPath indexPathForRow:r inSection:0]];
+                }
                 [self.chatTableView beginUpdates];
-                [self.messages insertObjects:newMessages atIndexes:indexSet];
                 [self.chatTableView insertRowsAtIndexPaths:indexPaths
                                           withRowAnimation:UITableViewRowAnimationNone];
                 [self.chatTableView endUpdates];
             }
 
             if (message == nil) {
-                // Cold load — open at the newest message, like entering a channel.
-                [self.chatTableView
-                    scrollToRowAtIndexPath:[NSIndexPath indexPathForRow:self.messages.count - 1
-                                                              inSection:0]
-                          atScrollPosition:UITableViewScrollPositionBottom
-                                  animated:NO];
-            } else {
-                // Prepend — shift down by exactly the height we inserted above, so
-                // the reader's row stays put. Summed from the table's real height
-                // method, so it can't drift the way the estimate did.
-                CGFloat insertedHeight = 0;
-                for (NSUInteger i = 0; i < newMessages.count; i++) {
-                    insertedHeight += [self tableView:self.chatTableView
-                              heightForRowAtIndexPath:[NSIndexPath indexPathForRow:i inSection:0]];
-                }
-                self.chatTableView.contentOffset = CGPointMake(0, oldOffsetY + insertedHeight);
+                self.chatTableView.contentOffset = CGPointZero;   // cold load → newest at bottom
             }
 
             self.loadingOlderMessages = NO;
@@ -1238,6 +1182,14 @@ static dispatch_queue_t chat_messages_queue;
     });
 }
 
+- (NSInteger)modelIndexForRow:(NSInteger)row {
+    return (NSInteger)self.messages.count - 1 - row;
+}
+
+- (NSInteger)rowForModelIndex:(NSInteger)index {
+    return (NSInteger)self.messages.count - 1 - index;
+}
+
 - (UITableViewCell *)tableView:(UITableView *)tableView
          cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     DCChatTableCell *cell;
@@ -1247,7 +1199,7 @@ static dispatch_queue_t chat_messages_queue;
             NSCAssert(self.messages, @"Messages array is nil");
             NSCAssert([self.messages count] > indexPath.row, @"Invalid indexPath");
         }
-        DCMessage *messageAtRowIndex = [self.messages objectAtIndex:indexPath.row];
+        DCMessage *messageAtRowIndex = [self.messages objectAtIndex:[self modelIndexForRow:indexPath.row]];
 
         if (self.oldMode) {
             // NSSet *specialMessageTypes =
@@ -1698,20 +1650,6 @@ static dispatch_queue_t chat_messages_queue;
             } else if (messageAtRowIndex.messageType == DCMessageTypeGuildBoost || messageAtRowIndex.messageType == DCMessageTypeThreadCreated) {
                 cell.universalImageView.image = [UIImage imageNamed:@"U-Boost"];
             }
-            // Set colors
-            // NSMutableAttributedString *colored = [messageAtRowIndex.attributedContent mutableCopy];
-            // [colored enumerateAttribute:NSForegroundColorAttributeName
-            //                     inRange:NSMakeRange(0, colored.length)
-            //                     options:0
-            //                  usingBlock:^(id value, NSRange range, BOOL *stop) {
-            //     if (!value) {
-            //         [colored addAttribute:NSForegroundColorAttributeName
-            //                         value:[UIColor whiteColor]
-            //                         range:range];
-            //     }
-            // }];
-            // NSLog(@"attributedContent: %@", messageAtRowIndex.attributedContent);
-            // cell.contentTextView.attributedString = colored;
 
             float contentWidth = self.chatTableView.width - 63;
 
@@ -1753,6 +1691,13 @@ static dispatch_queue_t chat_messages_queue;
             // TOCK(content);
             if (cell.profileImage.image != messageAtRowIndex.author.profileImage) {
                 cell.profileImage.image = messageAtRowIndex.author.profileImage;
+            }
+            if (cell.profileImage.gestureRecognizers.count == 0) {
+                cell.profileImage.userInteractionEnabled = YES;
+                UITapGestureRecognizer *profileTap = [[UITapGestureRecognizer alloc]
+                    initWithTarget:self action:@selector(profileImageTapped:)];
+                profileTap.numberOfTapsRequired = 1;
+                [cell.profileImage addGestureRecognizer:profileTap];
             }
             if ((self.replyingToMessage
                      && [self.replyingToMessage.snowflake
@@ -1930,6 +1875,7 @@ static dispatch_queue_t chat_messages_queue;
             // NSLog(@"[Cell] configuration took %.2fms", (cellEnd - cellStart) * 1000);
         }
     }
+    cell.transform = CGAffineTransformMakeScale(1, -1);
     return cell;
 }
 
@@ -2211,7 +2157,7 @@ static dispatch_queue_t chat_messages_queue;
     NSIndexPath *indexPath = [self.chatTableView indexPathForCell:(DCChatTableCell *)view];
     if (!indexPath) return;
 
-    DCMessage *message = [self.messages objectAtIndex:indexPath.row];
+    DCMessage *message = [self.messages objectAtIndex:[self modelIndexForRow:indexPath.row]];
     if (!message.author) return;
 
     [self openUserProfile:message.author];
@@ -2224,13 +2170,14 @@ static dispatch_queue_t chat_messages_queue;
     [self performSegueWithIdentifier:@"chat to contact" sender:self];
 }
 
-- (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
-    DCMessage *messageAtRowIndex = [self.messages objectAtIndex:indexPath.row];
-    
+- (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {  
     // Check if next message is grouped under this one
+    NSInteger modelIndex = [self modelIndexForRow:indexPath.row];
+    DCMessage *messageAtRowIndex = [self.messages objectAtIndex:modelIndex];
+
     BOOL nextMessageIsGrouped = NO;
-    if (indexPath.row + 1 < self.messages.count) {
-        DCMessage *nextMessage = [self.messages objectAtIndex:indexPath.row + 1];
+    if (modelIndex + 1 < (NSInteger)self.messages.count) {
+        DCMessage *nextMessage = [self.messages objectAtIndex:modelIndex + 1];
         nextMessageIsGrouped = nextMessage.isGrouped;
     }
 
@@ -2313,8 +2260,8 @@ static dispatch_queue_t chat_messages_queue;
                 self.inputFieldPlaceholder.hidden = YES;
                 [self resizeInputField];
             }
-            NSIndexPath *indexPath = [NSIndexPath indexPathForRow:[self.messages indexOfObject:self.selectedMessage]
-                                                        inSection:0];
+            NSIndexPath *indexPath = [NSIndexPath indexPathForRow:[self rowForModelIndex:[self.messages indexOfObject:self.selectedMessage]]
+                                                       inSection:0];
             [self.chatTableView beginUpdates];
             [self.chatTableView reloadRowsAtIndexPaths:@[ indexPath ] withRowAnimation:UITableViewRowAnimationNone];
             [self.chatTableView endUpdates];
@@ -2323,8 +2270,8 @@ static dispatch_queue_t chat_messages_queue;
                     || ![self.replyingToMessage.snowflake isEqualToString:self.selectedMessage.snowflake]
                 ? self.selectedMessage
                 : nil;
-            NSIndexPath *indexPath = [NSIndexPath indexPathForRow:[self.messages indexOfObject:self.selectedMessage]
-                                                        inSection:0];
+            NSIndexPath *indexPath = [NSIndexPath indexPathForRow:[self rowForModelIndex:[self.messages indexOfObject:self.selectedMessage]]
+                                                       inSection:0];
             [self.chatTableView beginUpdates];
             [self.chatTableView reloadRowsAtIndexPaths:@[ indexPath ] withRowAnimation:UITableViewRowAnimationNone];
             [self.chatTableView endUpdates];
@@ -2368,8 +2315,8 @@ static dispatch_queue_t chat_messages_queue;
                     || ![self.replyingToMessage.snowflake isEqualToString:self.selectedMessage.snowflake]
                 ? self.selectedMessage
                 : nil;
-            NSIndexPath *indexPath = [NSIndexPath indexPathForRow:[self.messages indexOfObject:self.selectedMessage]
-                                                        inSection:0];
+            NSIndexPath *indexPath = [NSIndexPath indexPathForRow:[self rowForModelIndex:[self.messages indexOfObject:self.selectedMessage]]
+                                                       inSection:0];
             [self.chatTableView beginUpdates];
             [self.chatTableView reloadRowsAtIndexPaths:@[ indexPath ] withRowAnimation:UITableViewRowAnimationNone];
             [self.chatTableView endUpdates];
@@ -2392,13 +2339,13 @@ static dispatch_queue_t chat_messages_queue;
         (scrollView.contentOffset.y
          >= scrollView.contentSize.height - scrollView.height - 10);
 
+    // Newest is at offset 0 in the flipped table — that's "present time."
+    self.viewingPresentTime = (scrollView.contentOffset.y <= 10);
     if (self.messages.count == 0) return;
     if (self.loadingOlderMessages) return;
     if (!self.currentWindow.hasMoreBefore) return;
-
-    // Fire as the user comes within ~a screenful of the top, so the fetch lands
-    // before they reach the edge instead of stalling at it.
-    if (scrollView.contentOffset.y <= self.chatTableView.height) {
+    // Older messages are at the high-offset end now; trigger on approach to it.
+    if (scrollView.contentOffset.y >= scrollView.contentSize.height - 2 * scrollView.height) {
         self.loadingOlderMessages = YES;
         [self getMessages:kProximityLoadBurst beforeMessage:[self.messages objectAtIndex:0]];
     }
@@ -2523,13 +2470,7 @@ static dispatch_queue_t chat_messages_queue;
     [UIView commitAnimations];
 
     if (self.viewingPresentTime) {
-        [self.chatTableView
-            setContentOffset:CGPointMake(
-                                 0,
-                                 self.chatTableView.contentSize.height
-                                     - self.chatTableView.frame.size.height
-                             )
-                    animated:NO];
+        [self.chatTableView setContentOffset:CGPointZero animated:NO];
     }
 }
 
@@ -2615,11 +2556,11 @@ static dispatch_queue_t chat_messages_queue;
                            disablePing:self.disablePing];
             }
             if (self.replyingToMessage || self.editingMessage) {
-                NSIndexPath *indexPath = [NSIndexPath indexPathForRow:[self.messages
+                NSIndexPath *indexPath = [NSIndexPath indexPathForRow:[self rowForModelIndex:[self.messages
                                                                           indexOfObject:self.replyingToMessage
                                                                               ? self.replyingToMessage
-                                                                              : self.editingMessage]
-                                                            inSection:0];
+                                                                              : self.editingMessage]]
+                                                           inSection:0];
                 self.replyingToMessage = nil;
                 self.editingMessage    = nil;
                 [self.chatTableView beginUpdates];
@@ -2636,13 +2577,7 @@ static dispatch_queue_t chat_messages_queue;
             [self.inputField resignFirstResponder];
         }
 
-        [self.chatTableView
-            setContentOffset:CGPointMake(
-                                 0,
-                                 self.chatTableView.contentSize.height
-                                     - self.chatTableView.frame.size.height
-                             )
-                    animated:YES];
+        [self.chatTableView setContentOffset:CGPointZero animated:YES];
     });
 }
 
@@ -2655,7 +2590,7 @@ static dispatch_queue_t chat_messages_queue;
         DBGLOG(@"Tapped referenced message, but indexPath is nil!");
         return;
     }
-    DCMessage *messageAtRowIndex = [self.messages objectAtIndex:indexPath.row];
+    DCMessage *messageAtRowIndex = [self.messages objectAtIndex:[self modelIndexForRow:indexPath.row]];
     if (!messageAtRowIndex.referencedMessage) {
         DBGLOG(@"Tapped referenced message, but referencedMessage is nil!");
         return;
@@ -2668,9 +2603,10 @@ static dispatch_queue_t chat_messages_queue;
         DBGLOG(@"Referenced message not found in messages array!");
         return;
     }
-    [self.chatTableView scrollToRowAtIndexPath:[NSIndexPath indexPathForRow:referencedMessageIndex inSection:0]
-                                  atScrollPosition:UITableViewScrollPositionMiddle
-                                          animated:YES];
+    [self.chatTableView scrollToRowAtIndexPath:[NSIndexPath indexPathForRow:[self rowForModelIndex:referencedMessageIndex]
+                                                                  inSection:0]
+                              atScrollPosition:UITableViewScrollPositionMiddle
+                                              animated:YES];
 }
 
 - (void)tappedImage:(UITapGestureRecognizer *)sender {

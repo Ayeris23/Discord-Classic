@@ -77,14 +77,6 @@
 // }
 
 - (void)awakeFromNib {
-    [super awakeFromNib];
-    UITapGestureRecognizer *profileTap = [[UITapGestureRecognizer alloc]
-        initWithTarget:nil
-                action:@selector(profileImageTapped:)];
-    profileTap.numberOfTapsRequired = 1;
-    self.profileImage.userInteractionEnabled = YES;
-    [self.profileImage addGestureRecognizer:profileTap];
-    
     self.profileImage.backgroundColor = [UIColor clearColor];
     self.profileImage.opaque = NO;
     self.referencedProfileImage.backgroundColor = [UIColor clearColor];
