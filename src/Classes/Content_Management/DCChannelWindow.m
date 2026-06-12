@@ -22,6 +22,7 @@
         _messages         = [NSMutableArray array];
         _atPresentTime    = YES;  // a freshly opened window anchors to present
         _hasMoreBefore    = YES;  // assume history exists until a load proves otherwise
+        _hasMoreAfter  = NO;   // window holds the live tail by default
     }
     return self;
 }

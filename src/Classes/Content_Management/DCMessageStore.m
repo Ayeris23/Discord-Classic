@@ -52,6 +52,16 @@
     return older;
 }
 
+- (NSArray *)loadAfterForChannel:(DCChannel *)channel
+                    afterMessage:(DCMessage *)message
+                           limit:(int)limit {
+    if (!channel) return nil;
+    NSArray *newer = [channel getMessages:limit afterMessage:message];
+    DCChannelWindow *window = [self windowForChannel:channel.snowflake];
+    window.hasMoreAfter = (newer.count >= limit);
+    return newer;
+}
+
 - (DCMessageDelta *)reconcileForwardForChannel:(DCChannel *)channel
                                   afterMessage:(DCMessage *)anchor {
     if (!channel || !anchor) return nil;

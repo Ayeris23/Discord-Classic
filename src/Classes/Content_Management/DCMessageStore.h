@@ -51,4 +51,8 @@
 - (NSArray *)loadBeforeForChannel:(DCChannel *)channel
                     beforeMessage:(DCMessage *)anchor
                             limit:(int)limit;
+
+- (NSArray *)loadAfterForChannel:(DCChannel *)channel
+                    afterMessage:(DCMessage *)message
+                           limit:(int)limit;
 @end

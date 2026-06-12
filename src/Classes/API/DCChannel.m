@@ -765,8 +765,7 @@ static dispatch_queue_t channel_send_queue;
         }
 
         for (int i = 0; i < messages.count; i++) {
-            DCMessage *prevMessage =
-                i == 0 ? message : [messages objectAtIndex:i - 1];
+            DCMessage *prevMessage = (i == 0) ? nil : [messages objectAtIndex:i - 1];
             DCMessage *currentMessage = [messages objectAtIndex:i];
             if (prevMessage == nil) {
                 continue;
@@ -879,12 +878,10 @@ static dispatch_queue_t channel_send_queue;
             return;
         }
 
-        // after= returns messages in ascending order (oldest first),
-        // so we append rather than insert at index 0
         for (NSDictionary *jsonMessage in parsedResponse) {
             DCMessage *convertedMessage = [DCTools convertJsonMessage:jsonMessage];
             if (convertedMessage) {
-                [messages addObject:convertedMessage];
+                [messages insertObject:convertedMessage atIndex:0];
             }
         }
 

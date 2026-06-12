@@ -21,9 +21,10 @@
 // a global one. Not wired into the controller yet (next step).
 @property (nonatomic, assign) BOOL atPresentTime;
 
-// Whether older messages may still exist before messages.firstObject.
+// Whether older or newer messages may still exist before/after messages.firstObject.
 // Terminates backward loading at the true start of channel history.
 @property (nonatomic, assign) BOOL hasMoreBefore;
+@property (nonatomic, assign) BOOL hasMoreAfter;
 
 // Convenience reads (nil when empty).
 @property (nonatomic, readonly) NSString *latestSnowflake;
