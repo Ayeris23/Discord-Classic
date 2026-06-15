@@ -456,8 +456,8 @@ static dispatch_queue_t chat_messages_queue;
 
     // DEBUG: chat caching disabled — drop any retained window so every entry
     // cold-loads from scratch. Also neutralizes the re-entry duplication path
-    NSString *cid = DCServerCommunicator.sharedInstance.selectedChannel.snowflake;
-    if (cid) [[DCMessageStore sharedInstance] removeWindowForChannel:cid];
+    // NSString *cid = DCServerCommunicator.sharedInstance.selectedChannel.snowflake;
+    // if (cid) [[DCMessageStore sharedInstance] removeWindowForChannel:cid];
 
     [self syncWindowForSelectedChannel];
     @autoreleasepool {
@@ -1293,6 +1293,10 @@ static dispatch_queue_t chat_messages_queue;
             // table, so they land at rows [0..k-1] and push existing content DOWN.
             [self.messages addObjectsFromArray:deduped];
 
+            if (message != nil && oldCount > 0 && self.messages.count > oldCount) {
+                [self reconcileGroupingAtModelIndex:(NSInteger)oldCount];
+            }
+
             if (didReload) {
                 [self.chatTableView reloadData];
             } else {
@@ -1324,10 +1328,78 @@ static dispatch_queue_t chat_messages_queue;
 
             // Pair the growth with an oldest trim. This load only fires near
             // present, so the oldest is far past the viewport — free to remove.
-            [self evictOldestDownToCeiling];
+            // [self evictOldestDownToCeiling];
 
             self.loadingNewerMessages = NO;
         });
+        // Precalculate heights for both orientations on iPad
+        if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
+            CGFloat screenWidth  = UIScreen.mainScreen.bounds.size.width;
+            CGFloat screenHeight = UIScreen.mainScreen.bounds.size.height;
+            CGFloat portraitWidth  = MIN(screenWidth, screenHeight);
+            CGFloat landscapeWidth = MAX(screenWidth, screenHeight);
+            
+            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
+                for (DCMessage *message in newMessages) {
+                    if (!message.snowflake) continue;
+                    // Check for unloaded attachments
+                    BOOL hasUnloaded = NO;
+                    for (id attachment in message.attachments) {
+                        if ([attachment isKindOfClass:[NSArray class]] ||
+                            ([attachment isKindOfClass:[DCGifInfo class]] && !((DCGifInfo *)attachment).staticThumbnail)) {
+                            hasUnloaded = YES;
+                            break;
+                        }
+                    }
+                    if (hasUnloaded) continue;
+                    
+                    // Precalculate portrait
+                    if (![[DCCacheManager sharedInstance] cacheEntryForSnowflake:message.snowflake width:portraitWidth]) {
+                        CGFloat hPortrait = [self calculateHeightForMessage:message 
+                                                                 tableWidth:portraitWidth 
+                                                           followedByGrouped:NO];
+                        DCMessageCacheEntry *entryP = [DCMessageCacheEntry new];
+                        entryP.cellHeight = hPortrait;
+                        [[DCCacheManager sharedInstance] setCacheEntry:entryP 
+                                                          forSnowflake:message.snowflake 
+                                                                 width:portraitWidth];
+
+                        // Also cache the followedByGrouped variant
+                        CGFloat hPortraitGrouped = [self calculateHeightForMessage:message 
+                                                                        tableWidth:portraitWidth 
+                                                                  followedByGrouped:YES];
+                        DCMessageCacheEntry *entryPG = [DCMessageCacheEntry new];
+                        entryPG.cellHeight = hPortraitGrouped;
+                        [[DCCacheManager sharedInstance] 
+                            setCacheEntry:entryPG 
+                              forSnowflake:[message.snowflake stringByAppendingString:@"_hasGrouped"]
+                                     width:portraitWidth];
+                    }
+                    // Precalculate landscape
+                    if (![[DCCacheManager sharedInstance] cacheEntryForSnowflake:message.snowflake width:landscapeWidth]) {
+                        CGFloat hLandscape = [self calculateHeightForMessage:message 
+                                                                 tableWidth:landscapeWidth 
+                                                           followedByGrouped:NO];
+                        DCMessageCacheEntry *entryL = [DCMessageCacheEntry new];
+                        entryL.cellHeight = hLandscape;
+                        [[DCCacheManager sharedInstance] setCacheEntry:entryL 
+                                                          forSnowflake:message.snowflake 
+                                                                 width:landscapeWidth];
+
+                        // Also cache the followedByGrouped variant
+                        CGFloat hLandscapeGrouped = [self calculateHeightForMessage:message 
+                                                                        tableWidth:landscapeWidth 
+                                                                  followedByGrouped:YES];
+                        DCMessageCacheEntry *entryLG = [DCMessageCacheEntry new];
+                        entryLG.cellHeight = hLandscapeGrouped;
+                        [[DCCacheManager sharedInstance] 
+                            setCacheEntry:entryLG 
+                              forSnowflake:[message.snowflake stringByAppendingString:@"_hasGrouped"]
+                                     width:landscapeWidth];
+                    }
+                }
+            });
+        }
     });
 }
 
@@ -1762,7 +1834,7 @@ static dispatch_queue_t chat_messages_queue;
                 cell.referencedMessage.frame = CGRectMake(
                     messageAtRowIndex.referencedMessage.authorNameWidth,
                     cell.referencedMessage.y,
-                    self.chatTableView.width - messageAtRowIndex.authorNameWidth,
+                    self.chatTableView.width - messageAtRowIndex.referencedMessage.authorNameWidth,
                     cell.referencedMessage.height
                 );
                 if (messageAtRowIndex.referencedMessage
@@ -2000,22 +2072,6 @@ static dispatch_queue_t chat_messages_queue;
                     } else if ([attachment isKindOfClass:[QLPreviewController class]]) {
                         ////NSLog(@"Add QuickLook!");
                         QLPreviewController *preview = attachment;
-
-                        /*UITapGestureRecognizer *singleTap = [[UITapGestureRecognizer
-                         alloc] initWithTarget:self action:@selector(tappedVideo:)];
-                         singleTap.numberOfTapsRequired = 1;
-                         [video.playButton addGestureRecognizer:singleTap];
-                         video.playButton.userInteractionEnabled = YES;
-
-                         CGFloat aspectRatio = video.thumbnail.image.size.width /
-                         video.thumbnail.image.size.height; int newWidth = 200 *
-                         aspectRatio; int newHeight = 200; if (newWidth >
-                         self.chatTableView.width - 66) { newWidth =
-                         self.chatTableView.width - 66; newHeight = newWidth /
-                         aspectRatio;
-                         }
-                         [video setFrame:CGRectMake(55, imageViewOffset, newWidth,
-                         newHeight)];*/
 
                         imageViewOffset += 210;
 
@@ -2516,23 +2572,6 @@ static dispatch_queue_t chat_messages_queue;
         }
     }
 }
-
-// - (void)scrollViewDidScroll:(UIScrollView *)scrollView {
-//     self.viewingPresentTime =
-//         (scrollView.contentOffset.y
-//          >= scrollView.contentSize.height - scrollView.height - 10);
-
-//     // Newest is at offset 0 in the flipped table — that's "present time."
-//     self.viewingPresentTime = (scrollView.contentOffset.y <= 10);
-//     if (self.messages.count == 0) return;
-//     if (self.loadingOlderMessages) return;
-//     if (!self.currentWindow.hasMoreBefore) return;
-//     // Older messages are at the high-offset end now; trigger on approach to it.
-//     if (scrollView.contentOffset.y >= scrollView.contentSize.height - 2 * scrollView.height) {
-//         self.loadingOlderMessages = YES;
-//         [self getMessages:kProximityLoadBurst beforeMessage:[self.messages objectAtIndex:0]];
-//     }
-// }
 
 - (void)scrollViewDidScroll:(UIScrollView *)scrollView {
     // Newest is at offset 0 in the flipped table — that's "present time."

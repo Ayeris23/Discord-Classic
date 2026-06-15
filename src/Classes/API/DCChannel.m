@@ -614,10 +614,6 @@ static dispatch_queue_t channel_send_queue;
             return;
         }
 
-        /*if(parsedResponse.count > 0)
-            for(NSDictionary* jsonMessage in parsedResponse)
-                [messages insertObject:[DCTools convertJsonMessage:jsonMessage]
-           atIndex:0];*/
         if (parsedResponse.count <= 0) {
             return;
         }
@@ -772,7 +768,7 @@ static dispatch_queue_t channel_send_queue;
             }
             NSDate *currentTimeStamp = currentMessage.timestamp;
 
-            if (prevMessage.author.snowflake != currentMessage.author.snowflake
+            if (![prevMessage.author.snowflake isEqualToString:currentMessage.author.snowflake]
                 || ([currentMessage.timestamp timeIntervalSince1970] -
                         [prevMessage.timestamp timeIntervalSince1970]
                     >= 420)
@@ -869,18 +865,161 @@ static dispatch_queue_t channel_send_queue;
         return nil;
     }
 
-    dispatch_sync(dispatch_get_main_queue(), ^{
-        NSError *parseError = nil;
-        NSArray *parsedResponse = [NSJSONSerialization JSONObjectWithData:response
-                                                                  options:0
-                                                                    error:&parseError];
-        if (parseError || parsedResponse.count <= 0) {
-            return;
-        }
+   // starting here it gets important
+   dispatch_sync(dispatch_get_main_queue(), ^{
+       NSError *error = nil;
+       NSArray *parsedResponse =
+           [NSJSONSerialization JSONObjectWithData:response
+                                           options:0
+                                             error:&error];
+
+       if (error) {
+           NSLog(@"Error: %@", error);
+           return;
+       }
+
+       if (parsedResponse.count <= 0) {
+           return;
+       }
+
+       static NSArray *joinMessages;
+       static dispatch_once_t onceToken;
+       dispatch_once(&onceToken, ^{
+           joinMessages = @[
+               @"%@ joined the party.",
+               @"%@ is here.",
+               @"Welcome, %@. We hope you brought pizza.",
+               @"A wild %@ appeared.",
+               @"%@ just landed.",
+               @"%@ just slid into the server.",
+               @"%@ just showed up!",
+               @"Welcome %@. Say hi!",
+               @"%@ hopped into the server.",
+               @"Everyone welcome %@!",
+               @"Glad you're here, %@.",
+               @"Good to see you, %@.",
+               @"Yay you made it, %@!",
+           ];
+       });
 
         for (NSDictionary *jsonMessage in parsedResponse) {
-            DCMessage *convertedMessage = [DCTools convertJsonMessage:jsonMessage];
-            if (convertedMessage) {
+            @autoreleasepool {
+                DCMessage *convertedMessage =
+                    [DCTools convertJsonMessage:jsonMessage];
+
+                NSString *messageType = [jsonMessage objectForKey:@"type"];
+
+                if ([messageType intValue] == DCMessageTypeRecipientAdd) {
+                    NSArray *mentions     = [jsonMessage objectForKey:@"mentions"];
+                    NSDictionary *mention = mentions.firstObject;
+                    // NSString *targetName = [mentions
+                    // objectForKey:@"global_name"];
+                    convertedMessage.isGrouped = NO;
+                    NSString *targetUsername =
+                        [mention objectForKey:@"global_name"];
+                    if ([targetUsername isKindOfClass:[NSNull class]]) {
+                        targetUsername = @"Deleted User";
+                    }
+                    convertedMessage.content       = [NSString
+                        stringWithFormat:@"%@ added %@ to the group conversation.",
+                                         [convertedMessage.author displayName],
+                                         targetUsername];
+                    float contentWidth             = UIScreen.mainScreen.bounds.size.width - 63;
+                    CGSize textSize                = [convertedMessage.content
+                             sizeWithFont:[UIFont systemFontOfSize:14]
+                        constrainedToSize:CGSizeMake(contentWidth, MAXFLOAT)
+                            lineBreakMode:NSLineBreakByWordWrapping];
+                    convertedMessage.contentHeight = textSize.height + 40;
+                } else if ([messageType intValue] == DCMessageTypeRecipientRemove) {
+                    convertedMessage.isGrouped     = NO;
+                    convertedMessage.content       = [NSString
+                        stringWithFormat:@"%@ left the group conversation.",
+                                         [convertedMessage.author displayName]];
+                    float contentWidth             = UIScreen.mainScreen.bounds.size.width - 63;
+                    CGSize textSize                = [convertedMessage.content
+                             sizeWithFont:[UIFont systemFontOfSize:14]
+                        constrainedToSize:CGSizeMake(contentWidth, MAXFLOAT)
+                            lineBreakMode:NSLineBreakByWordWrapping];
+                    convertedMessage.contentHeight = textSize.height + 40;
+                } else if ([messageType intValue] == DCMessageTypeChannelNameChange) {
+                    convertedMessage.isGrouped     = NO;
+                    convertedMessage.content       = [NSString
+                        stringWithFormat:@"%@ changed the group name to %@.",
+                                         [convertedMessage.author displayName],
+                                         [jsonMessage objectForKey:@"content"]];
+                    float contentWidth             = UIScreen.mainScreen.bounds.size.width - 63;
+                    CGSize textSize                = [convertedMessage.content
+                             sizeWithFont:[UIFont systemFontOfSize:14]
+                        constrainedToSize:CGSizeMake(contentWidth, MAXFLOAT)
+                            lineBreakMode:NSLineBreakByWordWrapping];
+                    convertedMessage.contentHeight = textSize.height + 30;
+                } else if ([messageType intValue] == DCMessageTypeChannelIconChange) {
+                    convertedMessage.isGrouped     = NO;
+                    convertedMessage.content       = [NSString
+                        stringWithFormat:@"%@ changed the group icon.",
+                                         [convertedMessage.author displayName]];
+                    float contentWidth             = UIScreen.mainScreen.bounds.size.width - 63;
+                    CGSize textSize                = [convertedMessage.content
+                             sizeWithFont:[UIFont systemFontOfSize:14]
+                        constrainedToSize:CGSizeMake(contentWidth, MAXFLOAT)
+                            lineBreakMode:NSLineBreakByWordWrapping];
+                    convertedMessage.contentHeight = textSize.height + 15;
+                } else if ([messageType intValue] == DCMessageTypeChannelPinnedMessage) {
+                    convertedMessage.isGrouped     = NO;
+                    convertedMessage.content       = [NSString
+                        stringWithFormat:@"%@ pinned a message to this channel.",
+                                         [convertedMessage.author displayName]];
+                    float contentWidth             = UIScreen.mainScreen.bounds.size.width - 63;
+                    CGSize textSize                = [convertedMessage.content
+                             sizeWithFont:[UIFont systemFontOfSize:14]
+                        constrainedToSize:CGSizeMake(contentWidth, MAXFLOAT)
+                            lineBreakMode:NSLineBreakByWordWrapping];
+                    convertedMessage.contentHeight = textSize.height + 40;
+                } else if ([messageType intValue] == DCMessageTypeUserJoin) {
+                    convertedMessage.isGrouped     = NO;
+                    static dispatch_once_t dateFormatOnceToken;
+                    static NSDateFormatter *dateFormatter;
+                    dispatch_once(&dateFormatOnceToken, ^{
+                        dateFormatter = [NSDateFormatter new];
+                        dateFormatter.dateFormat = @"yyyy-MM-dd'T'HH:mm:ss.SSSSSS+00':'00";
+                        dateFormatter.timeZone     = [NSTimeZone timeZoneWithName:@"GMT"];
+                        dateFormatter.locale     = [[NSLocale alloc] initWithLocaleIdentifier:@"en_US_POSIX"];
+                    });
+                    NSDate *timestamp = [dateFormatter dateFromString:[jsonMessage objectForKey:@"timestamp"]];
+                    uint64_t time = [timestamp timeIntervalSince1970] * 1000; // ms
+                    convertedMessage.content       = [NSString
+                        stringWithFormat:joinMessages[time % joinMessages.count],
+                                         [convertedMessage.author displayName]];
+                    float contentWidth             = UIScreen.mainScreen.bounds.size.width - 63;
+                    CGSize textSize                = [convertedMessage.content
+                             sizeWithFont:[UIFont systemFontOfSize:14]
+                        constrainedToSize:CGSizeMake(contentWidth, MAXFLOAT)
+                            lineBreakMode:NSLineBreakByWordWrapping];
+                    convertedMessage.contentHeight = textSize.height + 20;
+                } else if ([messageType intValue] == DCMessageTypeGuildBoost) {
+                    convertedMessage.isGrouped     = NO;
+                    convertedMessage.content       = [NSString
+                        stringWithFormat:@"%@ just boosted the server!",
+                                         [convertedMessage.author displayName]];
+                    float contentWidth             = UIScreen.mainScreen.bounds.size.width - 63;
+                    CGSize textSize                = [convertedMessage.content
+                             sizeWithFont:[UIFont systemFontOfSize:14]
+                        constrainedToSize:CGSizeMake(contentWidth, MAXFLOAT)
+                            lineBreakMode:NSLineBreakByWordWrapping];
+                    convertedMessage.contentHeight = textSize.height + 20;
+                } else if ([messageType intValue] == DCMessageTypeThreadCreated) {
+                    convertedMessage.isGrouped     = NO;
+                    convertedMessage.content       = [NSString
+                        stringWithFormat:@"%@ started a thread: 'placeholder'. See all 'placeholder'.",
+                                         [convertedMessage.author displayName]];
+                    float contentWidth             = UIScreen.mainScreen.bounds.size.width - 63;
+                    CGSize textSize                = [convertedMessage.content
+                             sizeWithFont:[UIFont systemFontOfSize:14]
+                        constrainedToSize:CGSizeMake(contentWidth, MAXFLOAT)
+                            lineBreakMode:NSLineBreakByWordWrapping];
+                    convertedMessage.contentHeight = textSize.height + 20;
+                }
+                // NSLog(@"[DCChannel] snowflake: %@ contentHeight: %f", convertedMessage.snowflake, convertedMessage.contentHeight);
                 [messages insertObject:convertedMessage atIndex:0];
             }
         }
@@ -889,14 +1028,14 @@ static dispatch_queue_t channel_send_queue;
         // table. messages is ascending (oldest first); the row above messages[0]
         // is the anchor we loaded after, so the anchor is its grouping context.
         for (int i = 0; i < messages.count; i++) {
-            DCMessage *prevMessage    = (i == 0) ? message : [messages objectAtIndex:i - 1];
+            DCMessage *prevMessage = (i == 0) ? nil : [messages objectAtIndex:i - 1];
             DCMessage *currentMessage = [messages objectAtIndex:i];
             if (prevMessage == nil) {
                 continue;
             }
             NSDate *currentTimeStamp = currentMessage.timestamp;
 
-            if (prevMessage.author.snowflake != currentMessage.author.snowflake
+            if (![prevMessage.author.snowflake isEqualToString:currentMessage.author.snowflake]
                 || ([currentMessage.timestamp timeIntervalSince1970] -
                         [prevMessage.timestamp timeIntervalSince1970]
                     >= 420)
