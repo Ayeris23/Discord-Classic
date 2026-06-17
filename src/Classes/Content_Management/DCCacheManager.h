@@ -9,6 +9,7 @@
 #import <UIKit/UIKit.h>
 
 @class DCMessage;
+@class DCMessageLayout;
 @class DCUser;
 @class DCUserInfo;
 @class DCEmoji;
@@ -31,6 +32,34 @@
 
 // Targeted invalidation
 - (void)invalidateSnowflake:(NSString *)snowflake;
+
+// --- Layout cache ---
+// Composite-key cache for DCMessageLayout, keyed by snowflake, table
+// width, immediate neighbor snowflakes, and the message's edited
+// timestamp. A change to either neighbor snowflake (insertion or
+// eviction at either edge) or to editedTimestamp produces a natural
+// cache miss on the next lookup. Other state changes — attachment load
+// completing, reference snapshot refresh — don't have version fields in
+// the key yet (those land with the DCMessage.h changes in a later
+// slice), so callers still need -invalidateSnowflake: for those cases.
+- (DCMessageLayout *)layoutForSnowflake:(NSString *)snowflake
+                              tableWidth:(CGFloat)tableWidth
+                       previousSnowflake:(NSString *)previousSnowflake
+                           nextSnowflake:(NSString *)nextSnowflake
+                         editedTimestamp:(NSDate *)editedTimestamp;
+
+- (void)setLayout:(DCMessageLayout *)layout
+       forSnowflake:(NSString *)snowflake
+         tableWidth:(CGFloat)tableWidth
+  previousSnowflake:(NSString *)previousSnowflake
+      nextSnowflake:(NSString *)nextSnowflake
+    editedTimestamp:(NSDate *)editedTimestamp;
+
+// All cache access must go through the cache queue.
+// Use -performCacheOperation: for synchronous reads,
+// -performAsyncCacheOperation: for background writes.
+- (id)performCacheOperation:(id (^)(void))block;
+- (void)performAsyncCacheOperation:(void (^)(void))block;
 
 // Full flush — use on memory warning or channel change
 - (void)invalidateAllMessages;

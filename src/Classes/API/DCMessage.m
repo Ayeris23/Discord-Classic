@@ -18,9 +18,4 @@
     return [self.snowflake isEqual:((DCMessage *)other).snowflake];
 }
 
-- (BOOL)isGrouped {
-    if (_referencedMessage != nil) return NO;
-    return _isGrouped;
-}
-
 @end

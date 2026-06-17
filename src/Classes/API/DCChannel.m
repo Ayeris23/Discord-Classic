@@ -650,7 +650,6 @@ static dispatch_queue_t channel_send_queue;
                     NSDictionary *mention = mentions.firstObject;
                     // NSString *targetName = [mentions
                     // objectForKey:@"global_name"];
-                    convertedMessage.isGrouped = NO;
                     NSString *targetUsername =
                         [mention objectForKey:@"global_name"];
                     if ([targetUsername isKindOfClass:[NSNull class]]) {
@@ -667,7 +666,6 @@ static dispatch_queue_t channel_send_queue;
                             lineBreakMode:NSLineBreakByWordWrapping];
                     convertedMessage.contentHeight = textSize.height + 40;
                 } else if ([messageType intValue] == DCMessageTypeRecipientRemove) {
-                    convertedMessage.isGrouped     = NO;
                     convertedMessage.content       = [NSString
                         stringWithFormat:@"%@ left the group conversation.",
                                          [convertedMessage.author displayName]];
@@ -678,7 +676,6 @@ static dispatch_queue_t channel_send_queue;
                             lineBreakMode:NSLineBreakByWordWrapping];
                     convertedMessage.contentHeight = textSize.height + 40;
                 } else if ([messageType intValue] == DCMessageTypeChannelNameChange) {
-                    convertedMessage.isGrouped     = NO;
                     convertedMessage.content       = [NSString
                         stringWithFormat:@"%@ changed the group name to %@.",
                                          [convertedMessage.author displayName],
@@ -690,7 +687,6 @@ static dispatch_queue_t channel_send_queue;
                             lineBreakMode:NSLineBreakByWordWrapping];
                     convertedMessage.contentHeight = textSize.height + 30;
                 } else if ([messageType intValue] == DCMessageTypeChannelIconChange) {
-                    convertedMessage.isGrouped     = NO;
                     convertedMessage.content       = [NSString
                         stringWithFormat:@"%@ changed the group icon.",
                                          [convertedMessage.author displayName]];
@@ -701,7 +697,6 @@ static dispatch_queue_t channel_send_queue;
                             lineBreakMode:NSLineBreakByWordWrapping];
                     convertedMessage.contentHeight = textSize.height + 15;
                 } else if ([messageType intValue] == DCMessageTypeChannelPinnedMessage) {
-                    convertedMessage.isGrouped     = NO;
                     convertedMessage.content       = [NSString
                         stringWithFormat:@"%@ pinned a message to this channel.",
                                          [convertedMessage.author displayName]];
@@ -712,7 +707,6 @@ static dispatch_queue_t channel_send_queue;
                             lineBreakMode:NSLineBreakByWordWrapping];
                     convertedMessage.contentHeight = textSize.height + 40;
                 } else if ([messageType intValue] == DCMessageTypeUserJoin) {
-                    convertedMessage.isGrouped     = NO;
                     static dispatch_once_t dateFormatOnceToken;
                     static NSDateFormatter *dateFormatter;
                     dispatch_once(&dateFormatOnceToken, ^{
@@ -733,7 +727,6 @@ static dispatch_queue_t channel_send_queue;
                             lineBreakMode:NSLineBreakByWordWrapping];
                     convertedMessage.contentHeight = textSize.height + 20;
                 } else if ([messageType intValue] == DCMessageTypeGuildBoost) {
-                    convertedMessage.isGrouped     = NO;
                     convertedMessage.content       = [NSString
                         stringWithFormat:@"%@ just boosted the server!",
                                          [convertedMessage.author displayName]];
@@ -744,7 +737,6 @@ static dispatch_queue_t channel_send_queue;
                             lineBreakMode:NSLineBreakByWordWrapping];
                     convertedMessage.contentHeight = textSize.height + 20;
                 } else if ([messageType intValue] == DCMessageTypeThreadCreated) {
-                    convertedMessage.isGrouped     = NO;
                     convertedMessage.content       = [NSString
                         stringWithFormat:@"%@ started a thread: 'placeholder'. See all 'placeholder'.",
                                          [convertedMessage.author displayName]];
@@ -758,43 +750,6 @@ static dispatch_queue_t channel_send_queue;
                 // NSLog(@"[DCChannel] snowflake: %@ contentHeight: %f", convertedMessage.snowflake, convertedMessage.contentHeight);
                 [messages insertObject:convertedMessage atIndex:0];
             }
-        }
-
-        for (int i = 0; i < messages.count; i++) {
-            DCMessage *prevMessage = (i == 0) ? nil : [messages objectAtIndex:i - 1];
-            DCMessage *currentMessage = [messages objectAtIndex:i];
-            if (prevMessage == nil) {
-                continue;
-            }
-            NSDate *currentTimeStamp = currentMessage.timestamp;
-
-            if (![prevMessage.author.snowflake isEqualToString:currentMessage.author.snowflake]
-                || ([currentMessage.timestamp timeIntervalSince1970] -
-                        [prevMessage.timestamp timeIntervalSince1970]
-                    >= 420)
-                || ![[NSCalendar currentCalendar]
-                    rangeOfUnit:NSCalendarUnitDay
-                      startDate:&currentTimeStamp
-                       interval:NULL
-                        forDate:prevMessage.timestamp]
-                || (prevMessage.messageType != DCMessageTypeDefault && prevMessage.messageType != DCMessageTypeReply)) {
-                continue;
-            }
-
-            currentMessage.isGrouped = (currentMessage.messageType == DCMessageTypeDefault || currentMessage.messageType == DCMessageTypeReply)
-                && (currentMessage.referencedMessage == nil);
-            if (!currentMessage.isGrouped) {
-                continue;
-            }
-
-            float contentWidth =
-                UIScreen.mainScreen.bounds.size.width - 63;
-            CGSize authorNameSize = [[currentMessage.author displayName]
-                     sizeWithFont:[UIFont boldSystemFontOfSize:15]
-                constrainedToSize:CGSizeMake(contentWidth, MAXFLOAT)
-                    lineBreakMode:(NSLineBreakMode)UILineBreakModeWordWrap];
-
-            currentMessage.contentHeight -= authorNameSize.height + 4;
         }
     });
 
@@ -914,7 +869,6 @@ static dispatch_queue_t channel_send_queue;
                     NSDictionary *mention = mentions.firstObject;
                     // NSString *targetName = [mentions
                     // objectForKey:@"global_name"];
-                    convertedMessage.isGrouped = NO;
                     NSString *targetUsername =
                         [mention objectForKey:@"global_name"];
                     if ([targetUsername isKindOfClass:[NSNull class]]) {
@@ -931,7 +885,6 @@ static dispatch_queue_t channel_send_queue;
                             lineBreakMode:NSLineBreakByWordWrapping];
                     convertedMessage.contentHeight = textSize.height + 40;
                 } else if ([messageType intValue] == DCMessageTypeRecipientRemove) {
-                    convertedMessage.isGrouped     = NO;
                     convertedMessage.content       = [NSString
                         stringWithFormat:@"%@ left the group conversation.",
                                          [convertedMessage.author displayName]];
@@ -942,7 +895,6 @@ static dispatch_queue_t channel_send_queue;
                             lineBreakMode:NSLineBreakByWordWrapping];
                     convertedMessage.contentHeight = textSize.height + 40;
                 } else if ([messageType intValue] == DCMessageTypeChannelNameChange) {
-                    convertedMessage.isGrouped     = NO;
                     convertedMessage.content       = [NSString
                         stringWithFormat:@"%@ changed the group name to %@.",
                                          [convertedMessage.author displayName],
@@ -954,7 +906,6 @@ static dispatch_queue_t channel_send_queue;
                             lineBreakMode:NSLineBreakByWordWrapping];
                     convertedMessage.contentHeight = textSize.height + 30;
                 } else if ([messageType intValue] == DCMessageTypeChannelIconChange) {
-                    convertedMessage.isGrouped     = NO;
                     convertedMessage.content       = [NSString
                         stringWithFormat:@"%@ changed the group icon.",
                                          [convertedMessage.author displayName]];
@@ -965,7 +916,6 @@ static dispatch_queue_t channel_send_queue;
                             lineBreakMode:NSLineBreakByWordWrapping];
                     convertedMessage.contentHeight = textSize.height + 15;
                 } else if ([messageType intValue] == DCMessageTypeChannelPinnedMessage) {
-                    convertedMessage.isGrouped     = NO;
                     convertedMessage.content       = [NSString
                         stringWithFormat:@"%@ pinned a message to this channel.",
                                          [convertedMessage.author displayName]];
@@ -976,7 +926,6 @@ static dispatch_queue_t channel_send_queue;
                             lineBreakMode:NSLineBreakByWordWrapping];
                     convertedMessage.contentHeight = textSize.height + 40;
                 } else if ([messageType intValue] == DCMessageTypeUserJoin) {
-                    convertedMessage.isGrouped     = NO;
                     static dispatch_once_t dateFormatOnceToken;
                     static NSDateFormatter *dateFormatter;
                     dispatch_once(&dateFormatOnceToken, ^{
@@ -997,7 +946,6 @@ static dispatch_queue_t channel_send_queue;
                             lineBreakMode:NSLineBreakByWordWrapping];
                     convertedMessage.contentHeight = textSize.height + 20;
                 } else if ([messageType intValue] == DCMessageTypeGuildBoost) {
-                    convertedMessage.isGrouped     = NO;
                     convertedMessage.content       = [NSString
                         stringWithFormat:@"%@ just boosted the server!",
                                          [convertedMessage.author displayName]];
@@ -1008,7 +956,6 @@ static dispatch_queue_t channel_send_queue;
                             lineBreakMode:NSLineBreakByWordWrapping];
                     convertedMessage.contentHeight = textSize.height + 20;
                 } else if ([messageType intValue] == DCMessageTypeThreadCreated) {
-                    convertedMessage.isGrouped     = NO;
                     convertedMessage.content       = [NSString
                         stringWithFormat:@"%@ started a thread: 'placeholder'. See all 'placeholder'.",
                                          [convertedMessage.author displayName]];
@@ -1022,46 +969,6 @@ static dispatch_queue_t channel_send_queue;
                 // NSLog(@"[DCChannel] snowflake: %@ contentHeight: %f", convertedMessage.snowflake, convertedMessage.contentHeight);
                 [messages insertObject:convertedMessage atIndex:0];
             }
-        }
-
-        // Group exactly as a cold load does, so a refresh produces an identical
-        // table. messages is ascending (oldest first); the row above messages[0]
-        // is the anchor we loaded after, so the anchor is its grouping context.
-        for (int i = 0; i < messages.count; i++) {
-            DCMessage *prevMessage = (i == 0) ? nil : [messages objectAtIndex:i - 1];
-            DCMessage *currentMessage = [messages objectAtIndex:i];
-            if (prevMessage == nil) {
-                continue;
-            }
-            NSDate *currentTimeStamp = currentMessage.timestamp;
-
-            if (![prevMessage.author.snowflake isEqualToString:currentMessage.author.snowflake]
-                || ([currentMessage.timestamp timeIntervalSince1970] -
-                        [prevMessage.timestamp timeIntervalSince1970]
-                    >= 420)
-                || ![[NSCalendar currentCalendar]
-                    rangeOfUnit:NSCalendarUnitDay
-                      startDate:&currentTimeStamp
-                       interval:NULL
-                        forDate:prevMessage.timestamp]
-                || (prevMessage.messageType != DCMessageTypeDefault && prevMessage.messageType != DCMessageTypeReply)) {
-                continue;
-            }
-
-            currentMessage.isGrouped = (currentMessage.messageType == DCMessageTypeDefault || currentMessage.messageType == DCMessageTypeReply)
-                && (currentMessage.referencedMessage == nil);
-            if (!currentMessage.isGrouped) {
-                continue;
-            }
-
-            float contentWidth =
-                UIScreen.mainScreen.bounds.size.width - 63;
-            CGSize authorNameSize = [[currentMessage.author displayName]
-                     sizeWithFont:[UIFont boldSystemFontOfSize:15]
-                constrainedToSize:CGSizeMake(contentWidth, MAXFLOAT)
-                    lineBreakMode:(NSLineBreakMode)UILineBreakModeWordWrap];
-
-            currentMessage.contentHeight -= authorNameSize.height + 4;
         }
     });
 

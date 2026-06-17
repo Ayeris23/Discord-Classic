@@ -41,9 +41,11 @@
 #import "DTImageTextAttachment.h"
 #import "DCMessageStore.h"
 #import "DCChannelWindow.h"
+#import "DCMessageLayoutBuilder.h"
 
 @interface DCChatViewController ()
 @property (nonatomic, readonly) NSMutableArray *messages;
+@property (strong, nonatomic) DCMessageLayoutBuilder *messageLayoutBuilder;
 @property (nonatomic, strong) DCChannelWindow *currentWindow;
 @property (assign, nonatomic) NSUInteger numberOfMessagesLoaded;
 @property (strong, nonatomic) UIImage *selectedImage;
@@ -594,6 +596,14 @@ static dispatch_queue_t chat_messages_queue;
                                       withRowAnimation:UITableViewRowAnimationNone];
             [self.chatTableView endUpdates];
 
+            if (self.messages.count >= 2) {
+                NSIndexPath *prevPath = [NSIndexPath indexPathForRow:1 inSection:0];
+                [self.chatTableView beginUpdates];
+                [self.chatTableView reloadRowsAtIndexPaths:@[prevPath]
+                                          withRowAnimation:UITableViewRowAnimationNone];
+                [self.chatTableView endUpdates];
+            }
+
             if (self.viewingPresentTime) {
                 [self.chatTableView setContentOffset:CGPointZero animated:YES];
             }
@@ -622,7 +632,8 @@ static dispatch_queue_t chat_messages_queue;
         }
         if (authorMatches) {
             cell.profileImage.image = user.profileImage;
-            if (!message.isGrouped) {
+            DCMessageLayout *layout = [self layoutForModelIndex:i];
+            if (!layout.grouped) {
                 NSString *displayName = [user displayNameInGuild:
                     DCServerCommunicator.sharedInstance.selectedChannel.parentGuild];
                 if (displayName) {
@@ -678,28 +689,6 @@ static dispatch_queue_t chat_messages_queue;
         [DCTools getUserAvatar:newMessage.author];
     }
 
-    if (self.messages.count > 0) {
-        DCMessage *prevMessage =
-            [self.messages objectAtIndex:self.messages.count - 1];
-        if (prevMessage != nil) {
-            NSDate *currentTimeStamp = newMessage.timestamp;
-
-            if (prevMessage.author.snowflake == newMessage.author.snowflake
-                && ([newMessage.timestamp timeIntervalSince1970] -
-                        [prevMessage.timestamp timeIntervalSince1970]
-                    < 420)
-                && [[NSCalendar currentCalendar]
-                    rangeOfUnit:NSCalendarUnitDay
-                      startDate:&currentTimeStamp
-                       interval:NULL
-                        forDate:prevMessage.timestamp]
-                && (prevMessage.messageType == DCMessageTypeDefault || prevMessage.messageType == DCMessageTypeReply)) {
-                newMessage.isGrouped = (newMessage.messageType == DCMessageTypeDefault || newMessage.messageType == DCMessageTypeReply)
-                    && (newMessage.referencedMessage == nil);
-            }
-        }
-    }
-
     NSInteger rowCount = [self.chatTableView numberOfRowsInSection:0];
     [self.messages addObject:newMessage];
     NSIndexPath *newIndexPath = [NSIndexPath indexPathForRow:0 inSection:0];
@@ -710,17 +699,19 @@ static dispatch_queue_t chat_messages_queue;
         [self.chatTableView beginUpdates];
         [self.chatTableView insertRowsAtIndexPaths:@[ newIndexPath ] withRowAnimation:UITableViewRowAnimationNone];
         [self.chatTableView endUpdates];
+        if (self.messages.count >= 2) {
+            NSIndexPath *prevPath = [NSIndexPath indexPathForRow:1 inSection:0];
+            [self.chatTableView beginUpdates];
+            [self.chatTableView reloadRowsAtIndexPaths:@[prevPath]
+                                      withRowAnimation:UITableViewRowAnimationNone];
+            [self.chatTableView endUpdates];
+        }
     }
 
     if (self.viewingPresentTime) {
         [self.chatTableView setContentOffset:CGPointZero animated:YES];
         [self evictOldestDownToCeiling];
     }
-
-    [NSNotificationCenter.defaultCenter
-        postNotificationName:@"MESSAGE DELETE"
-                      object:nil
-                    userInfo:@{@"id" : ((DCMessage *)self.messages.firstObject).snowflake}];
 }
 
 - (void)handleMessageEdit:(NSNotification *)notification {
@@ -762,27 +753,6 @@ static dispatch_queue_t chat_messages_queue;
     newMessage.prettyTimestamp   = compareMessage.prettyTimestamp;
     newMessage.referencedMessage = compareMessage.referencedMessage;
 
-    if (self.messages.count > 0) {
-        NSUInteger curIdx      = [self.messages indexOfObject:compareMessage];
-        DCMessage *prevMessage = (curIdx != NSNotFound && curIdx > 0) ? [self.messages objectAtIndex:curIdx - 1] : nil;
-        if (prevMessage != nil) {
-            NSDate *currentTimeStamp = newMessage.timestamp;
-
-            if (prevMessage.author.snowflake == newMessage.author.snowflake
-                && ([newMessage.timestamp timeIntervalSince1970] -
-                        [prevMessage.timestamp timeIntervalSince1970]
-                    < 420)
-                && [[NSCalendar currentCalendar]
-                    rangeOfUnit:NSCalendarUnitDay
-                      startDate:&currentTimeStamp
-                       interval:NULL
-                        forDate:prevMessage.timestamp]
-                && (prevMessage.messageType == DCMessageTypeDefault || prevMessage.messageType == DCMessageTypeReply)) {
-                newMessage.isGrouped = (newMessage.messageType == DCMessageTypeDefault || newMessage.messageType == DCMessageTypeReply) && (newMessage.referencedMessage == nil);
-            }
-        }
-    }
-
     NSInteger rowCount = [self.chatTableView numberOfRowsInSection:0];
     NSUInteger idx     = [self.messages indexOfObject:compareMessage];
     if (rowCount != self.messages.count) {
@@ -793,12 +763,26 @@ static dispatch_queue_t chat_messages_queue;
         return;
     }
     [self.chatTableView beginUpdates];
-    [self.messages replaceObjectAtIndex:idx
-                             withObject:newMessage];
-    NSIndexPath *indexPath = [NSIndexPath indexPathForRow:[self rowForModelIndex:idx] inSection:0];
-    [self.chatTableView reloadRowsAtIndexPaths:@[ indexPath ] withRowAnimation:UITableViewRowAnimationAutomatic];
+    [self.messages replaceObjectAtIndex:idx withObject:newMessage];
+
+    // Invalidate layout for the edited message and both neighbors —
+    // B's own height may change, A.followedByGrouped and C.grouped
+    // may change if B's groupability changed.
+    if (idx > 0)
+        [[DCCacheManager sharedInstance] invalidateSnowflake:((DCMessage *)self.messages[idx - 1]).snowflake];
+    [[DCCacheManager sharedInstance] invalidateSnowflake:newMessage.snowflake];
+    if (idx + 1 < self.messages.count)
+        [[DCCacheManager sharedInstance] invalidateSnowflake:((DCMessage *)self.messages[idx + 1]).snowflake];
+
+    NSMutableArray *reloadPaths = [NSMutableArray array];
+    if (idx > 0)
+        [reloadPaths addObject:[NSIndexPath indexPathForRow:[self rowForModelIndex:idx - 1] inSection:0]];
+    [reloadPaths addObject:[NSIndexPath indexPathForRow:[self rowForModelIndex:idx] inSection:0]];
+    if (idx + 1 < self.messages.count)
+        [reloadPaths addObject:[NSIndexPath indexPathForRow:[self rowForModelIndex:idx + 1] inSection:0]];
+
+    [self.chatTableView reloadRowsAtIndexPaths:reloadPaths withRowAnimation:UITableViewRowAnimationAutomatic];
     [self.chatTableView endUpdates];
-    // [self scrollWithIndex:indexPath];
 }
 
 - (void)handleMessageDelete:(NSNotification *)notification {
@@ -825,52 +809,6 @@ static dispatch_queue_t chat_messages_queue;
         [self.messages removeObjectAtIndex:index];
         [self.chatTableView deleteRowsAtIndexPaths:@[ indexPath ] withRowAnimation:UITableViewRowAnimationAutomatic];
         [self.chatTableView endUpdates];
-    }
-
-    if (index + 1 >= self.messages.count) {
-        return;
-    }
-    DCMessage *newMessage = [self.messages objectAtIndex:index + 1];
-
-    if (index <= 0) {
-        return;
-    }
-    DCMessage *prevMessage = [self.messages objectAtIndex:index - 1];
-
-    NSDate *currentTimeStamp = newMessage.timestamp;
-    if (prevMessage.author.snowflake == newMessage.author.snowflake
-        && ([newMessage.timestamp timeIntervalSince1970] -
-                [prevMessage.timestamp timeIntervalSince1970]
-            < 420)
-        && [[NSCalendar currentCalendar]
-            rangeOfUnit:NSCalendarUnitDay
-              startDate:&currentTimeStamp
-               interval:NULL
-                forDate:prevMessage.timestamp]
-        && (prevMessage.messageType == DCMessageTypeDefault || prevMessage.messageType == DCMessageTypeReply)) {
-        Boolean oldGroupedFlag = newMessage.isGrouped;
-        newMessage.isGrouped   = (newMessage.messageType == DCMessageTypeDefault || newMessage.messageType == DCMessageTypeReply) && (newMessage.referencedMessage == nil);
-
-        if (newMessage.isGrouped
-            && (newMessage.isGrouped != oldGroupedFlag)) {
-            float contentWidth =
-                UIScreen.mainScreen.bounds.size.width - 63;
-            CGSize authorNameSize = [[newMessage.author displayNameInGuild:DCServerCommunicator.sharedInstance.selectedChannel.parentGuild]
-                     sizeWithFont:[UIFont boldSystemFontOfSize:15]
-                constrainedToSize:CGSizeMake(contentWidth, MAXFLOAT)
-                    lineBreakMode:(NSLineBreakMode)UILineBreakModeWordWrap];
-
-            newMessage.contentHeight -= authorNameSize.height + 4;
-        }
-    } else if (newMessage.isGrouped) {
-        newMessage.isGrouped = false;
-        float contentWidth =
-            UIScreen.mainScreen.bounds.size.width - 63;
-        CGSize authorNameSize = [[newMessage.author displayNameInGuild:DCServerCommunicator.sharedInstance.selectedChannel.parentGuild]
-                 sizeWithFont:[UIFont boldSystemFontOfSize:15]
-            constrainedToSize:CGSizeMake(contentWidth, MAXFLOAT)
-                lineBreakMode:(NSLineBreakMode)UILineBreakModeWordWrap];
-        newMessage.contentHeight += authorNameSize.height + 4;
     }
 }
 
@@ -1103,10 +1041,6 @@ static dispatch_queue_t chat_messages_queue;
             [self.messages insertObjects:deduped
                                atIndexes:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, deduped.count)]];
 
-            if (message != nil && deduped.count < self.messages.count) {
-                [self reconcileGroupingAtModelIndex:(NSInteger)deduped.count];
-            }
-
             BOOL didReload = NO;
             NSInteger rowCount = [self.chatTableView numberOfRowsInSection:0];
             if (rowCount != (NSInteger)oldCount) {
@@ -1182,73 +1116,9 @@ static dispatch_queue_t chat_messages_queue;
             self.loadingOlderMessages = NO;
         });
         // Precalculate heights for both orientations on iPad
-        if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
-            CGFloat screenWidth  = UIScreen.mainScreen.bounds.size.width;
-            CGFloat screenHeight = UIScreen.mainScreen.bounds.size.height;
-            CGFloat portraitWidth  = MIN(screenWidth, screenHeight);
-            CGFloat landscapeWidth = MAX(screenWidth, screenHeight);
-            
-            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
-                for (DCMessage *message in newMessages) {
-                    if (!message.snowflake) continue;
-                    // Check for unloaded attachments
-                    BOOL hasUnloaded = NO;
-                    for (id attachment in message.attachments) {
-                        if ([attachment isKindOfClass:[NSArray class]] ||
-                            ([attachment isKindOfClass:[DCGifInfo class]] && !((DCGifInfo *)attachment).staticThumbnail)) {
-                            hasUnloaded = YES;
-                            break;
-                        }
-                    }
-                    if (hasUnloaded) continue;
-                    
-                    // Precalculate portrait
-                    if (![[DCCacheManager sharedInstance] cacheEntryForSnowflake:message.snowflake width:portraitWidth]) {
-                        CGFloat hPortrait = [self calculateHeightForMessage:message 
-                                                                 tableWidth:portraitWidth 
-                                                           followedByGrouped:NO];
-                        DCMessageCacheEntry *entryP = [DCMessageCacheEntry new];
-                        entryP.cellHeight = hPortrait;
-                        [[DCCacheManager sharedInstance] setCacheEntry:entryP 
-                                                          forSnowflake:message.snowflake 
-                                                                 width:portraitWidth];
-
-                        // Also cache the followedByGrouped variant
-                        CGFloat hPortraitGrouped = [self calculateHeightForMessage:message 
-                                                                        tableWidth:portraitWidth 
-                                                                  followedByGrouped:YES];
-                        DCMessageCacheEntry *entryPG = [DCMessageCacheEntry new];
-                        entryPG.cellHeight = hPortraitGrouped;
-                        [[DCCacheManager sharedInstance] 
-                            setCacheEntry:entryPG 
-                              forSnowflake:[message.snowflake stringByAppendingString:@"_hasGrouped"]
-                                     width:portraitWidth];
-                    }
-                    // Precalculate landscape
-                    if (![[DCCacheManager sharedInstance] cacheEntryForSnowflake:message.snowflake width:landscapeWidth]) {
-                        CGFloat hLandscape = [self calculateHeightForMessage:message 
-                                                                 tableWidth:landscapeWidth 
-                                                           followedByGrouped:NO];
-                        DCMessageCacheEntry *entryL = [DCMessageCacheEntry new];
-                        entryL.cellHeight = hLandscape;
-                        [[DCCacheManager sharedInstance] setCacheEntry:entryL 
-                                                          forSnowflake:message.snowflake 
-                                                                 width:landscapeWidth];
-
-                        // Also cache the followedByGrouped variant
-                        CGFloat hLandscapeGrouped = [self calculateHeightForMessage:message 
-                                                                        tableWidth:landscapeWidth 
-                                                                  followedByGrouped:YES];
-                        DCMessageCacheEntry *entryLG = [DCMessageCacheEntry new];
-                        entryLG.cellHeight = hLandscapeGrouped;
-                        [[DCCacheManager sharedInstance] 
-                            setCacheEntry:entryLG 
-                              forSnowflake:[message.snowflake stringByAppendingString:@"_hasGrouped"]
-                                     width:landscapeWidth];
-                    }
-                }
-            });
-        }
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
+            [self.messageLayoutBuilder prewarmLayoutCacheForMessages:newMessages];
+        });
     });
 }
 
@@ -1293,10 +1163,6 @@ static dispatch_queue_t chat_messages_queue;
             // table, so they land at rows [0..k-1] and push existing content DOWN.
             [self.messages addObjectsFromArray:deduped];
 
-            if (message != nil && oldCount > 0 && self.messages.count > oldCount) {
-                [self reconcileGroupingAtModelIndex:(NSInteger)oldCount];
-            }
-
             if (didReload) {
                 [self.chatTableView reloadData];
             } else {
@@ -1309,6 +1175,15 @@ static dispatch_queue_t chat_messages_queue;
                 [self.chatTableView insertRowsAtIndexPaths:indexPaths
                                           withRowAnimation:UITableViewRowAnimationNone];
                 [self.chatTableView endUpdates];
+
+                if (self.messages.count >= 2) {
+                    NSIndexPath *prevPath = [NSIndexPath indexPathForRow:1 inSection:0];
+                    [self.chatTableView beginUpdates];
+                    [self.chatTableView reloadRowsAtIndexPaths:@[prevPath]
+                                              withRowAnimation:UITableViewRowAnimationNone];
+                    [self.chatTableView endUpdates];
+                }
+
                 [UIView setAnimationsEnabled:YES];
 
                 // Measure the inserted rows and push the offset down by their
@@ -1333,73 +1208,9 @@ static dispatch_queue_t chat_messages_queue;
             self.loadingNewerMessages = NO;
         });
         // Precalculate heights for both orientations on iPad
-        if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
-            CGFloat screenWidth  = UIScreen.mainScreen.bounds.size.width;
-            CGFloat screenHeight = UIScreen.mainScreen.bounds.size.height;
-            CGFloat portraitWidth  = MIN(screenWidth, screenHeight);
-            CGFloat landscapeWidth = MAX(screenWidth, screenHeight);
-            
-            dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
-                for (DCMessage *message in newMessages) {
-                    if (!message.snowflake) continue;
-                    // Check for unloaded attachments
-                    BOOL hasUnloaded = NO;
-                    for (id attachment in message.attachments) {
-                        if ([attachment isKindOfClass:[NSArray class]] ||
-                            ([attachment isKindOfClass:[DCGifInfo class]] && !((DCGifInfo *)attachment).staticThumbnail)) {
-                            hasUnloaded = YES;
-                            break;
-                        }
-                    }
-                    if (hasUnloaded) continue;
-                    
-                    // Precalculate portrait
-                    if (![[DCCacheManager sharedInstance] cacheEntryForSnowflake:message.snowflake width:portraitWidth]) {
-                        CGFloat hPortrait = [self calculateHeightForMessage:message 
-                                                                 tableWidth:portraitWidth 
-                                                           followedByGrouped:NO];
-                        DCMessageCacheEntry *entryP = [DCMessageCacheEntry new];
-                        entryP.cellHeight = hPortrait;
-                        [[DCCacheManager sharedInstance] setCacheEntry:entryP 
-                                                          forSnowflake:message.snowflake 
-                                                                 width:portraitWidth];
-
-                        // Also cache the followedByGrouped variant
-                        CGFloat hPortraitGrouped = [self calculateHeightForMessage:message 
-                                                                        tableWidth:portraitWidth 
-                                                                  followedByGrouped:YES];
-                        DCMessageCacheEntry *entryPG = [DCMessageCacheEntry new];
-                        entryPG.cellHeight = hPortraitGrouped;
-                        [[DCCacheManager sharedInstance] 
-                            setCacheEntry:entryPG 
-                              forSnowflake:[message.snowflake stringByAppendingString:@"_hasGrouped"]
-                                     width:portraitWidth];
-                    }
-                    // Precalculate landscape
-                    if (![[DCCacheManager sharedInstance] cacheEntryForSnowflake:message.snowflake width:landscapeWidth]) {
-                        CGFloat hLandscape = [self calculateHeightForMessage:message 
-                                                                 tableWidth:landscapeWidth 
-                                                           followedByGrouped:NO];
-                        DCMessageCacheEntry *entryL = [DCMessageCacheEntry new];
-                        entryL.cellHeight = hLandscape;
-                        [[DCCacheManager sharedInstance] setCacheEntry:entryL 
-                                                          forSnowflake:message.snowflake 
-                                                                 width:landscapeWidth];
-
-                        // Also cache the followedByGrouped variant
-                        CGFloat hLandscapeGrouped = [self calculateHeightForMessage:message 
-                                                                        tableWidth:landscapeWidth 
-                                                                  followedByGrouped:YES];
-                        DCMessageCacheEntry *entryLG = [DCMessageCacheEntry new];
-                        entryLG.cellHeight = hLandscapeGrouped;
-                        [[DCCacheManager sharedInstance] 
-                            setCacheEntry:entryLG 
-                              forSnowflake:[message.snowflake stringByAppendingString:@"_hasGrouped"]
-                                     width:landscapeWidth];
-                    }
-                }
-            });
-        }
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
+            [self.messageLayoutBuilder prewarmLayoutCacheForMessages:newMessages];
+        });
     });
 }
 
@@ -1411,38 +1222,62 @@ static dispatch_queue_t chat_messages_queue;
     return (NSInteger)self.messages.count - 1 - index;
 }
 
+- (DCMessageLayoutBuilder *)messageLayoutBuilder {
+    if (!_messageLayoutBuilder) {
+        _messageLayoutBuilder = [DCMessageLayoutBuilder new];
+    }
+    return _messageLayoutBuilder;
+}
+
+- (DCMessageLayout *)layoutForModelIndex:(NSInteger)modelIndex {
+    assertMainThread();
+    if (modelIndex < 0 || modelIndex >= (NSInteger)self.messages.count) return nil;
+
+    DCMessage *message = self.messages[modelIndex];
+    DCMessage *previousMessage = (modelIndex > 0) ? self.messages[modelIndex - 1] : nil;
+    DCMessage *nextMessage = (modelIndex + 1 < (NSInteger)self.messages.count)
+        ? self.messages[modelIndex + 1] : nil;
+    CGFloat tableWidth = self.chatTableView.bounds.size.width;
+
+    BOOL hasUnloadedAttachments = NO;
+    for (id attachment in message.attachments) {
+        if ([attachment isKindOfClass:[NSArray class]] ||
+            ([attachment isKindOfClass:[DCGifInfo class]] && !((DCGifInfo *)attachment).staticThumbnail)) {
+            hasUnloadedAttachments = YES;
+            break;
+        }
+    }
+
+    if (!hasUnloadedAttachments) {
+        DCMessageLayout *cached = [[DCCacheManager sharedInstance]
+            layoutForSnowflake:message.snowflake
+                     tableWidth:tableWidth
+              previousSnowflake:previousMessage.snowflake
+                  nextSnowflake:nextMessage.snowflake
+                editedTimestamp:message.editedTimestamp];
+        if (cached) return cached;
+    }
+
+    DCMessageLayout *layout = [self.messageLayoutBuilder layoutForMessage:message
+                                                            previousMessage:previousMessage
+                                                                 nextMessage:nextMessage
+                                                                  tableWidth:tableWidth];
+
+    if (!hasUnloadedAttachments) {
+        [[DCCacheManager sharedInstance] setLayout:layout
+                                        forSnowflake:message.snowflake
+                                          tableWidth:tableWidth
+                                   previousSnowflake:previousMessage.snowflake
+                                       nextSnowflake:nextMessage.snowflake
+                                     editedTimestamp:message.editedTimestamp];
+    }
+
+    return layout;
+}
+
 - (void)invalidateHeightCacheFor:(DCMessage *)m {
     if (!m.snowflake) return;
     [[DCCacheManager sharedInstance] invalidateSnowflake:m.snowflake];
-    [[DCCacheManager sharedInstance] invalidateSnowflake:[m.snowflake stringByAppendingString:@"_hasGrouped"]];
-}
-
-- (void)reconcileGroupingAtModelIndex:(NSInteger)idx {
-    if (idx < 0 || idx >= (NSInteger)self.messages.count) return;
-    DCMessage *cur  = self.messages[idx];
-    DCMessage *prev = (idx > 0) ? self.messages[idx - 1] : nil;
-    BOOL nowGrouped = [self shouldGroupMessage:cur underPredecessor:prev];
-    if (cur.isGrouped == nowGrouped) return;   // adjacency unchanged for this message
-    cur.isGrouped = nowGrouped;
-    [self invalidateHeightCacheFor:cur];
-}
-
-- (BOOL)shouldGroupMessage:(DCMessage *)cur underPredecessor:(DCMessage *)prev {
-    if (!prev) return NO;
-    NSDate *curTimestamp = cur.timestamp;
-    BOOL sameAuthor = (prev.author.snowflake == cur.author.snowflake);
-    BOOL closeInTime = ([cur.timestamp timeIntervalSince1970] -
-                        [prev.timestamp timeIntervalSince1970] < 420);
-    BOOL sameDay = [[NSCalendar currentCalendar] rangeOfUnit:NSCalendarUnitDay
-                                                   startDate:&curTimestamp
-                                                    interval:NULL
-                                                     forDate:prev.timestamp];
-    BOOL prevGroupable = (prev.messageType == DCMessageTypeDefault ||
-                          prev.messageType == DCMessageTypeReply);
-    if (!(sameAuthor && closeInTime && sameDay && prevGroupable)) return NO;
-    return (cur.messageType == DCMessageTypeDefault ||
-            cur.messageType == DCMessageTypeReply)
-           && (cur.referencedMessage == nil);
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
@@ -1671,124 +1506,70 @@ static dispatch_queue_t chat_messages_queue;
             //     }
             // }
         } else {
+            NSInteger modelIndex = [self modelIndexForRow:indexPath.row];
+            DCMessageLayout *layout = [self layoutForModelIndex:modelIndex];
+            if (!layout) {
+                return [tableView dequeueReusableCellWithIdentifier:@"Message Cell"];
+            }
             CFAbsoluteTime cellStart = CFAbsoluteTimeGetCurrent();
-            static NSSet *specialMessageTypes = nil;
             static UIColor *replyHighlightColor = nil;
             static UIColor *pingColor = nil;
             static UIColor *normalColor = nil;
             static dispatch_once_t onceToken;
             dispatch_once(&onceToken, ^{
-                specialMessageTypes = [NSSet setWithArray:@[ @1, @2, @3, @4, @5, @6, @7, @8, @18 ]];
                 replyHighlightColor = [UIColor colorWithRed:55/255.0f green:59/255.0f blue:64/255.0f alpha:1.0f];
                 pingColor           = [UIColor colorWithRed:46/255.0f green:45/255.0f blue:40/255.0f alpha:1.0f];
                 normalColor         = [UIColor colorWithRed:40/255.0f green:41/255.0f blue:46/255.0f alpha:1.0f];
             });
 
             // TICK(init);
-            if (messageAtRowIndex.isGrouped
-                && ![specialMessageTypes containsObject:@(messageAtRowIndex.messageType)]) {
-                cell = [tableView dequeueReusableCellWithIdentifier:@"Grouped Message Cell"];
-                if ([cell.configuredSnowflake isEqualToString:messageAtRowIndex.snowflake]
-                    && cell.configuredWidth == self.chatTableView.bounds.size.width
-                    && !(self.replyingToMessage && [self.replyingToMessage.snowflake isEqualToString:messageAtRowIndex.snowflake])
-                    && !(self.editingMessage && [self.editingMessage.snowflake isEqualToString:messageAtRowIndex.snowflake])) {
-                    cell.profileImage.image = messageAtRowIndex.author.profileImage;
-                    if (messageAtRowIndex.referencedMessage) {
-                        cell.referencedProfileImage.image = messageAtRowIndex.referencedMessage.author.profileImage;
-                    }
-                    NSUInteger attachIdx = 0;
-                    for (UIView *subview in cell.subviews) {
-                        if (![subview isKindOfClass:[UILazyImageView class]]) continue;
-                        UILazyImage *attachment = nil;
-                        NSUInteger lazyCount = 0;
-                        for (id att in messageAtRowIndex.attachments) {
-                            if (![att isKindOfClass:[UILazyImage class]]) continue;
-                            if (lazyCount == attachIdx) { attachment = att; break; }
-                            lazyCount++;
-                        }
-                        if (attachment) ((UILazyImageView *)subview).image = attachment.image;
-                        attachIdx++;
-                    }
-                    return cell;
+            cell = (DCChatTableCell *)[tableView dequeueReusableCellWithIdentifier:layout.reuseIdentifier];
+
+            BOOL isReplyTarget =
+                self.replyingToMessage &&
+                [self.replyingToMessage.snowflake isEqualToString:messageAtRowIndex.snowflake];
+
+            BOOL isEditTarget =
+                self.editingMessage &&
+                [self.editingMessage.snowflake isEqualToString:messageAtRowIndex.snowflake];
+
+            if (cell.configuredLayout == layout && !isReplyTarget && !isEditTarget) {
+                cell.profileImage.image = messageAtRowIndex.author.profileImage;
+
+                if (messageAtRowIndex.referencedMessage) {
+                    cell.referencedProfileImage.image =
+                        messageAtRowIndex.referencedMessage.author.profileImage;
+                } else {
+                    cell.referencedProfileImage.image = nil;
                 }
-            } else if (messageAtRowIndex.referencedMessage != nil) {
-                cell = [tableView dequeueReusableCellWithIdentifier:@"Reply Message Cell"];
-                if ([cell.configuredSnowflake isEqualToString:messageAtRowIndex.snowflake]
-                    && cell.configuredWidth == self.chatTableView.bounds.size.width
-                    && !(self.replyingToMessage && [self.replyingToMessage.snowflake isEqualToString:messageAtRowIndex.snowflake])
-                    && !(self.editingMessage && [self.editingMessage.snowflake isEqualToString:messageAtRowIndex.snowflake])) {
-                    cell.profileImage.image = messageAtRowIndex.author.profileImage;
-                    if (messageAtRowIndex.referencedMessage) {
-                        cell.referencedProfileImage.image = messageAtRowIndex.referencedMessage.author.profileImage;
-                    }
-                    NSUInteger attachIdx = 0;
-                    for (UIView *subview in cell.subviews) {
-                        if (![subview isKindOfClass:[UILazyImageView class]]) continue;
-                        UILazyImage *attachment = nil;
-                        NSUInteger lazyCount = 0;
-                        for (id att in messageAtRowIndex.attachments) {
-                            if (![att isKindOfClass:[UILazyImage class]]) continue;
-                            if (lazyCount == attachIdx) { attachment = att; break; }
-                            lazyCount++;
+
+                NSUInteger attachIdx = 0;
+
+                for (UIView *subview in cell.contentView.subviews) {
+                    if (![subview isKindOfClass:[UILazyImageView class]]) continue;
+
+                    UILazyImage *attachment = nil;
+                    NSUInteger lazyCount = 0;
+
+                    for (id att in messageAtRowIndex.attachments) {
+                        if (![att isKindOfClass:[UILazyImage class]]) continue;
+
+                        if (lazyCount == attachIdx) {
+                            attachment = att;
+                            break;
                         }
-                        if (attachment) ((UILazyImageView *)subview).image = attachment.image;
-                        attachIdx++;
+
+                        lazyCount++;
                     }
-                    return cell;
+
+                    ((UILazyImageView *)subview).image = attachment ? attachment.image : nil;
+                    attachIdx++;
                 }
-            } else if ([specialMessageTypes containsObject:@(messageAtRowIndex.messageType)]) {
-                cell = [tableView dequeueReusableCellWithIdentifier:@"Universal Typehandler Cell"];
-                if ([cell.configuredSnowflake isEqualToString:messageAtRowIndex.snowflake]
-                    && cell.configuredWidth == self.chatTableView.bounds.size.width
-                    && !(self.replyingToMessage && [self.replyingToMessage.snowflake isEqualToString:messageAtRowIndex.snowflake])
-                    && !(self.editingMessage && [self.editingMessage.snowflake isEqualToString:messageAtRowIndex.snowflake])) {
-                    cell.profileImage.image = messageAtRowIndex.author.profileImage;
-                    if (messageAtRowIndex.referencedMessage) {
-                        cell.referencedProfileImage.image = messageAtRowIndex.referencedMessage.author.profileImage;
-                    }
-                    NSUInteger attachIdx = 0;
-                    for (UIView *subview in cell.subviews) {
-                        if (![subview isKindOfClass:[UILazyImageView class]]) continue;
-                        UILazyImage *attachment = nil;
-                        NSUInteger lazyCount = 0;
-                        for (id att in messageAtRowIndex.attachments) {
-                            if (![att isKindOfClass:[UILazyImage class]]) continue;
-                            if (lazyCount == attachIdx) { attachment = att; break; }
-                            lazyCount++;
-                        }
-                        if (attachment) ((UILazyImageView *)subview).image = attachment.image;
-                        attachIdx++;
-                    }
-                    return cell;
-                }
-            } else {
-                cell = [tableView dequeueReusableCellWithIdentifier:@"Message Cell"];
-                if ([cell.configuredSnowflake isEqualToString:messageAtRowIndex.snowflake]
-                    && cell.configuredWidth == self.chatTableView.bounds.size.width
-                    && !(self.replyingToMessage && [self.replyingToMessage.snowflake isEqualToString:messageAtRowIndex.snowflake])
-                    && !(self.editingMessage && [self.editingMessage.snowflake isEqualToString:messageAtRowIndex.snowflake])) {
-                    cell.profileImage.image = messageAtRowIndex.author.profileImage;
-                    if (messageAtRowIndex.referencedMessage) {
-                        cell.referencedProfileImage.image = messageAtRowIndex.referencedMessage.author.profileImage;
-                    }
-                    NSUInteger attachIdx = 0;
-                    for (UIView *subview in cell.subviews) {
-                        if (![subview isKindOfClass:[UILazyImageView class]]) continue;
-                        UILazyImage *attachment = nil;
-                        NSUInteger lazyCount = 0;
-                        for (id att in messageAtRowIndex.attachments) {
-                            if (![att isKindOfClass:[UILazyImage class]]) continue;
-                            if (lazyCount == attachIdx) { attachment = att; break; }
-                            lazyCount++;
-                        }
-                        if (attachment) ((UILazyImageView *)subview).image = attachment.image;
-                        attachIdx++;
-                    }
-                    return cell;
-                }
+
+                return cell;
             }
             // TOCK(init);
-            cell.configuredSnowflake = nil;
+            cell.configuredLayout = nil;
             // cleanup loop
             for (UIView *subView in cell.subviews) {
                 @autoreleasepool {
@@ -1818,7 +1599,7 @@ static dispatch_queue_t chat_messages_queue;
             [cell.contentTextView removeAllCustomViewsForLinks];
             [cell.referencedMessage removeAllCustomViewsForLinks];
 
-            if (messageAtRowIndex.referencedMessage != nil) {
+            if (layout.hasReference) {
                 cell.referencedAuthorLabel.text = [messageAtRowIndex.referencedMessage.author 
                     displayNameInGuild:DCServerCommunicator.sharedInstance.selectedChannel.parentGuild];
                 
@@ -1855,7 +1636,7 @@ static dispatch_queue_t chat_messages_queue;
                 [cell addSubview:referencedMessageButton];
             }
 
-            if (!messageAtRowIndex.isGrouped) {
+            if (!layout.grouped) {
                 NSString *displayName = [messageAtRowIndex.author 
                     displayNameInGuild:DCServerCommunicator.sharedInstance.selectedChannel.parentGuild];
                 
@@ -1916,6 +1697,7 @@ static dispatch_queue_t chat_messages_queue;
             NSCharacterSet *invisibleChars = [NSCharacterSet characterSetWithCharactersInString:@"\u00A0\u200B\n\r\t "];
             BOOL hasVisibleContent = [[messageAtRowIndex.content stringByTrimmingCharactersInSet:invisibleChars] length] > 0 
                 || messageAtRowIndex.emojis.count > 0;
+            CGFloat textHeight = layout.textHeight;
 
             if (!hasVisibleContent) {
                 cell.contentTextView.attributedString = nil;
@@ -1931,7 +1713,6 @@ static dispatch_queue_t chat_messages_queue;
                     messageAtRowIndex.attributedContent = [[DCMarkdownParser sharedParser]
                         attributedStringFromMarkdown:messageAtRowIndex.content];
                 }
-                CGFloat currentTextHeight = messageAtRowIndex.textHeight;
                 cell.contentTextView.hidden = NO;
                 cell.contentTextView.attributedString = messageAtRowIndex.attributedContent;
                 [cell.contentTextView layoutSubviewsInRect:CGRectInfinite];
@@ -1939,10 +1720,9 @@ static dispatch_queue_t chat_messages_queue;
                     cell.contentTextView.x,
                     cell.contentTextView.y,
                     contentWidth,
-                    currentTextHeight
+                    textHeight
                 );
             }
-
             // TOCK(content);
             if (cell.profileImage.image != messageAtRowIndex.author.profileImage) {
                 cell.profileImage.image = messageAtRowIndex.author.profileImage;
@@ -1967,20 +1747,16 @@ static dispatch_queue_t chat_messages_queue;
                 cell.contentView.backgroundColor = normalColor;
             }
 
-            BOOL cond = (messageAtRowIndex.messageType == 6
-                || (messageAtRowIndex.messageType != 18
-                    && (messageAtRowIndex.messageType < 1 || messageAtRowIndex.messageType > 8)));
-            CGFloat textContent = messageAtRowIndex.textHeight > 2 ? messageAtRowIndex.textHeight - 2 : 0;
             CGFloat imageViewOffset;
-            if (messageAtRowIndex.isGrouped) {
-                imageViewOffset = MAX(textContent, 18) + 4;
+            if (layout.grouped) {
+                imageViewOffset = MAX(textHeight, 18) + 4;
             } else {
-                CGFloat authorHeight = cond ? [UIFont boldSystemFontOfSize:15].lineHeight : 0;
+                CGFloat authorHeight = layout.showsAuthorName ? [UIFont boldSystemFontOfSize:15].lineHeight : 0;
                 imageViewOffset = MAX(
                     authorHeight
-                        + (messageAtRowIndex.attachmentCount ? (hasVisibleContent ? textContent : 0) : MAX(textContent, 18))
+                        + (messageAtRowIndex.attachmentCount ? (hasVisibleContent ? textHeight : 0) : MAX(textHeight, 18))
                         + 10
-                        + (messageAtRowIndex.referencedMessage != nil ? 16 : 0),
+                        + (layout.hasReference ? 16 : 0),
                     authorHeight + (hasVisibleContent ? [UIFont systemFontOfSize:14].lineHeight : 0) + 10
                 );
             }
@@ -2108,121 +1884,13 @@ static dispatch_queue_t chat_messages_queue;
                     }
                 }
             }
-        cell.configuredSnowflake = messageAtRowIndex.snowflake;
-        cell.configuredWidth = self.chatTableView.bounds.size.width;
+        cell.configuredLayout = layout;
         CFAbsoluteTime cellEnd = CFAbsoluteTimeGetCurrent();
             // NSLog(@"[Cell] configuration took %.2fms", (cellEnd - cellStart) * 1000);
         }
     }
     cell.transform = CGAffineTransformMakeScale(1, -1);
     return cell;
-}
-
-- (CGFloat)calculateHeightForMessage:(DCMessage *)message 
-                          tableWidth:(CGFloat)tableWidth 
-                    followedByGrouped:(BOOL)followedByGrouped {
-    float contentWidth = tableWidth - 63;
-    
-    BOOL cond = (message.messageType == 6
-        || (message.messageType != 18
-            && (message.messageType < 1 || message.messageType > 8)));
-
-    CGSize authorNameSize = CGSizeZero;
-    if (!message.isGrouped && cond) {
-        NSString *authorName = [message.author displayNameInGuild:
-            DCServerCommunicator.sharedInstance.selectedChannel.parentGuild];
-        // Single line measurement — don't allow wrapping
-        CGSize measured = [authorName sizeWithFont:[UIFont boldSystemFontOfSize:15]];
-        CGFloat singleLineHeight = [UIFont boldSystemFontOfSize:15].lineHeight;
-        authorNameSize = CGSizeMake(measured.width, singleLineHeight);
-    }
-
-    CGFloat textHeight = message.textHeight > 2 ? message.textHeight - 2 : 0;
-    CGSize contentSize = CGSizeMake(contentWidth, textHeight);
-
-    NSCharacterSet *invisibleChars = [NSCharacterSet characterSetWithCharactersInString:@"\u00A0\u200B\n\r\t "];
-    BOOL hasVisibleContent = [[message.content stringByTrimmingCharactersInSet:invisibleChars] length] > 0
-        || message.emojis.count > 0;
-
-    CGFloat contentHeight;
-    if (message.isGrouped) {
-        contentHeight = MAX(contentSize.height, 18) + 4;
-    } else {
-        // This changes the height of message cells, grouped : ungrouped
-        CGFloat padding = followedByGrouped ? 10 : 14;
-        contentHeight = MAX(
-            (cond ? authorNameSize.height : 0)
-                + (message.attachmentCount ? (hasVisibleContent ? contentSize.height : 0) : MAX(contentSize.height, 18))
-                + padding
-                + (message.referencedMessage != nil ? 16 : 0),
-            (cond ? authorNameSize.height : 0) + (hasVisibleContent ? [UIFont systemFontOfSize:14].lineHeight : 0) + padding
-        );
-    }
-
-    int attachmentHeight = 0;
-    for (id attachment in message.attachments) {
-        if ([attachment isKindOfClass:[UILazyImage class]]) {
-            UILazyImage *lazyImg = attachment;
-            CGSize sourceSize = CGSizeZero;
-            if (lazyImg.naturalSize.width > 0 && lazyImg.naturalSize.height > 0) {
-                sourceSize = lazyImg.naturalSize;
-            } else if (lazyImg.image) {
-                sourceSize = lazyImg.image.size;
-            } else {
-                continue;
-            }
-            CGFloat aspectRatio = sourceSize.width / sourceSize.height;
-            int newWidth  = message.isSticker ? 160 : (int)(200 * aspectRatio);
-            int newHeight = message.isSticker ? 160 : 200;
-            if (newWidth > tableWidth - 66) {
-                newWidth  = tableWidth - 66;
-                newHeight = newWidth / aspectRatio;
-            }
-            attachmentHeight += newHeight;
-        } else if ([attachment isKindOfClass:[DCChatVideoAttachment class]]) {
-            DCChatVideoAttachment *video = attachment;
-            CGFloat aspectRatio = (video.thumbnail.image && video.thumbnail.image.size.height > 0)
-                ? video.thumbnail.image.size.width / video.thumbnail.image.size.height
-                : 16.0f / 9.0f;
-            int newWidth  = 200 * aspectRatio;
-            int newHeight = 200;
-            if (newWidth > tableWidth - 66) {
-                newWidth  = tableWidth - 66;
-                newHeight = newWidth / aspectRatio;
-            }
-            attachmentHeight += newHeight;
-        } else if ([attachment isKindOfClass:[DCGifInfo class]]) {
-            DCGifInfo *gifInfo = attachment;
-            if (!gifInfo.staticThumbnail) continue;
-            CGFloat aspectRatio = gifInfo.staticThumbnail.size.width / gifInfo.staticThumbnail.size.height;
-            int newWidth  = (int)(200 * aspectRatio);
-            int newHeight = 200;
-            if (newWidth > tableWidth - 66) {
-                newWidth  = tableWidth - 66;
-                newHeight = newWidth / aspectRatio;
-            }
-            attachmentHeight += newHeight;
-        } else if ([attachment isKindOfClass:[NSArray class]]) {
-            NSArray *dimensions = attachment;
-            if (dimensions.count == 2) {
-                int width  = [dimensions[0] intValue];
-                int height = [dimensions[1] intValue];
-                if (width <= 0 || height <= 0) continue;
-                CGFloat aspectRatio = (CGFloat)width / height;
-                int newWidth  = 200 * aspectRatio;
-                int newHeight = 200;
-                if (newWidth > tableWidth - 66) {
-                    newWidth  = tableWidth - 66;
-                    newHeight = newWidth / aspectRatio;
-                }
-                attachmentHeight += newHeight;
-            }
-        }
-    }
-    // NSLog(@"[Height] snowflake:%@ isGrouped:%d contentHeight:%.0f authorNameHeight:%.0f result:%.0f", 
-    //         message.snowflake, message.isGrouped, contentHeight, authorNameSize.height,
-    //         contentHeight + attachmentHeight + (attachmentHeight ? 11 : 0));
-    return contentHeight + attachmentHeight + (attachmentHeight ? 11 : 0);
 }
 
 - (void)attributedLabel:(DTAttributedLabel *)label didSelectLinkWithURL:(NSURL *)url {
@@ -2409,56 +2077,11 @@ static dispatch_queue_t chat_messages_queue;
     [self performSegueWithIdentifier:@"chat to contact" sender:self];
 }
 
-- (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {  
-    // Check if next message is grouped under this one
+- (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
     NSInteger modelIndex = [self modelIndexForRow:indexPath.row];
-    DCMessage *messageAtRowIndex = [self.messages objectAtIndex:modelIndex];
-
-    BOOL nextMessageIsGrouped = NO;
-    if (modelIndex + 1 < (NSInteger)self.messages.count) {
-        DCMessage *nextMessage = [self.messages objectAtIndex:modelIndex + 1];
-        nextMessageIsGrouped = nextMessage.isGrouped;
-    }
-
-    BOOL hasUnloadedAttachments = NO;
-    for (id attachment in messageAtRowIndex.attachments) {
-        if ([attachment isKindOfClass:[NSArray class]] || 
-            ([attachment isKindOfClass:[DCGifInfo class]] && !((DCGifInfo *)attachment).staticThumbnail)) {
-            hasUnloadedAttachments = YES;
-            break;
-        }
-    }
-
-    CGFloat currentWidth = self.chatTableView.bounds.size.width;
-    NSString *cacheKey = nextMessageIsGrouped 
-        ? [messageAtRowIndex.snowflake stringByAppendingString:@"_hasGrouped"]
-        : messageAtRowIndex.snowflake;
-    
-    if (!hasUnloadedAttachments) {
-        DCMessageCacheEntry *cached = [[DCCacheManager sharedInstance] 
-            cacheEntryForSnowflake:cacheKey width:currentWidth];
-        if (cached) return cached.cellHeight;
-    }
-    
-    CGFloat result = [self calculateHeightForMessage:messageAtRowIndex 
-                                          tableWidth:currentWidth 
-                                    followedByGrouped:nextMessageIsGrouped];
-    
-    if (!hasUnloadedAttachments) {
-        DCMessageCacheEntry *entry = [[DCCacheManager sharedInstance] 
-            cacheEntryForSnowflake:cacheKey width:currentWidth] ?: [DCMessageCacheEntry new];
-        entry.cellHeight = result;
-        [[DCCacheManager sharedInstance] setCacheEntry:entry 
-                                          forSnowflake:cacheKey 
-                                                 width:currentWidth];
-    }
-//    NSLog(@"[Height] snowflake: %@ contentHeight: %f attachmentHeight: %d result: %f", 
-//    messageAtRowIndex.snowflake, messageAtRowIndex.contentHeight, attachmentHeight, result);
-    NSLog(@"[Height] snowflake: %@ result: %.0f textHeight: %.0f",
-        messageAtRowIndex.snowflake,
-        result,
-        messageAtRowIndex.textHeight);
-    return result;
+    DCMessageLayout *layout = [self layoutForModelIndex:modelIndex];
+    if (!layout) return 0;
+    return layout.height;
 }
 
 - (void)tableView:(UITableView *)tableView
@@ -2621,7 +2244,6 @@ static dispatch_queue_t chat_messages_queue;
     }
     [self.messages removeObjectsInRange:headRange];
     self.currentWindow.hasMoreBefore = YES;
-    [self reconcileGroupingAtModelIndex:0];
 
     if (inSync) {
         [UIView setAnimationsEnabled:NO];

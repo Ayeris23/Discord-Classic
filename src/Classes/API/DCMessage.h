@@ -72,7 +72,6 @@ typedef NS_ENUM(NSInteger, DCMessageReferenceType) {
 @property (strong, nonatomic) NSDate* editedTimestamp;
 @property (strong, nonatomic) NSString* prettyTimestamp;
 @property (assign, nonatomic) BOOL pingingUser;
-@property (assign, nonatomic) BOOL isGrouped;
 @property (strong, nonatomic) NSString* preDefinedContent;
 @property (assign, nonatomic) NSInteger messageType;
 @property (strong, nonatomic) DCMessage* referencedMessage;

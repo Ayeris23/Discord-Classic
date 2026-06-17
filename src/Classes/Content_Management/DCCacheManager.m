@@ -7,6 +7,7 @@
 //
 
 #import "DCCacheManager.h"
+#import "DCMessageLayout.h"
 
 @implementation DCMessageCacheEntry
 @end
@@ -16,6 +17,8 @@
 @property (strong, nonatomic) NSMutableDictionary *avatarCache;
 @property (strong, nonatomic) NSMutableDictionary *decorationCache;
 @property (strong, nonatomic) NSMutableDictionary *emojiCache;
+@property (strong, nonatomic) NSMutableDictionary *layoutCache;
+@property (nonatomic, assign) dispatch_queue_t cacheQueue;
 @end
 
 @implementation DCCacheManager
@@ -36,8 +39,16 @@
         _avatarCache     = [NSMutableDictionary dictionary];
         _decorationCache = [NSMutableDictionary dictionary];
         _emojiCache      = [NSMutableDictionary dictionary];
+        _layoutCache     = [NSMutableDictionary dictionary];
+        self.cacheQueue = dispatch_queue_create("com.discordclassic.cacheQueue", DISPATCH_QUEUE_SERIAL);
     }
     return self;
+}
+
+- (void)dealloc {
+    if (self.cacheQueue) {
+        dispatch_release(self.cacheQueue);
+    }
 }
 
 // --- Message cache ---
@@ -48,6 +59,61 @@
 // Private helper
 - (NSString *)cacheKeyForSnowflake:(NSString *)snowflake width:(CGFloat)width {
     return [NSString stringWithFormat:@"%@_%.0f", snowflake, width];
+}
+
+// Private helper — composite key for the layout cache. Shares the
+// "<snowflake>_..." prefix convention with cacheKeyForSnowflake:width:
+// so -invalidateSnowflake: can sweep both dictionaries the same way.
+- (NSString *)layoutCacheKeyForSnowflake:(NSString *)snowflake
+                                tableWidth:(CGFloat)tableWidth
+                         previousSnowflake:(NSString *)previousSnowflake
+                             nextSnowflake:(NSString *)nextSnowflake
+                           editedTimestamp:(NSDate *)editedTimestamp {
+    if (!snowflake) return nil;
+    NSString *prev = previousSnowflake ?: @"-";
+    NSString *next = nextSnowflake ?: @"-";
+    NSTimeInterval edited = editedTimestamp ? [editedTimestamp timeIntervalSince1970] : 0;
+    return [NSString stringWithFormat:@"%@_layout_w%.0f_p%@_n%@_e%.0f",
+            snowflake, tableWidth, prev, next, edited];
+}
+
+- (DCMessageLayout *)layoutForSnowflake:(NSString *)snowflake
+                              tableWidth:(CGFloat)tableWidth
+                       previousSnowflake:(NSString *)previousSnowflake
+                           nextSnowflake:(NSString *)nextSnowflake
+                         editedTimestamp:(NSDate *)editedTimestamp {
+    NSString *key = [self layoutCacheKeyForSnowflake:snowflake
+                                            tableWidth:tableWidth
+                                     previousSnowflake:previousSnowflake
+                                         nextSnowflake:nextSnowflake
+                                       editedTimestamp:editedTimestamp];
+    if (!key) return nil;
+    return self.layoutCache[key];
+}
+
+- (void)setLayout:(DCMessageLayout *)layout
+       forSnowflake:(NSString *)snowflake
+         tableWidth:(CGFloat)tableWidth
+  previousSnowflake:(NSString *)previousSnowflake
+      nextSnowflake:(NSString *)nextSnowflake
+    editedTimestamp:(NSDate *)editedTimestamp {
+    NSString *key = [self layoutCacheKeyForSnowflake:snowflake
+                                            tableWidth:tableWidth
+                                     previousSnowflake:previousSnowflake
+                                         nextSnowflake:nextSnowflake
+                                       editedTimestamp:editedTimestamp];
+    if (!key || !layout) return;
+    self.layoutCache[key] = layout;
+}
+
+- (id)performCacheOperation:(id (^)(void))block {
+    __block id result = nil;
+    dispatch_sync(self.cacheQueue, ^{ result = block(); });
+    return result;
+}
+
+- (void)performAsyncCacheOperation:(void (^)(void))block {
+    dispatch_async(self.cacheQueue, ^{ block(); });
 }
 
 // Width-aware read
@@ -62,20 +128,26 @@
     self.messageCache[[self cacheKeyForSnowflake:snowflake width:width]] = entry;
 }
 
-// Updated invalidateSnowflake — clears all width variants
+// Updated invalidateSnowflake — clears all width/layout variants
 - (void)invalidateSnowflake:(NSString *)snowflake {
     if (!snowflake) return;
     NSString *prefix = [snowflake stringByAppendingString:@"_"];
-    NSArray *keys = [self.messageCache.allKeys copy];
+    [self removeKeysWithPrefix:prefix fromDictionary:self.messageCache];
+    [self removeKeysWithPrefix:prefix fromDictionary:self.layoutCache];
+}
+
+- (void)removeKeysWithPrefix:(NSString *)prefix fromDictionary:(NSMutableDictionary *)dictionary {
+    NSArray *keys = [dictionary.allKeys copy];
     for (NSString *key in keys) {
         if ([key hasPrefix:prefix]) {
-            [self.messageCache removeObjectForKey:key];
+            [dictionary removeObjectForKey:key];
         }
     }
 }
 
 - (void)invalidateAllMessages {
     [self.messageCache removeAllObjects];
+    [self.layoutCache removeAllObjects];
 }
 
 // --- Avatar cache ---
@@ -124,6 +196,7 @@
     }
     // Flush emoji images — these re-download automatically when needed
     [self.emojiCache removeAllObjects];
+    [self.layoutCache removeAllObjects];
     // SDWebImage memory cache is handled separately by the app delegate
 }
 

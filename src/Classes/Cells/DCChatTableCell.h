@@ -10,6 +10,7 @@
 
 #import "TSMarkdownParser.h"
 #import "DTAttributedLabel.h"
+#import "DCMessageLayout.h"
 
 @interface DCChatTableCell : UITableViewCell
 @property (strong, nonatomic) IBOutlet UILabel *authorLabel;
@@ -23,8 +24,7 @@
 @property (strong, nonatomic) IBOutlet DTAttributedLabel *referencedMessage;
 @property (weak, nonatomic) IBOutlet UIImageView *separatorImageView;
 @property (strong, nonatomic) NSString *messageSnowflake;
-@property (strong, nonatomic) NSString *configuredSnowflake;
-@property (nonatomic) CGFloat configuredWidth;
+@property (nonatomic, strong) DCMessageLayout *configuredLayout;
 
 - (void)configureWithMessage:(NSString *)messageText;
 - (void)adjustTextViewSize;
