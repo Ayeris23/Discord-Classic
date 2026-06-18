@@ -101,31 +101,45 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
 // Converts an NSDictionary created from json representing a user into a DCUser
 // object Also keeps the user in DCServerCommunicator.loadedUsers if cache:YES
 + (DCUser *)convertJsonUser:(NSDictionary *)jsonUser cache:(BOOL)cache {
-    if (cache && [DCServerCommunicator.sharedInstance userForSnowflake:[jsonUser objectForKey:@"id"]]) {
-        // return pre-cached
-        return [DCServerCommunicator.sharedInstance userForSnowflake:[jsonUser objectForKey:@"id"]];
+    NSString *snowflake = [jsonUser objectForKey:@"id"];
+    if (!snowflake) return nil;
+
+    DCUser *user = nil;
+    if (cache) {
+        user = [DCServerCommunicator.sharedInstance userForSnowflake:snowflake];
+        if (user && user.username.length > 0) {
+            return user;
+        }
     }
 
-    // NSLog(@"%@", jsonUser);
-    DCUser *newUser    = DCUser.new;
-    newUser.username   = [jsonUser objectForKey:@"username"];
-    newUser.globalName = newUser.username;
+    if (!user) {
+        user = DCUser.new;
+    }
+
+    NSString *username = [jsonUser objectForKey:@"username"];
+    if (username) user.username = username;
+
+    // globalName defaults to username; override if a real global_name is present
+    user.globalName = username;
     if ([jsonUser objectForKey:@"global_name"] &&
         [[jsonUser objectForKey:@"global_name"] isKindOfClass:[NSString class]]) {
-        newUser.globalName = [jsonUser objectForKey:@"global_name"];
+        user.globalName = [jsonUser objectForKey:@"global_name"];
     }
-    newUser.snowflake          = [jsonUser objectForKey:@"id"];
-    newUser.avatarID           = [jsonUser objectForKey:@"avatar"];
-    newUser.avatarDecorationID = [jsonUser valueForKeyPath:@"avatar_decoration_data.asset"];
-    newUser.discriminator      = [[jsonUser objectForKey:@"discriminator"] integerValue];
-    newUser.status             = DCUserStatusOffline;
 
-    // Save to DCServerCommunicator.loadedUsers
+    user.snowflake          = snowflake;
+    user.avatarID           = [jsonUser objectForKey:@"avatar"];
+    user.avatarDecorationID = [jsonUser valueForKeyPath:@"avatar_decoration_data.asset"];
+    user.discriminator      = [[jsonUser objectForKey:@"discriminator"] integerValue];
+
+    if (!user.status) {
+        user.status = DCUserStatusOffline;
+    }
+
     if (cache) {
-        [DCServerCommunicator.sharedInstance setUser:newUser forSnowflake:newUser.snowflake];
+        [DCServerCommunicator.sharedInstance setUser:user forSnowflake:snowflake];
     }
 
-    return newUser;
+    return user;
 }
 
 + (void)getUserAvatar:(DCUser *)user {
@@ -1024,8 +1038,20 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
 
                         NSUInteger idx = [newMessage.attachments count];
                         if ([[attachment objectForKey:@"placeholder_version"] integerValue] == 1) {
-                            UIImage *img          = thumbHashToImage([NSData dataWithBase64EncodedString:[attachment objectForKey:@"placeholder"]]);
-                            video.thumbnail.image = [DCTools scaledImageFromImage:img withURL:urlString].image;
+                            NSString *placeholder = [attachment objectForKey:@"placeholder"];
+                            NSData *thumbData = placeholder.length > 0
+                                ? [NSData dataWithBase64EncodedString:placeholder]
+                                : nil;
+
+                            // Thumbhash minimum is 5 bytes; reject anything shorter
+                            if (thumbData.length >= 5) {
+                                dispatch_async(dispatch_get_main_queue(), ^{
+                                    UIImage *img = thumbHashToImage(thumbData);
+                                    video.thumbnail.image = img
+                                        ? [DCTools scaledImageFromImage:img withURL:urlString].image
+                                        : nil;
+                                });
+                            }
                             [newMessage.attachments addObject:video];
                         } else {
                             [newMessage.attachments addObject:@[ @(width), @(height) ]];

@@ -80,6 +80,5 @@ typedef NS_ENUM(NSInteger, DCMessageReferenceType) {
 
 // embed
 //@property NSString *
-- (void)deleteMessage;
 - (BOOL)isEqual:(id)other;
 @end

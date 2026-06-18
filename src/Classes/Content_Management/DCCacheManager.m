@@ -83,12 +83,16 @@
                            nextSnowflake:(NSString *)nextSnowflake
                          editedTimestamp:(NSDate *)editedTimestamp {
     NSString *key = [self layoutCacheKeyForSnowflake:snowflake
-                                            tableWidth:tableWidth
-                                     previousSnowflake:previousSnowflake
-                                         nextSnowflake:nextSnowflake
-                                       editedTimestamp:editedTimestamp];
+                                           tableWidth:tableWidth
+                                   previousSnowflake:previousSnowflake
+                                       nextSnowflake:nextSnowflake
+                                     editedTimestamp:editedTimestamp];
     if (!key) return nil;
-    return self.layoutCache[key];
+    __block DCMessageLayout *result = nil;
+    dispatch_sync(self.cacheQueue, ^{
+        result = self.layoutCache[key];
+    });
+    return result;
 }
 
 - (void)setLayout:(DCMessageLayout *)layout
@@ -98,12 +102,14 @@
       nextSnowflake:(NSString *)nextSnowflake
     editedTimestamp:(NSDate *)editedTimestamp {
     NSString *key = [self layoutCacheKeyForSnowflake:snowflake
-                                            tableWidth:tableWidth
-                                     previousSnowflake:previousSnowflake
-                                         nextSnowflake:nextSnowflake
-                                       editedTimestamp:editedTimestamp];
+                                           tableWidth:tableWidth
+                                   previousSnowflake:previousSnowflake
+                                       nextSnowflake:nextSnowflake
+                                     editedTimestamp:editedTimestamp];
     if (!key || !layout) return;
-    self.layoutCache[key] = layout;
+    dispatch_async(self.cacheQueue, ^{
+        self.layoutCache[key] = layout;
+    });
 }
 
 - (id)performCacheOperation:(id (^)(void))block {
@@ -132,8 +138,10 @@
 - (void)invalidateSnowflake:(NSString *)snowflake {
     if (!snowflake) return;
     NSString *prefix = [snowflake stringByAppendingString:@"_"];
-    [self removeKeysWithPrefix:prefix fromDictionary:self.messageCache];
-    [self removeKeysWithPrefix:prefix fromDictionary:self.layoutCache];
+    dispatch_sync(self.cacheQueue, ^{
+        [self removeKeysWithPrefix:prefix fromDictionary:self.messageCache];
+        [self removeKeysWithPrefix:prefix fromDictionary:self.layoutCache];
+    });
 }
 
 - (void)removeKeysWithPrefix:(NSString *)prefix fromDictionary:(NSMutableDictionary *)dictionary {
@@ -146,8 +154,10 @@
 }
 
 - (void)invalidateAllMessages {
-    [self.messageCache removeAllObjects];
-    [self.layoutCache removeAllObjects];
+    dispatch_sync(self.cacheQueue, ^{
+        [self.messageCache removeAllObjects];
+        [self.layoutCache removeAllObjects];
+    });
 }
 
 // --- Avatar cache ---

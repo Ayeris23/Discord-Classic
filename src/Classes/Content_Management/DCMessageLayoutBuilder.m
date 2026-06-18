@@ -155,12 +155,7 @@
 
     CGSize authorNameSize = CGSizeZero;
     if (!grouped && showsAuthorName) {
-        NSString *authorName = [message.author displayNameInGuild:
-            DCServerCommunicator.sharedInstance.selectedChannel.parentGuild];
-        // Single line measurement — don't allow wrapping
-        CGSize measured = [authorName sizeWithFont:[UIFont boldSystemFontOfSize:15]];
-        CGFloat singleLineHeight = [UIFont boldSystemFontOfSize:15].lineHeight;
-        authorNameSize = CGSizeMake(measured.width, singleLineHeight);
+        authorNameSize = CGSizeMake(0, [UIFont boldSystemFontOfSize:15].lineHeight);
     }
 
     CGSize contentSize = CGSizeMake(contentWidth, textHeight);

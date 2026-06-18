@@ -995,7 +995,6 @@ static dispatch_queue_t chat_messages_queue;
     }
 
     self.typingLabel.text           = typingText;
-    BOOL wasHidden                  = self.typingIndicatorView.hidden;
     self.typingIndicatorView.hidden = NO;
     [self.typingIndicatorView setNeedsDisplay];
     [self.chatTableView
@@ -1511,7 +1510,7 @@ static dispatch_queue_t chat_messages_queue;
             if (!layout) {
                 return [tableView dequeueReusableCellWithIdentifier:@"Message Cell"];
             }
-            CFAbsoluteTime cellStart = CFAbsoluteTimeGetCurrent();
+            // CFAbsoluteTime cellStart = CFAbsoluteTimeGetCurrent();
             static UIColor *replyHighlightColor = nil;
             static UIColor *pingColor = nil;
             static UIColor *normalColor = nil;
@@ -1885,7 +1884,7 @@ static dispatch_queue_t chat_messages_queue;
                 }
             }
         cell.configuredLayout = layout;
-        CFAbsoluteTime cellEnd = CFAbsoluteTimeGetCurrent();
+        // CFAbsoluteTime cellEnd = CFAbsoluteTimeGetCurrent();
             // NSLog(@"[Cell] configuration took %.2fms", (cellEnd - cellStart) * 1000);
         }
     }

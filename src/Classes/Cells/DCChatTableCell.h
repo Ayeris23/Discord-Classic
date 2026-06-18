@@ -26,7 +26,7 @@
 @property (strong, nonatomic) NSString *messageSnowflake;
 @property (nonatomic, strong) DCMessageLayout *configuredLayout;
 
-- (void)configureWithMessage:(NSString *)messageText;
-- (void)adjustTextViewSize;
+// - (void)configureWithMessage:(NSString *)messageText;
+// - (void)adjustTextViewSize;
 
 @end
