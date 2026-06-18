@@ -96,7 +96,6 @@
 								<string key="NSFrame">{{15, 7}, {25, 25}}</string>
 								<reference key="NSSuperview" ref="494805391"/>
 								<reference key="NSWindow"/>
-								<reference key="NSNextKeyView"/>
 								<string key="NSReuseIdentifierKey">_NS:9</string>
 								<string key="NSHuggingPriority">{251, 251}</string>
 								<bool key="IBUIUserInteractionEnabled">NO</bool>
@@ -257,7 +256,7 @@
 						<string key="contentTextView">DTAttributedLabel</string>
 						<string key="profileImage">UIImageView</string>
 						<string key="referencedAuthorLabel">UILabel</string>
-						<string key="referencedMessage">UILabel</string>
+						<string key="referencedMessage">DTAttributedLabel</string>
 						<string key="referencedProfileImage">UIImageView</string>
 						<string key="separatorImageView">UIImageView</string>
 						<string key="timestampLabel">UILabel</string>
@@ -286,7 +285,7 @@
 						</object>
 						<object class="IBToOneOutletInfo" key="referencedMessage">
 							<string key="name">referencedMessage</string>
-							<string key="candidateClassName">UILabel</string>
+							<string key="candidateClassName">DTAttributedLabel</string>
 						</object>
 						<object class="IBToOneOutletInfo" key="referencedProfileImage">
 							<string key="name">referencedProfileImage</string>

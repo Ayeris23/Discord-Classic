@@ -908,8 +908,7 @@ NSTimer *heartbeatTimer = nil;
     @synchronized(guild) {
         guild.memberCount = [[d objectForKey:@"member_count"] intValue];
         guild.onlineCount = [[d objectForKey:@"online_count"] intValue];
-    }
-    @synchronized(guild.members) {
+
         for (NSDictionary *op in [d objectForKey:@"ops"]) {
             if ([[op objectForKey:@"op"] isEqualToString:SYNC]) {
                 if (![[op objectForKey:@"items"] isKindOfClass:[NSArray class]]
@@ -936,21 +935,19 @@ NSTimer *heartbeatTimer = nil;
                 }
             } else if ([[op objectForKey:@"op"] isEqualToString:UPDATE]) {
                 NSDictionary *item = [op objectForKey:@"item"];
-                id member          = [self handleGuildMemberItemWithItem:item guild:guild];
+                id member = [self handleGuildMemberItemWithItem:item guild:guild];
                 if (!member) {
-                    DBGLOG(@"Guild member list update UPDATE op with invalid item: %@", item);
+                    DBGLOG(@"Guild member list UPDATE op with invalid item: %@", item);
                     continue;
                 }
-                NSUInteger index = [[op objectForKey:@"index"] intValue];
-                if (index >= [guild.members count]) {
-                    index = [guild.members count] - 1;
-                } else if (index < 0) {
-                    index = 0;
+                NSUInteger index = (NSUInteger)[[op objectForKey:@"index"] intValue];
+                NSUInteger count = guild.members.count;
+                if (count == 0 || index >= count) {
+                    DBGLOG(@"Guild member list UPDATE op index %lu OOB (count: %lu), skipping",
+                           (unsigned long)index, (unsigned long)count);
+                    continue;
                 }
-                // #ifdef DEBUG
-                //              NSLog(@"Updating %s at index: %lu", [member isKindOfClass:[DCUser class]] ? "user" : "role", (unsigned long)index);
-                // #endif
-                [guild.members replaceObjectAtIndex:(NSUInteger)index withObject:(id)member];
+                [guild.members replaceObjectAtIndex:index withObject:member];
             } else if ([[op objectForKey:@"op"] isEqualToString:DELETE]) {
                 NSUInteger count = [guild.members count];
                 if (count == 0) {

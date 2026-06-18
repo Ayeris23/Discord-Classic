@@ -1028,6 +1028,7 @@ static dispatch_queue_t chat_messages_queue;
                 }
             }
         }
+        [self.messageLayoutBuilder prewarmLayoutCacheForMessages:newMessages];
 
         dispatch_async(dispatch_get_main_queue(), ^{
             NSArray *deduped = [self deduplicateAgainstWindow:newMessages];
@@ -1113,10 +1114,6 @@ static dispatch_queue_t chat_messages_queue;
             }
 
             self.loadingOlderMessages = NO;
-        });
-        // Precalculate heights for both orientations on iPad
-        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
-            [self.messageLayoutBuilder prewarmLayoutCacheForMessages:newMessages];
         });
     });
 }
