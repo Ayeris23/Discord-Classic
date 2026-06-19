@@ -64,6 +64,8 @@
 @property (nonatomic, retain) UIColor *longPressedCellPreviousColor;
 @property (nonatomic, retain) NSIndexPath *touchHighlightIndexPath;
 @property (nonatomic, retain) UIColor *touchHighlightPreviousColor;
+@property (nonatomic, assign) NSUInteger olderLoadGeneration;
+@property (nonatomic, assign) NSUInteger newerLoadGeneration;
 @end
 
 // dynamic message box vars
@@ -103,7 +105,7 @@ static dispatch_queue_t chat_messages_queue;
     if (chat_messages_queue == nil) {
         chat_messages_queue = dispatch_queue_create(
             [@"Discord::API::Chat::Messages" UTF8String],
-            DISPATCH_QUEUE_CONCURRENT
+            DISPATCH_QUEUE_SERIAL
         );
     }
     return chat_messages_queue;
@@ -452,6 +454,19 @@ static dispatch_queue_t chat_messages_queue;
     lastTimeInterval                  = 0;
 }
 
+- (void)handleChannelLoadCold:(DCChannel *)channel {
+    DCServerCommunicator.sharedInstance.selectedChannel = channel;
+    [self syncWindowForSelectedChannel];
+
+    [self.messages removeAllObjects];
+    self.currentWindow.hasMoreBefore = YES;
+    self.currentWindow.hasMoreAfter = NO;
+    self.currentWindow.atPresentTime = YES;
+
+    [self.chatTableView reloadData];
+    [self getMessages:50 beforeMessage:nil];
+}
+
 - (void)handleChatReset {
     assertMainThread();
     DBGLOG(@"%s: Resetting chat data", __PRETTY_FUNCTION__);
@@ -469,6 +484,9 @@ static dispatch_queue_t chat_messages_queue;
         self.replyingToMessage = nil;
         self.editingMessage = nil;
         [self.messages removeAllObjects];
+        self.currentWindow.hasMoreBefore = YES;
+        self.currentWindow.hasMoreAfter = NO;
+        self.currentWindow.atPresentTime = YES;
         self.numberOfMessagesLoaded = 0;
         self.disablePing = NO;
     }
@@ -1003,24 +1021,41 @@ static dispatch_queue_t chat_messages_queue;
 }
 
 - (void)getMessages:(int)numberOfMessages beforeMessage:(DCMessage *)message {
+    NSAssert([NSThread isMainThread],
+             @"getMessages:beforeMessage: must run on the main thread");
+
+    DCChannel *channel = DCServerCommunicator.sharedInstance.selectedChannel;
+    DCChannelWindow *targetWindow = self.currentWindow;
+    NSString *channelId = [channel.snowflake copy];
+
+    NSUInteger loadGeneration = ++self.olderLoadGeneration;
+    self.loadingOlderMessages = YES;
+
     dispatch_async([self get_chat_messages_queue], ^{
-        DCChannel *channel = DCServerCommunicator.sharedInstance.selectedChannel;
         NSArray *newMessages =
             [[DCMessageStore sharedInstance] loadBeforeForChannel:channel
                                                     beforeMessage:message
                                                             limit:numberOfMessages];
 
         if (!newMessages) {
-            dispatch_async(dispatch_get_main_queue(), ^{ self.loadingOlderMessages = NO; });
+            dispatch_async(dispatch_get_main_queue(), ^{
+                // A newer older-message load now owns the flag.
+                if (loadGeneration != self.olderLoadGeneration) {
+                    return;
+                }
+
+                self.loadingOlderMessages = NO;
+            });
+
             return;
         }
 
-        // Warm avatars for the incoming batch. Heights are the table's job now.
         for (DCMessage *newMessage in newMessages) {
             @autoreleasepool {
                 if (!newMessage.author.profileImage) {
                     [DCTools getUserAvatar:newMessage.author];
                 }
+
                 if (newMessage.referencedMessage &&
                     newMessage.referencedMessage.author &&
                     !newMessage.referencedMessage.author.profileImage) {
@@ -1028,85 +1063,156 @@ static dispatch_queue_t chat_messages_queue;
                 }
             }
         }
-        [self.messageLayoutBuilder prewarmLayoutCacheForMessages:newMessages];
 
         dispatch_async(dispatch_get_main_queue(), ^{
+            /*
+             * A newer request superseded this one. Do not modify the table,
+             * window, or loading flag because those now belong to that request.
+             */
+            if (loadGeneration != self.olderLoadGeneration) {
+                return;
+            }
+
+            BOOL sameChannel =
+                [DCServerCommunicator.sharedInstance.selectedChannel.snowflake
+                    isEqualToString:channelId];
+
+            BOOL sameWindow = self.currentWindow == targetWindow;
+
+            if (!sameChannel || !sameWindow) {
+                self.loadingOlderMessages = NO;
+                return;
+            }
+
             NSArray *deduped = [self deduplicateAgainstWindow:newMessages];
+
             if (deduped.count == 0) {
                 self.loadingOlderMessages = NO;
                 return;
             }
 
             NSUInteger oldCount = self.messages.count;
+
             [self.messages insertObjects:deduped
-                               atIndexes:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, deduped.count)]];
+                               atIndexes:[NSIndexSet
+                                   indexSetWithIndexesInRange:
+                                       NSMakeRange(0, deduped.count)]];
 
             BOOL didReload = NO;
-            NSInteger rowCount = [self.chatTableView numberOfRowsInSection:0];
+            NSInteger rowCount =
+                [self.chatTableView numberOfRowsInSection:0];
+
             if (rowCount != (NSInteger)oldCount) {
-                [self.chatTableView reloadData];   // desync fallback
+                [self.chatTableView reloadData];
                 didReload = YES;
             } else {
-                // Oldest messages sit at the HIGHEST row indices in the flipped
-                // table, so prepending to the model is an append at the content
-                // end — the viewport doesn't move, no offset correction needed.
-                NSMutableArray *indexPaths = [NSMutableArray array];
-                for (NSUInteger r = oldCount; r < self.messages.count; r++) {
-                    [indexPaths addObject:[NSIndexPath indexPathForRow:r inSection:0]];
+                NSMutableArray *indexPaths =
+                    [NSMutableArray arrayWithCapacity:deduped.count];
+
+                for (NSUInteger row = oldCount;
+                     row < self.messages.count;
+                     row++) {
+                    [indexPaths addObject:
+                        [NSIndexPath indexPathForRow:row
+                                         inSection:0]];
                 }
+
                 [UIView setAnimationsEnabled:NO];
+
                 [self.chatTableView beginUpdates];
                 [self.chatTableView insertRowsAtIndexPaths:indexPaths
-                                          withRowAnimation:UITableViewRowAnimationNone];
+                                          withRowAnimation:
+                                              UITableViewRowAnimationNone];
                 [self.chatTableView endUpdates];
+
                 [UIView setAnimationsEnabled:YES];
             }
 
+            /*
+             * A nil anchor represents the initial/latest-message load.
+             */
             if (message == nil) {
-                self.chatTableView.contentOffset = CGPointZero;   // cold load → newest at bottom
-            }
+                self.chatTableView.contentOffset = CGPointZero;
+            } else {
+                NSInteger evictCount =
+                    (NSInteger)self.messages.count - kChatWindowCeiling;
 
-            if (message != nil) {
-                NSInteger evictCount = (NSInteger)self.messages.count - kChatWindowCeiling;
                 if (evictCount > 0) {
-                    CGFloat evictedHeight = 0;
+                    CGFloat evictedHeight = 0.0;
+
+                    /*
+                     * These are rows at the visual newest edge. Calculate
+                     * their height before deleting them.
+                     */
                     if (!didReload) {
-                        for (NSInteger r = 0; r < evictCount; r++) {
-                            evictedHeight += [self.chatTableView
-                                rectForRowAtIndexPath:[NSIndexPath indexPathForRow:r inSection:0]].size.height;
+                        for (NSInteger row = 0;
+                             row < evictCount;
+                             row++) {
+                            NSIndexPath *indexPath =
+                                [NSIndexPath indexPathForRow:row
+                                                 inSection:0];
+
+                            evictedHeight +=
+                                [self.chatTableView
+                                    rectForRowAtIndexPath:indexPath].size.height;
                         }
                     }
 
-                    // Release decoded bitmaps now (deterministic, not at pool drain),
-                    // then drop the newest from the model tail. Height cache untouched.
-                    NSRange tailRange = NSMakeRange(self.messages.count - evictCount, evictCount);
-                    for (DCMessage *m in [self.messages subarrayWithRange:tailRange]) {
-                        for (id att in m.attachments) {
-                            if ([att isKindOfClass:[UILazyImage class]]) {
-                                ((UILazyImage *)att).image = nil;
+                    NSRange tailRange =
+                        NSMakeRange(self.messages.count - evictCount,
+                                    evictCount);
+
+                    NSArray *evictedMessages =
+                        [self.messages subarrayWithRange:tailRange];
+
+                    for (DCMessage *evictedMessage in evictedMessages) {
+                        for (id attachment in evictedMessage.attachments) {
+                            if ([attachment
+                                    isKindOfClass:[UILazyImage class]]) {
+                                ((UILazyImage *)attachment).image = nil;
                             }
                         }
                     }
+
                     [self.messages removeObjectsInRange:tailRange];
-                    self.currentWindow.hasMoreAfter = YES;
+
+                    /*
+                     * The model no longer contains the live/newest edge.
+                     */
+                    targetWindow.hasMoreAfter = YES;
+                    targetWindow.atPresentTime = NO;
 
                     if (!didReload) {
-                        NSMutableArray *evictPaths = [NSMutableArray arrayWithCapacity:evictCount];
-                        for (NSInteger r = 0; r < evictCount; r++) {
-                            [evictPaths addObject:[NSIndexPath indexPathForRow:r inSection:0]];
+                        NSMutableArray *evictPaths =
+                            [NSMutableArray
+                                arrayWithCapacity:evictCount];
+
+                        for (NSInteger row = 0;
+                             row < evictCount;
+                             row++) {
+                            [evictPaths addObject:
+                                [NSIndexPath indexPathForRow:row
+                                                 inSection:0]];
                         }
+
                         [UIView setAnimationsEnabled:NO];
+
                         [self.chatTableView beginUpdates];
-                        [self.chatTableView deleteRowsAtIndexPaths:evictPaths
-                                                  withRowAnimation:UITableViewRowAnimationNone];
+                        [self.chatTableView
+                            deleteRowsAtIndexPaths:evictPaths
+                                  withRowAnimation:
+                                      UITableViewRowAnimationNone];
                         [self.chatTableView endUpdates];
+
                         [UIView setAnimationsEnabled:YES];
 
-                        // The removed block sat above the viewport (content-top); pull
-                        // the offset down by exactly its height so nothing on screen moves.
-                        CGPoint off = self.chatTableView.contentOffset;
-                        off.y = MAX(0, off.y - evictedHeight);
-                        self.chatTableView.contentOffset = off;
+                        CGPoint offset =
+                            self.chatTableView.contentOffset;
+
+                        offset.y =
+                            MAX(0.0, offset.y - evictedHeight);
+
+                        self.chatTableView.contentOffset = offset;
                     } else {
                         [self.chatTableView reloadData];
                     }
@@ -1115,19 +1221,75 @@ static dispatch_queue_t chat_messages_queue;
 
             self.loadingOlderMessages = NO;
         });
+
+        /*
+         * Determine validity on the main thread because selectedChannel and
+         * currentWindow are UI/controller state.
+         */
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (loadGeneration != self.olderLoadGeneration) {
+                return;
+            }
+
+            BOOL sameChannel =
+                [DCServerCommunicator.sharedInstance.selectedChannel.snowflake
+                    isEqualToString:channelId];
+
+            BOOL sameWindow = self.currentWindow == targetWindow;
+
+            if (!sameChannel || !sameWindow) {
+                return;
+            }
+
+            dispatch_async(
+                dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0),
+                ^{
+                    [self.messageLayoutBuilder
+                        prewarmLayoutCacheForMessages:newMessages];
+                });
+        });
     });
 }
 
-- (void)getNewerMessages:(int)numberOfMessages afterMessage:(DCMessage *)message {
+- (void)getNewerMessages:(int)numberOfMessages
+            afterMessage:(DCMessage *)message
+{
+    NSAssert([NSThread isMainThread],
+             @"getNewerMessages:afterMessage: must be called on the main thread");
+
+    DCChannel *channel =
+        DCServerCommunicator.sharedInstance.selectedChannel;
+
+    DCChannelWindow *targetWindow = self.currentWindow;
+    NSString *channelId = [channel.snowflake copy];
+
+    /*
+     * This request now owns loadingNewerMessages. Any previous newer-message
+     * request becomes stale and must not modify the table or loading flag.
+     */
+    NSUInteger loadGeneration = ++self.newerLoadGeneration;
+    self.loadingNewerMessages = YES;
+
     dispatch_async([self get_chat_messages_queue], ^{
-        DCChannel *channel = DCServerCommunicator.sharedInstance.selectedChannel;
         NSArray *newMessages =
-            [[DCMessageStore sharedInstance] loadAfterForChannel:channel
-                                                    afterMessage:message
-                                                           limit:numberOfMessages];
+            [[DCMessageStore sharedInstance]
+                loadAfterForChannel:channel
+                       afterMessage:message
+                              limit:numberOfMessages];
 
         if (!newMessages) {
-            dispatch_async(dispatch_get_main_queue(), ^{ self.loadingNewerMessages = NO; });
+            dispatch_async(dispatch_get_main_queue(), ^{
+                /*
+                 * Do not clear the loading flag if a newer request has
+                 * superseded this one.
+                 */
+                if (loadGeneration != self.newerLoadGeneration) {
+                    return;
+                }
+
+                self.loadingNewerMessages = NO;
+            });
+
             return;
         }
 
@@ -1136,76 +1298,170 @@ static dispatch_queue_t chat_messages_queue;
                 if (!newMessage.author.profileImage) {
                     [DCTools getUserAvatar:newMessage.author];
                 }
+
                 if (newMessage.referencedMessage &&
                     newMessage.referencedMessage.author &&
                     !newMessage.referencedMessage.author.profileImage) {
-                    [DCTools getUserAvatar:newMessage.referencedMessage.author];
+                    [DCTools
+                        getUserAvatar:newMessage.referencedMessage.author];
                 }
             }
         }
 
         dispatch_async(dispatch_get_main_queue(), ^{
-            NSArray *deduped = [self deduplicateAgainstWindow:newMessages];
+            /*
+             * A newer request now owns the controller's loading state.
+             * This result must not touch anything.
+             */
+            if (loadGeneration != self.newerLoadGeneration) {
+                return;
+            }
+
+            BOOL sameChannel =
+                [DCServerCommunicator.sharedInstance.selectedChannel.snowflake
+                    isEqualToString:channelId];
+
+            BOOL sameWindow = self.currentWindow == targetWindow;
+
+            if (!sameChannel || !sameWindow) {
+                self.loadingNewerMessages = NO;
+                return;
+            }
+
+            NSArray *deduped =
+                [self deduplicateAgainstWindow:newMessages];
+
             if (deduped.count == 0) {
                 self.loadingNewerMessages = NO;
                 return;
             }
 
             NSUInteger oldCount = self.messages.count;
-            NSInteger rowCount  = [self.chatTableView numberOfRowsInSection:0];
-            BOOL didReload = (rowCount != (NSInteger)oldCount);
 
-            // Newer messages append to the model tail = content-top in the flipped
-            // table, so they land at rows [0..k-1] and push existing content DOWN.
+            NSInteger rowCount =
+                [self.chatTableView numberOfRowsInSection:0];
+
+            BOOL didReload =
+                rowCount != (NSInteger)oldCount;
+
+            /*
+             * Newer messages append to the model tail. In the flipped table,
+             * the model tail maps to rows beginning at zero.
+             */
             [self.messages addObjectsFromArray:deduped];
 
             if (didReload) {
                 [self.chatTableView reloadData];
             } else {
-                NSMutableArray *indexPaths = [NSMutableArray arrayWithCapacity:deduped.count];
-                for (NSUInteger r = 0; r < deduped.count; r++) {
-                    [indexPaths addObject:[NSIndexPath indexPathForRow:r inSection:0]];
+                NSMutableArray *indexPaths =
+                    [NSMutableArray
+                        arrayWithCapacity:deduped.count];
+
+                for (NSUInteger row = 0;
+                     row < deduped.count;
+                     row++) {
+                    [indexPaths addObject:
+                        [NSIndexPath indexPathForRow:row
+                                         inSection:0]];
                 }
+
                 [UIView setAnimationsEnabled:NO];
+
                 [self.chatTableView beginUpdates];
-                [self.chatTableView insertRowsAtIndexPaths:indexPaths
-                                          withRowAnimation:UITableViewRowAnimationNone];
+                [self.chatTableView
+                    insertRowsAtIndexPaths:indexPaths
+                          withRowAnimation:
+                              UITableViewRowAnimationNone];
                 [self.chatTableView endUpdates];
 
-                if (self.messages.count >= 2) {
-                    NSIndexPath *prevPath = [NSIndexPath indexPathForRow:1 inSection:0];
+                /*
+                 * The previously newest visible message is now immediately
+                 * after the inserted block—not necessarily row 1 when more
+                 * than one message was inserted.
+                 */
+                NSUInteger previousNewestRow = deduped.count;
+
+                if (oldCount > 0 &&
+                    previousNewestRow < self.messages.count) {
+                    NSIndexPath *previousNewestPath =
+                        [NSIndexPath
+                            indexPathForRow:previousNewestRow
+                                 inSection:0];
+
                     [self.chatTableView beginUpdates];
-                    [self.chatTableView reloadRowsAtIndexPaths:@[prevPath]
-                                              withRowAnimation:UITableViewRowAnimationNone];
+                    [self.chatTableView
+                        reloadRowsAtIndexPaths:
+                            @[ previousNewestPath ]
+                              withRowAnimation:
+                                  UITableViewRowAnimationNone];
                     [self.chatTableView endUpdates];
                 }
 
                 [UIView setAnimationsEnabled:YES];
 
-                // Measure the inserted rows and push the offset down by their
-                // height so the messages under the user's eyes don't jump.
-                CGFloat addedHeight = 0;
-                for (NSUInteger r = 0; r < deduped.count; r++) {
-                    addedHeight += [self.chatTableView
-                        rectForRowAtIndexPath:[NSIndexPath indexPathForRow:r inSection:0]].size.height;
+                /*
+                 * Preserve the user's visual position. Adding rows at the
+                 * content-top pushes all existing rows downward.
+                 */
+                CGFloat addedHeight = 0.0;
+
+                for (NSUInteger row = 0;
+                     row < deduped.count;
+                     row++) {
+                    NSIndexPath *indexPath =
+                        [NSIndexPath indexPathForRow:row
+                                         inSection:0];
+
+                    addedHeight +=
+                        [self.chatTableView
+                            rectForRowAtIndexPath:indexPath].size.height;
                 }
-                CGPoint off = self.chatTableView.contentOffset;
-                off.y += addedHeight;
-                self.chatTableView.contentOffset = off;
+
+                CGPoint offset =
+                    self.chatTableView.contentOffset;
+
+                offset.y += addedHeight;
+                self.chatTableView.contentOffset = offset;
             }
+
+            /*
+             * Trim the opposite edge only when the table and model were in
+             * sync for the incremental insertion. Preserve the existing
+             * reload fallback behavior otherwise.
+             */
             if (!didReload) {
                 [self evictOldestDownToCeiling];
             }
 
-            // Pair the growth with an oldest trim. This load only fires near
-            // present, so the oldest is far past the viewport — free to remove.
-            // [self evictOldestDownToCeiling];
-
             self.loadingNewerMessages = NO;
         });
-        // Precalculate heights for both orientations on iPad
-        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
-            [self.messageLayoutBuilder prewarmLayoutCacheForMessages:newMessages];
+
+        /*
+         * Validate UI-owned state on the main thread before scheduling
+         * optional background prewarming.
+         */
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (loadGeneration != self.newerLoadGeneration) {
+                return;
+            }
+
+            BOOL sameChannel =
+                [DCServerCommunicator.sharedInstance.selectedChannel.snowflake
+                    isEqualToString:channelId];
+
+            BOOL sameWindow = self.currentWindow == targetWindow;
+
+            if (!sameChannel || !sameWindow) {
+                return;
+            }
+
+            dispatch_async(
+                dispatch_get_global_queue(
+                    DISPATCH_QUEUE_PRIORITY_LOW, 0),
+                ^{
+                    [self.messageLayoutBuilder
+                        prewarmLayoutCacheForMessages:newMessages];
+                });
         });
     });
 }
@@ -1274,6 +1530,14 @@ static dispatch_queue_t chat_messages_queue;
 - (void)invalidateHeightCacheFor:(DCMessage *)m {
     if (!m.snowflake) return;
     [[DCCacheManager sharedInstance] invalidateSnowflake:m.snowflake];
+}
+
+- (void)invalidateOlderMessageLoad {
+    NSAssert([NSThread isMainThread],
+             @"Older message loads must be invalidated on the main thread");
+
+    self.olderLoadGeneration++;
+    self.loadingOlderMessages = NO;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
@@ -2478,23 +2742,34 @@ static dispatch_queue_t chat_messages_queue;
                            disablePing:self.disablePing];
             }
             if (self.replyingToMessage || self.editingMessage) {
-                NSIndexPath *indexPath = [NSIndexPath indexPathForRow:[self rowForModelIndex:[self.messages
-                                                                          indexOfObject:self.replyingToMessage
-                                                                              ? self.replyingToMessage
-                                                                              : self.editingMessage]]
-                                                           inSection:0];
+                DCMessage *target = self.replyingToMessage ?: self.editingMessage;
+                NSUInteger idx = [self.messages indexOfObject:target];
+
+                /*
+                 * Clear these before reloading so the cell is configured
+                 * without its reply/editing state.
+                 */
                 self.replyingToMessage = nil;
-                self.editingMessage    = nil;
-                [self.chatTableView beginUpdates];
-                [self.chatTableView reloadRowsAtIndexPaths:@[ indexPath ] withRowAnimation:UITableViewRowAnimationNone];
-                [self.chatTableView endUpdates];
+                self.editingMessage = nil;
+
+                if (idx != NSNotFound && idx < self.messages.count) {
+                    NSInteger row = [self rowForModelIndex:idx];
+
+                    if (row >= 0 && row < [self.chatTableView numberOfRowsInSection:0]) {
+                        NSIndexPath *indexPath = [NSIndexPath indexPathForRow:row
+                                                                    inSection:0];
+
+                        [self.chatTableView reloadRowsAtIndexPaths:@[ indexPath ]
+                                                  withRowAnimation:UITableViewRowAnimationNone];
+                    }
+                }
             }
             self.disablePing = NO;
             [self.inputField setText:@""];
             self.inputField.scrollEnabled = NO;
             [self resizeInputField];
             self.inputFieldPlaceholder.hidden = NO;
-            lastTimeInterval                  = 0;
+            lastTimeInterval = 0;
         } else {
             [self.inputField resignFirstResponder];
         }
@@ -2818,7 +3093,7 @@ static dispatch_queue_t chat_messages_queue;
         ? [@"#" stringByAppendingString:channel.name] 
         : channel.name;
     self.viewingPresentTime = YES;
-    [self getMessages:50 beforeMessage:nil];
+    [self handleChannelLoadCold:channel];
 }
 
 - (void)navigateToGuild:(DCGuild *)guild {
