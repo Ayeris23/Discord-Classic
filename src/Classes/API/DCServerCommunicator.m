@@ -190,6 +190,24 @@ NSTimer *heartbeatTimer = nil;
     });
 }
 
+- (void)requestMemberChunkForUserIds:(NSArray *)userIds
+                             inGuild:(NSString *)guildId {
+    if (!userIds.count || !guildId) return;
+    // Discord caps user_ids at 100 per request
+    NSArray *batch = userIds.count > 100
+        ? [userIds subarrayWithRange:NSMakeRange(0, 100)]
+        : userIds;
+    [self sendJSON:@{
+        @"op": @(8),
+        @"d": @{
+            @"guild_id": guildId,
+            @"user_ids": batch,
+            @"limit":    @0,
+            @"presences": @NO
+        }
+    }];
+}
+
 - (DCRole *)roleForSnowflake:(NSString *)snowflake {
     if (!snowflake) return nil;
     __block DCRole *role;
@@ -1201,6 +1219,31 @@ NSTimer *heartbeatTimer = nil;
     } else if ([t isEqualToString:GUILD_MEMBER_LIST_UPDATE]) {
         [self handleGuildMemberListUpdateWithData:d];
         return;
+    } else if ([t isEqualToString:@"GUILD_MEMBERS_CHUNK"]) {
+        NSString *guildId = [d objectForKey:@"guild_id"];
+        NSArray *members  = [d objectForKey:@"members"];
+        DCGuild *guild = nil;
+        for (DCGuild *g in self.guilds) {
+            if ([g.snowflake isEqualToString:guildId]) { guild = g; break; }
+        }
+        if (!guild || !members) return;
+        for (NSDictionary *memberDict in members) {
+            DCUser *user = [DCTools convertJsonUser:[memberDict objectForKey:@"user"]
+                                              cache:YES];
+            if (!user) continue;
+            NSString *nick = [memberDict objectForKey:@"nick"];
+            if ([nick isKindOfClass:[NSString class]] && nick.length > 0) {
+                if (!user.guildNicknames) user.guildNicknames = NSMutableDictionary.new;
+                user.guildNicknames[guildId] = nick;
+            }
+        }
+        if (self.selectedChannel &&
+            [self.selectedChannel.parentGuild.snowflake isEqualToString:guildId]) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [NSNotificationCenter.defaultCenter
+                    postNotificationName:@"GuildMemberListUpdated" object:nil];
+            });
+        }
     } else {
         DBGLOG(@"Unhandled event type: %@, content: %@", t, d);
         return;
@@ -1616,7 +1659,6 @@ NSTimer *heartbeatTimer = nil;
     self.reconnectAttempts = 0;
 }
 
-// DCServerCommunicator.m
 - (void)performLogout {
     // Nil token first so callbacks during teardown can't trigger a reconnect
     self.token           = nil;

@@ -1137,12 +1137,6 @@
     DCChannel *selectedChannel =
         DCServerCommunicator.sharedInstance.selectedChannel;
 
-    // Initialize messages
-    [NSNotificationCenter.defaultCenter
-        postNotificationName:@"NUKE CHAT DATA"
-                      object:nil];
-    [NSNotificationCenter.defaultCenter postNotificationName:@"GuildMemberListUpdated" object:nil];
-
     NSString *formattedChannelName;
 
     formattedChannelName = selectedChannel.name;

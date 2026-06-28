@@ -165,7 +165,6 @@
 		2F1121162F4E913F00159D64 /* ToolbarBG@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F11206F2F4E913F00159D64 /* ToolbarBG@2x.png */; };
 		2F1121172F4E913F00159D64 /* Video-play-button.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F1120702F4E913F00159D64 /* Video-play-button.png */; };
 		2F1121182F4E913F00159D64 /* Video-play-button@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F1120712F4E913F00159D64 /* Video-play-button@2x.png */; };
-		2F1121192F4E913F00159D64 /* Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = 2F1120732F4E913F00159D64 /* Info.plist */; };
 		2F11211A2F4E913F00159D64 /* Experimental.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 2F1120752F4E913F00159D64 /* Experimental.storyboard */; };
 		2F11211B2F4E913F00159D64 /* iOS-7.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 2F1120762F4E913F00159D64 /* iOS-7.storyboard */; };
 		2F11211C2F4E913F00159D64 /* Storyboard-iPad.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 2F1120772F4E913F00159D64 /* Storyboard-iPad.storyboard */; };
@@ -205,7 +204,6 @@
 		2F11226C2F4EA03000159D64 /* frame_dec.c in Sources */ = {isa = PBXBuildFile; fileRef = 2F1121662F4EA02F00159D64 /* frame_dec.c */; };
 		2F11226D2F4EA03000159D64 /* idec_dec.c in Sources */ = {isa = PBXBuildFile; fileRef = 2F1121672F4EA02F00159D64 /* idec_dec.c */; };
 		2F11226E2F4EA03000159D64 /* io_dec.c in Sources */ = {isa = PBXBuildFile; fileRef = 2F1121682F4EA02F00159D64 /* io_dec.c */; };
-		2F11226F2F4EA03000159D64 /* Makefile.am in Resources */ = {isa = PBXBuildFile; fileRef = 2F1121692F4EA02F00159D64 /* Makefile.am */; };
 		2F1122702F4EA03000159D64 /* quant_dec.c in Sources */ = {isa = PBXBuildFile; fileRef = 2F11216A2F4EA02F00159D64 /* quant_dec.c */; };
 		2F1122712F4EA03000159D64 /* tree_dec.c in Sources */ = {isa = PBXBuildFile; fileRef = 2F11216B2F4EA02F00159D64 /* tree_dec.c */; };
 		2F1122722F4EA03000159D64 /* vp8_dec.c in Sources */ = {isa = PBXBuildFile; fileRef = 2F11216C2F4EA02F00159D64 /* vp8_dec.c */; };
@@ -215,7 +213,6 @@
 		2F1122762F4EA03000159D64 /* demux.c in Sources */ = {isa = PBXBuildFile; fileRef = 2F1121752F4EA02F00159D64 /* demux.c */; };
 		2F1122772F4EA03000159D64 /* libwebpdemux.pc.in in Resources */ = {isa = PBXBuildFile; fileRef = 2F1121762F4EA02F00159D64 /* libwebpdemux.pc.in */; };
 		2F1122782F4EA03000159D64 /* libwebpdemux.rc in Resources */ = {isa = PBXBuildFile; fileRef = 2F1121772F4EA02F00159D64 /* libwebpdemux.rc */; };
-		2F1122792F4EA03000159D64 /* Makefile.am in Resources */ = {isa = PBXBuildFile; fileRef = 2F1121782F4EA02F00159D64 /* Makefile.am */; };
 		2F11227A2F4EA03000159D64 /* alpha_processing.c in Sources */ = {isa = PBXBuildFile; fileRef = 2F11217A2F4EA02F00159D64 /* alpha_processing.c */; };
 		2F11227B2F4EA03000159D64 /* alpha_processing_mips_dsp_r2.c in Sources */ = {isa = PBXBuildFile; fileRef = 2F11217B2F4EA02F00159D64 /* alpha_processing_mips_dsp_r2.c */; };
 		2F11227C2F4EA03000159D64 /* alpha_processing_neon.c in Sources */ = {isa = PBXBuildFile; fileRef = 2F11217C2F4EA02F00159D64 /* alpha_processing_neon.c */; };
@@ -260,7 +257,6 @@
 		2F1122A32F4EA03000159D64 /* lossless_neon.c in Sources */ = {isa = PBXBuildFile; fileRef = 2F1121A92F4EA02F00159D64 /* lossless_neon.c */; };
 		2F1122A42F4EA03000159D64 /* lossless_sse2.c in Sources */ = {isa = PBXBuildFile; fileRef = 2F1121AA2F4EA02F00159D64 /* lossless_sse2.c */; };
 		2F1122A52F4EA03000159D64 /* lossless_sse41.c in Sources */ = {isa = PBXBuildFile; fileRef = 2F1121AB2F4EA02F00159D64 /* lossless_sse41.c */; };
-		2F1122A62F4EA03000159D64 /* Makefile.am in Resources */ = {isa = PBXBuildFile; fileRef = 2F1121AC2F4EA02F00159D64 /* Makefile.am */; };
 		2F1122A72F4EA03000159D64 /* rescaler.c in Sources */ = {isa = PBXBuildFile; fileRef = 2F1121B12F4EA02F00159D64 /* rescaler.c */; };
 		2F1122A82F4EA03000159D64 /* rescaler_mips32.c in Sources */ = {isa = PBXBuildFile; fileRef = 2F1121B22F4EA02F00159D64 /* rescaler_mips32.c */; };
 		2F1122A92F4EA03000159D64 /* rescaler_mips_dsp_r2.c in Sources */ = {isa = PBXBuildFile; fileRef = 2F1121B32F4EA02F00159D64 /* rescaler_mips_dsp_r2.c */; };
@@ -291,7 +287,6 @@
 		2F1122C22F4EA03000159D64 /* frame_enc.c in Sources */ = {isa = PBXBuildFile; fileRef = 2F1121D02F4EA03000159D64 /* frame_enc.c */; };
 		2F1122C32F4EA03000159D64 /* histogram_enc.c in Sources */ = {isa = PBXBuildFile; fileRef = 2F1121D12F4EA03000159D64 /* histogram_enc.c */; };
 		2F1122C42F4EA03000159D64 /* iterator_enc.c in Sources */ = {isa = PBXBuildFile; fileRef = 2F1121D32F4EA03000159D64 /* iterator_enc.c */; };
-		2F1122C52F4EA03000159D64 /* Makefile.am in Resources */ = {isa = PBXBuildFile; fileRef = 2F1121D42F4EA03000159D64 /* Makefile.am */; };
 		2F1122C62F4EA03000159D64 /* near_lossless_enc.c in Sources */ = {isa = PBXBuildFile; fileRef = 2F1121D52F4EA03000159D64 /* near_lossless_enc.c */; };
 		2F1122C72F4EA03000159D64 /* picture_csp_enc.c in Sources */ = {isa = PBXBuildFile; fileRef = 2F1121D62F4EA03000159D64 /* picture_csp_enc.c */; };
 		2F1122C82F4EA03000159D64 /* picture_enc.c in Sources */ = {isa = PBXBuildFile; fileRef = 2F1121D72F4EA03000159D64 /* picture_enc.c */; };
@@ -308,7 +303,6 @@
 		2F1122D32F4EA03000159D64 /* anim_encode.c in Sources */ = {isa = PBXBuildFile; fileRef = 2F1121E52F4EA03000159D64 /* anim_encode.c */; };
 		2F1122D42F4EA03000159D64 /* libwebpmux.pc.in in Resources */ = {isa = PBXBuildFile; fileRef = 2F1121E72F4EA03000159D64 /* libwebpmux.pc.in */; };
 		2F1122D52F4EA03000159D64 /* libwebpmux.rc in Resources */ = {isa = PBXBuildFile; fileRef = 2F1121E82F4EA03000159D64 /* libwebpmux.rc */; };
-		2F1122D62F4EA03000159D64 /* Makefile.am in Resources */ = {isa = PBXBuildFile; fileRef = 2F1121E92F4EA03000159D64 /* Makefile.am */; };
 		2F1122D72F4EA03000159D64 /* muxedit.c in Sources */ = {isa = PBXBuildFile; fileRef = 2F1121EA2F4EA03000159D64 /* muxedit.c */; };
 		2F1122D82F4EA03000159D64 /* muxinternal.c in Sources */ = {isa = PBXBuildFile; fileRef = 2F1121EC2F4EA03000159D64 /* muxinternal.c */; };
 		2F1122D92F4EA03000159D64 /* muxread.c in Sources */ = {isa = PBXBuildFile; fileRef = 2F1121ED2F4EA03000159D64 /* muxread.c */; };
@@ -318,7 +312,6 @@
 		2F1122DD2F4EA03000159D64 /* filters_utils.c in Sources */ = {isa = PBXBuildFile; fileRef = 2F1121F72F4EA03000159D64 /* filters_utils.c */; };
 		2F1122DE2F4EA03000159D64 /* huffman_encode_utils.c in Sources */ = {isa = PBXBuildFile; fileRef = 2F1121F92F4EA03000159D64 /* huffman_encode_utils.c */; };
 		2F1122DF2F4EA03000159D64 /* huffman_utils.c in Sources */ = {isa = PBXBuildFile; fileRef = 2F1121FB2F4EA03000159D64 /* huffman_utils.c */; };
-		2F1122E02F4EA03000159D64 /* Makefile.am in Resources */ = {isa = PBXBuildFile; fileRef = 2F1121FD2F4EA03000159D64 /* Makefile.am */; };
 		2F1122E12F4EA03000159D64 /* palette.c in Sources */ = {isa = PBXBuildFile; fileRef = 2F1121FE2F4EA03000159D64 /* palette.c */; };
 		2F1122E22F4EA03000159D64 /* quant_levels_dec_utils.c in Sources */ = {isa = PBXBuildFile; fileRef = 2F1122002F4EA03000159D64 /* quant_levels_dec_utils.c */; };
 		2F1122E32F4EA03000159D64 /* quant_levels_utils.c in Sources */ = {isa = PBXBuildFile; fileRef = 2F1122022F4EA03000159D64 /* quant_levels_utils.c */; };
@@ -550,7 +543,6 @@
 		2FFA3A7A2F98879E00E67A40 /* DTObjectBlockExecutor.m in Sources */ = {isa = PBXBuildFile; fileRef = 2FFA3A352F98879E00E67A40 /* DTObjectBlockExecutor.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
 		2FFA3A7B2F98879E00E67A40 /* NSObject+DTRuntime.m in Sources */ = {isa = PBXBuildFile; fileRef = 2FFA3A372F98879E00E67A40 /* NSObject+DTRuntime.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
 		2FFA3A7E2F98899400E67A40 /* DTAnimatedGIF.m in Sources */ = {isa = PBXBuildFile; fileRef = 2FFA3A7D2F98899400E67A40 /* DTAnimatedGIF.m */; };
-		2FFA3A7F2F9B078800E67A40 /* DTLog.h in Sources */ = {isa = PBXBuildFile; fileRef = 2FFA394C2F987C2C00E67A40 /* DTLog.h */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
 		2FFA3A822F9B0AD600E67A40 /* default.css.c in Sources */ = {isa = PBXBuildFile; fileRef = 2FFA3A812F9B0AD600E67A40 /* default.css.c */; };
 /* End PBXBuildFile section */
 
@@ -2880,7 +2872,6 @@
 				2F1120CF2F4E913F00159D64 /* U-Boost@2x.png in Resources */,
 				2F1120BC2F4E913F00159D64 /* C-Xbox.png in Resources */,
 				2F1120BE2F4E913F00159D64 /* C-YouTube.png in Resources */,
-				2F1122792F4EA03000159D64 /* Makefile.am in Resources */,
 				2F1120CE2F4E913F00159D64 /* U-Boost.png in Resources */,
 				2F1120CD2F4E913F00159D64 /* U-Add@2x.png in Resources */,
 				2F1121052F4E913F00159D64 /* bag-xml.png in Resources */,
@@ -2892,9 +2883,7 @@
 				2F11210E2F4E913F00159D64 /* PFPInset.png in Resources */,
 				2F1120952F4E913F00159D64 /* preferences@2x.png in Resources */,
 				2F11209B2F4E913F00159D64 /* BarButton@2x.png in Resources */,
-				2F1122E02F4EA03000159D64 /* Makefile.am in Resources */,
 				2F1121212F4E913F00159D64 /* DCChatTableCell.xib in Resources */,
-				2F1122D62F4EA03000159D64 /* Makefile.am in Resources */,
 				2F1120C02F4E913F00159D64 /* DefaultAvatar0.png in Resources */,
 				2F1120F62F4E913F00159D64 /* pfpOverlay@2x.png in Resources */,
 				2F1120D72F4E913F00159D64 /* Group 99.png in Resources */,
@@ -2920,7 +2909,6 @@
 				2F11209F2F4E913F00159D64 /* NavigationButton@2x.png in Resources */,
 				2F11208B2F4E913F00159D64 /* Border.png in Resources */,
 				2F1120E02F4E913F00159D64 /* inputField@2x.png in Resources */,
-				2F1122C52F4EA03000159D64 /* Makefile.am in Resources */,
 				2F1120E82F4E913F00159D64 /* oldDiscord.png in Resources */,
 				2F1DF67A2F52C97F009C44CE /* SendMessageButton.png in Resources */,
 				2F1122542F4EA03000159D64 /* FontAwesome.ttf in Resources */,
@@ -2948,7 +2936,6 @@
 				2F1120FF2F4E913F00159D64 /* offline.png in Resources */,
 				2F1120E52F4E913F00159D64 /* DirectMessages@2x.png in Resources */,
 				2F74240E2F7771D600FAF3D9 /* Badge@2x.png in Resources */,
-				2F11226F2F4EA03000159D64 /* Makefile.am in Resources */,
 				2F1120F82F4E913F00159D64 /* reply.png in Resources */,
 				2F1120C42F4E913F00159D64 /* DefaultAvatar2.png in Resources */,
 				2F1120DE2F4E913F00159D64 /* Icon.png in Resources */,
@@ -3049,13 +3036,11 @@
 				2F1120962F4E913F00159D64 /* Send.png in Resources */,
 				2F1120B62F4E913F00159D64 /* C-Twitch.png in Resources */,
 				2F1120972F4E913F00159D64 /* Send@2x.png in Resources */,
-				2F1122A62F4EA03000159D64 /* Makefile.am in Resources */,
 				2F1120DB2F4E913F00159D64 /* GuildIconBaseSelected.png in Resources */,
 				2F1121022F4E913F00159D64 /* online@2x.png in Resources */,
 				2F1120AC2F4E913F00159D64 /* C-GitHub.png in Resources */,
 				2F1120EE2F4E913F00159D64 /* oldTextFieldBG.png in Resources */,
 				2F1122772F4EA03000159D64 /* libwebpdemux.pc.in in Resources */,
-				2F1121192F4E913F00159D64 /* Info.plist in Resources */,
 				2F11211A2F4E913F00159D64 /* Experimental.storyboard in Resources */,
 				2F1121152F4E913F00159D64 /* ToolbarBG.png in Resources */,
 				2F1120D42F4E913F00159D64 /* U-Remove.png in Resources */,
@@ -3126,7 +3111,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				2FFA3A7F2F9B078800E67A40 /* DTLog.h in Sources */,
 				2F11228E2F4EA03000159D64 /* enc_mips32.c in Sources */,
 				2F1123672F4EB0AD00159D64 /* DCUser.m in Sources */,
 				2F11227F2F4EA03000159D64 /* cost.c in Sources */,

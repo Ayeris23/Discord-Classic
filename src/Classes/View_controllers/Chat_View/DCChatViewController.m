@@ -257,7 +257,7 @@ static dispatch_queue_t chat_messages_queue;
                                              object:nil];
     [NSNotificationCenter.defaultCenter addObserver:self
                                            selector:@selector(handleGuildMemberListUpdated:)
-                                               name:@"GUILD MEMBER LIST UPDATED"
+                                               name:@"GuildMemberListUpdated"
                                              object:nil];
 
     [NSNotificationCenter.defaultCenter
@@ -1175,6 +1175,19 @@ static dispatch_queue_t chat_messages_queue;
             }
         }
 
+        DCGuild *guild = DCServerCommunicator.sharedInstance.selectedChannel.parentGuild;
+        if (guild && ![guild.name isEqualToString:@"Direct Messages"]) {
+            NSMutableSet *authorIds = [NSMutableSet set];
+            for (DCMessage *msg in newMessages) {
+                if (msg.author.snowflake) [authorIds addObject:msg.author.snowflake];
+            }
+            if (authorIds.count) {
+                [DCServerCommunicator.sharedInstance
+                    requestMemberChunkForUserIds:authorIds.allObjects
+                                         inGuild:guild.snowflake];
+            }
+        }
+
         dispatch_async(dispatch_get_main_queue(), ^{
             /*
              * A newer request superseded this one. Do not modify the table,
@@ -1414,6 +1427,19 @@ static dispatch_queue_t chat_messages_queue;
                     [DCTools
                         getUserAvatar:newMessage.referencedMessage.author];
                 }
+            }
+        }
+
+        DCGuild *guild = DCServerCommunicator.sharedInstance.selectedChannel.parentGuild;
+        if (guild && ![guild.name isEqualToString:@"Direct Messages"]) {
+            NSMutableSet *authorIds = [NSMutableSet set];
+            for (DCMessage *msg in newMessages) {
+                if (msg.author.snowflake) [authorIds addObject:msg.author.snowflake];
+            }
+            if (authorIds.count) {
+                [DCServerCommunicator.sharedInstance
+                    requestMemberChunkForUserIds:authorIds.allObjects
+                                         inGuild:guild.snowflake];
             }
         }
 

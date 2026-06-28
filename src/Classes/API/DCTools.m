@@ -370,6 +370,17 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
             authorUser = [DCTools convertJsonUser:[jsonMessage valueForKeyPath:@"author"] cache:YES];
         }
 
+        // Apply guild nickname from message member object if present
+        NSDictionary *memberDict = [jsonMessage objectForKey:@"member"];
+        if (authorUser && [memberDict isKindOfClass:[NSDictionary class]]) {
+            NSString *nick = [memberDict objectForKey:@"nick"];
+            DCGuild *guild = DCServerCommunicator.sharedInstance.selectedChannel.parentGuild;
+            if ([nick isKindOfClass:[NSString class]] && nick.length > 0 && guild.snowflake) {
+                if (!authorUser.guildNicknames) authorUser.guildNicknames = NSMutableDictionary.new;
+                authorUser.guildNicknames[guild.snowflake] = nick;
+            }
+        }
+
         // load referenced message if it exists
         float contentWidth = UIScreen.mainScreen.bounds.size.width - 63;
 
