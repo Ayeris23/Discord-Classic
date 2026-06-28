@@ -29,6 +29,7 @@
                                       UIGestureRecognizerDelegate,
                                       DTAttributedTextContentViewDelegate>
 - (void)getMessages:(int)numberOfMessages beforeMessage:(DCMessage *)message;
+- (void)activateSelectedChannel;
 
 @property (weak, nonatomic) IBOutlet UIView *toolbar;
 @property (weak, nonatomic) IBOutlet UIImageView *toolbarBG;

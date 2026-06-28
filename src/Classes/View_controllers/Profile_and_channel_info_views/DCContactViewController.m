@@ -292,14 +292,6 @@
             if (privateChannel) {
                 DCServerCommunicator.sharedInstance.selectedChannel =
                     privateChannel;
-
-                [NSNotificationCenter.defaultCenter
-                postNotificationName:@"NUKE CHAT DATA"
-                              object:nil];
-
-                [chatViewController getMessages:50 beforeMessage:nil];
-                chatViewController.viewingPresentTime = true;
-            } else {
             }
         }
     } else if ([segue.identifier isEqualToString:@"about to mutual friends"]) {

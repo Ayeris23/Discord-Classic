@@ -613,25 +613,18 @@
                     navigationController.viewControllers.firstObject;
                 if ([contentViewController
                         isKindOfClass:[DCChatViewController class]]) {
-                    [NSNotificationCenter.defaultCenter
-                        postNotificationName:@"NUKE CHAT DATA"
-                                      object:nil];
-                    [NSNotificationCenter.defaultCenter postNotificationName:@"GuildMemberListUpdated" object:nil];
+
                     NSString *formattedChannelName;
-                    if (DCServerCommunicator.sharedInstance.selectedChannel.type
-                        == 0) {
-                        formattedChannelName = [@"#"
-                            stringByAppendingString:DCServerCommunicator
-                                                        .sharedInstance
-                                                        .selectedChannel.name];
-                    } else {
-                        formattedChannelName = DCServerCommunicator.sharedInstance
+
+                    formattedChannelName = DCServerCommunicator.sharedInstance
                                                    .selectedChannel.name;
-                    }
-                    [contentViewController.navigationItem
-                        setTitle:formattedChannelName];
-                    [contentViewController getMessages:50 beforeMessage:nil];
-                    [contentViewController setViewingPresentTime:true];
+
+                    [contentViewController activateSelectedChannel];
+
+                    [NSNotificationCenter.defaultCenter
+                        postNotificationName:@"GuildMemberListUpdated"
+                                      object:nil];
+
                     [self.slideMenuController hideMenu:YES];
                 }
             } else {
@@ -1141,8 +1134,6 @@
 
     formattedChannelName = selectedChannel.name;
     chatViewController.navigationItem.title = formattedChannelName;
-    [chatViewController getMessages:50 beforeMessage:nil];
-    chatViewController.viewingPresentTime = true;
 }
 // SEGUE END
 @end

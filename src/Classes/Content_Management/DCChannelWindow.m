@@ -17,16 +17,21 @@
 
 - (instancetype)initWithChannelSnowflake:(NSString *)snowflake {
     self = [super init];
+
     if (self) {
         _channelSnowflake = [snowflake copy];
-        _messages         = [NSMutableArray array];
-        _atPresentTime    = YES;  // a freshly opened window anchors to present
-        _hasMoreBefore    = YES;  // assume history exists until a load proves otherwise
-        _hasMoreAfter  = NO;   // window holds the live tail by default
+        _messages = [NSMutableArray array];
+
+        _atPresentTime = YES;
+        _hasMoreBefore = YES;
+        _hasMoreAfter = NO;
+
+        _savedContentOffsetY = 0.0f;
+        _hasSavedContentOffset = NO;
     }
+
     return self;
 }
-
 - (NSString *)latestSnowflake {
     DCMessage *last = [self.messages lastObject];
     return last.snowflake;

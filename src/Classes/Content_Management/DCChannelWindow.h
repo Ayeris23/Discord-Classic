@@ -30,6 +30,10 @@
 @property (nonatomic, readonly) NSString *latestSnowflake;
 @property (nonatomic, readonly) NSString *oldestSnowflake;
 
+// Saved vertical position for this channel's flipped table view.
+@property (nonatomic, assign) CGFloat savedContentOffsetY;
+@property (nonatomic, assign) BOOL hasSavedContentOffset;
+
 - (instancetype)initWithChannelSnowflake:(NSString *)snowflake;
 
 @end
