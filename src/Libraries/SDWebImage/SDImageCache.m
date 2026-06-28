@@ -272,7 +272,18 @@ FOUNDATION_STATIC_INLINE NSUInteger SDCacheCostForImage(UIImage *image) {
     [_fileManager createFileAtPath:cachePathForKey contents:imageData attributes:nil];
     
     // disable iCloud backup
-    if (self.shouldDisableiCloud) {
+    // NSURLIsExcludedFromBackupKey was introduced in iOS 5.1. Setting it on
+    // iOS 5.0.x crashes with a null-pointer dereference inside Foundation's
+    // resource-property dispatch — there's no handler registered for this
+    // key yet on that OS version. Below 5.1 we just skip the exclusion;
+    // the cache files get backed up, which is a non-issue on these devices.
+    static BOOL supportsBackupExclusion = NO;
+    static dispatch_once_t versionCheckToken;
+    dispatch_once(&versionCheckToken, ^{
+        supportsBackupExclusion = [[UIDevice currentDevice].systemVersion floatValue] >= 5.1;
+    });
+
+    if (self.shouldDisableiCloud && supportsBackupExclusion) {
         [fileURL setResourceValue:[NSNumber numberWithBool:YES] forKey:NSURLIsExcludedFromBackupKey error:nil];
     }
 }

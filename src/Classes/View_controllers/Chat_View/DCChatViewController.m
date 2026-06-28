@@ -66,6 +66,8 @@
 @property (nonatomic, retain) UIColor *touchHighlightPreviousColor;
 @property (nonatomic, assign) NSUInteger olderLoadGeneration;
 @property (nonatomic, assign) NSUInteger newerLoadGeneration;
+@property (nonatomic, assign) NSUInteger reconcileGeneration;
+@property (nonatomic, copy) NSString *reconcilingChannelID;
 @end
 
 // dynamic message box vars
@@ -132,13 +134,17 @@ static dispatch_queue_t chat_messages_queue;
 
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
+
     [[UIApplication sharedApplication] setStatusBarHidden:NO];
 
-    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"experimentalMode"]) {
+    if ([[NSUserDefaults standardUserDefaults]
+            boolForKey:@"experimentalMode"]) {
         [self.navigationController.navigationBar
             setBackgroundImage:[UIImage imageNamed:@"TbarBG"]
                  forBarMetrics:UIBarMetricsDefault];
     }
+
+    [self handleSelectedChannel];
 }
 
 - (void)viewDidLoad {
@@ -248,6 +254,10 @@ static dispatch_queue_t chat_messages_queue;
     [NSNotificationCenter.defaultCenter addObserver:self
                                            selector:@selector(handleForwardReconcile)
                                                name:@"BACKGROUND_RECONNECT"
+                                             object:nil];
+    [NSNotificationCenter.defaultCenter addObserver:self
+                                           selector:@selector(handleGuildMemberListUpdated:)
+                                               name:@"GUILD MEMBER LIST UPDATED"
                                              object:nil];
 
     [NSNotificationCenter.defaultCenter
@@ -528,55 +538,54 @@ static dispatch_queue_t chat_messages_queue;
 
 - (void)handleReady {
     assertMainThread();
-    if (DCServerCommunicator.sharedInstance.selectedChannel) {
-        [self syncWindowForSelectedChannel];
-        if (self.messages.count == 0) {
-            @autoreleasepool {
-                [self.messages removeAllObjects];
-            }
-            [self getMessages:50 beforeMessage:nil];
-            // Only run the full reload setup on a cold load
-            self.chatTableView.height = self.view.height - self.keyboardHeight - self.toolbar.height;
-            self.typingIndicatorView.y = self.view.height - self.keyboardHeight - self.toolbar.height - 20;
-            [self.chatTableView setContentOffset:CGPointMake(0, self.chatTableView.contentSize.height - self.chatTableView.frame.size.height)
-                                        animated:NO];
-            [self handleAsyncReload];
-        }
-        // Always update UI state
-        self.inputFieldPlaceholder.text = DCServerCommunicator.sharedInstance.selectedChannel.writeable
-            ? [NSString stringWithFormat:@"Message%@%@",
-               ![DCServerCommunicator.sharedInstance.selectedChannel.parentGuild.name isEqualToString:@"Direct Messages"]
-                   ? @" #"
-                   : (DCServerCommunicator.sharedInstance.selectedChannel.recipients.count > 2 ? @" " : @" @"),
-               DCServerCommunicator.sharedInstance.selectedChannel.name]
-            : @"No Permission";
-        self.toolbar.userInteractionEnabled = DCServerCommunicator.sharedInstance.selectedChannel.writeable;
-        self.typingIndicatorView.hidden = YES;
-    }
+    [self handleSelectedChannel];
 }
     
 - (void)handleForwardReconcile {
     assertMainThread();
-    if (self.backgroundRefreshInProgress) return;
 
-    DCChannel *channel      = DCServerCommunicator.sharedInstance.selectedChannel;
+    DCChannel *channel =
+        DCServerCommunicator.sharedInstance.selectedChannel;
     DCChannelWindow *window = self.currentWindow;
-    if (!channel || !window || window.messages.count == 0) return;
-    if (!self.viewingPresentTime) return;  // reading history — don't yank them to the tail
-    if (window.hasMoreAfter) return;       // tail evicted; backfilling would append across a gap
+    NSString *channelID = [channel.snowflake copy];
 
-    DCMessage *anchor = [window.messages lastObject];
-    if (!anchor) return;
+    if (!channel || !window || window.messages.count == 0) {
+        return;
+    }
 
-    self.backgroundRefreshInProgress = YES;
+    if (!window.atPresentTime || window.hasMoreAfter) {
+        return;
+    }
+
+    if ([self.reconcilingChannelID isEqualToString:channelID]) {
+        return;
+    }
+
+    NSUInteger generation = ++self.reconcileGeneration;
+    self.reconcilingChannelID = channelID;
+
+    DCMessage *anchor = window.messages.lastObject;
 
     dispatch_async([self get_chat_messages_queue], ^{
         DCMessageDelta *delta =
-            [[DCMessageStore sharedInstance] reconcileForwardForChannel:channel
-                                                           afterMessage:anchor];
+            [[DCMessageStore sharedInstance]
+                reconcileForwardForChannel:channel
+                              afterMessage:anchor];
 
         dispatch_async(dispatch_get_main_queue(), ^{
-            self.backgroundRefreshInProgress = NO;
+            if (generation != self.reconcileGeneration) {
+                return;
+            }
+
+            self.reconcilingChannelID = nil;
+
+            BOOL sameChannel =
+                [DCServerCommunicator.sharedInstance.selectedChannel.snowflake
+                    isEqualToString:channelID];
+
+            if (!sameChannel || self.currentWindow != window) {
+                return;
+            }
 
             if (!delta) return;
             if (DCServerCommunicator.sharedInstance.selectedChannel != channel) return;
@@ -615,9 +624,9 @@ static dispatch_queue_t chat_messages_queue;
             [self.chatTableView endUpdates];
 
             if (self.messages.count >= 2) {
-                NSIndexPath *prevPath = [NSIndexPath indexPathForRow:1 inSection:0];
+                NSIndexPath *previousNewestPath = [NSIndexPath indexPathForRow:insertCount inSection:0];
                 [self.chatTableView beginUpdates];
-                [self.chatTableView reloadRowsAtIndexPaths:@[prevPath]
+                [self.chatTableView reloadRowsAtIndexPaths:@[previousNewestPath]
                                           withRowAnimation:UITableViewRowAnimationNone];
                 [self.chatTableView endUpdates];
             }
@@ -627,6 +636,54 @@ static dispatch_queue_t chat_messages_queue;
             }
         });
     });
+}
+
+- (void)handleSelectedChannel {
+    NSAssert([NSThread isMainThread], @"Must activate channel on main thread");
+
+    DCChannel *channel =
+        DCServerCommunicator.sharedInstance.selectedChannel;
+
+    if (!channel.snowflake.length || !self.chatTableView) {
+        return;
+    }
+
+    DCChannelWindow *previousWindow = _currentWindow;
+    [self syncWindowForSelectedChannel];
+
+    BOOL changedWindow = previousWindow != self.currentWindow;
+
+    // Immediately display cached content.
+    [self.chatTableView reloadData];
+
+    if (!changedWindow) {
+        // Returning from a profile/modal while still viewing the same channel.
+        if (self.currentWindow.atPresentTime &&
+            !self.currentWindow.hasMoreAfter) {
+            [self handleForwardReconcile];
+        }
+        return;
+    }
+
+    // Invalidate controller-global pagination requests from the old channel.
+    self.olderLoadGeneration++;
+    self.newerLoadGeneration++;
+    self.loadingOlderMessages = NO;
+    self.loadingNewerMessages = NO;
+
+    if (self.messages.count == 0) {
+        [self handleChannelLoadCold:channel];
+        return;
+    }
+
+    if (self.currentWindow.hasMoreAfter) {
+        [self handleChannelLoadCold:channel];
+        return;
+    }
+
+    self.currentWindow.atPresentTime = YES;
+    [self.chatTableView setContentOffset:CGPointZero animated:NO];
+    [self handleForwardReconcile];
 }
 
 - (void)handleReloadUser:(NSNotification *)notification {
@@ -695,11 +752,14 @@ static dispatch_queue_t chat_messages_queue;
     assertMainThread();
     DCMessage *newMessage = [DCTools convertJsonMessage:notification.userInfo];
 
-    [NSNotificationCenter.defaultCenter
-            postNotificationName:@"TYPING STOP"
-                          object:newMessage.author.snowflake];
+    NSString *channelID = notification.userInfo[@"channel_id"];
+    if (![channelID isEqualToString:self.currentWindow.channelSnowflake]) {
+        return;
+    }
 
     if (self.currentWindow.hasMoreAfter) {
+        NSAssert(!self.currentWindow.atPresentTime,
+                 @"A present-time window cannot also have newer messages missing");
         return;
     }
 
@@ -730,6 +790,51 @@ static dispatch_queue_t chat_messages_queue;
         [self.chatTableView setContentOffset:CGPointZero animated:YES];
         [self evictOldestDownToCeiling];
     }
+}
+
+- (void)handleGuildMemberListUpdated:(NSNotification *)notification {
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self handleGuildMemberListUpdated:notification];
+        });
+        return;
+    }
+
+    if (!self.chatTableView || !self.currentWindow) {
+        return;
+    }
+
+    /*
+     * Force layoutForModelIndex: to return new layout objects.
+     * Otherwise cell.configuredLayout == layout may take the fast path
+     * and preserve the old username label.
+     */
+    for (DCMessage *message in self.messages) {
+        [[DCCacheManager sharedInstance]
+            invalidateSnowflake:message.snowflake];
+
+        //Reply positioning depends on the displayed author-name width.
+        DCMessage *referenced = message.referencedMessage;
+        if (referenced.author) {
+            NSString *name = [referenced.author
+                displayNameInGuild:
+                    DCServerCommunicator.sharedInstance
+                        .selectedChannel.parentGuild];
+
+            CGFloat contentWidth =
+                UIScreen.mainScreen.bounds.size.width - 63;
+
+            CGSize nameSize =
+                [name sizeWithFont:[UIFont boldSystemFontOfSize:10]
+                 constrainedToSize:CGSizeMake(contentWidth, MAXFLOAT)
+                     lineBreakMode:
+                         (NSLineBreakMode)UILineBreakModeWordWrap];
+
+            referenced.authorNameWidth = 80 + nameSize.width;
+        }
+    }
+
+    [self.chatTableView reloadData];
 }
 
 - (void)handleMessageEdit:(NSNotification *)notification {
@@ -831,6 +936,12 @@ static dispatch_queue_t chat_messages_queue;
 }
 
 - (void)handleTyping:(NSNotification *)notification {
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self handleTyping:notification];
+        });
+        return;
+    }
     if (!self.typingIndicatorView) {
         DBGLOG(@"%s: Typing indicator view is not initialized", __PRETTY_FUNCTION__);
         return;
@@ -1251,9 +1362,7 @@ static dispatch_queue_t chat_messages_queue;
     });
 }
 
-- (void)getNewerMessages:(int)numberOfMessages
-            afterMessage:(DCMessage *)message
-{
+- (void)getNewerMessages:(int)numberOfMessages afterMessage:(DCMessage *)message {
     NSAssert([NSThread isMainThread],
              @"getNewerMessages:afterMessage: must be called on the main thread");
 
@@ -1796,11 +1905,26 @@ static dispatch_queue_t chat_messages_queue;
             if (cell.configuredLayout == layout && !isReplyTarget && !isEditTarget) {
                 cell.profileImage.image = messageAtRowIndex.author.profileImage;
 
+                DCGuild *guild =
+                    DCServerCommunicator.sharedInstance.selectedChannel.parentGuild;
+
+                if (!layout.grouped) {
+                    cell.authorLabel.text =
+                        [messageAtRowIndex.author displayNameInGuild:guild];
+                }
+
                 if (messageAtRowIndex.referencedMessage) {
                     cell.referencedProfileImage.image =
                         messageAtRowIndex.referencedMessage.author.profileImage;
+
+                    if (layout.hasReference) {
+                        cell.referencedAuthorLabel.text =
+                            [messageAtRowIndex.referencedMessage.author
+                                displayNameInGuild:guild];
+                    }
                 } else {
                     cell.referencedProfileImage.image = nil;
+                    cell.referencedAuthorLabel.text = nil;
                 }
 
                 NSUInteger attachIdx = 0;
@@ -2457,26 +2581,35 @@ static dispatch_queue_t chat_messages_queue;
 }
 
 - (void)scrollViewDidScroll:(UIScrollView *)scrollView {
-    // Newest is at offset 0 in the flipped table — that's "present time."
-    self.viewingPresentTime = (scrollView.contentOffset.y <= 10);
-
-    if (self.messages.count == 0) return;
-
-    // Older: approach the high-offset end (content bottom = oldest).
-    if (!self.loadingOlderMessages
-        && self.currentWindow.hasMoreBefore
-        && scrollView.contentOffset.y >= scrollView.contentSize.height - 2 * scrollView.height) {
-        self.loadingOlderMessages = YES;
-        [self getMessages:kProximityLoadBurst beforeMessage:[self.messages objectAtIndex:0]];
+    if (scrollView != self.chatTableView) {
+        return;
     }
 
-    // Newer: approach the low-offset end (content top = newest), only meaningful
-    // once the tail's been evicted (otherwise the tail is already live).
+    // Newest is at offset 0 in the flipped table.
+    self.viewingPresentTime = (scrollView.contentOffset.y <= 10);
+
+    if (self.messages.count == 0) {
+        return;
+    }
+
+    if (!self.loadingOlderMessages
+        && self.currentWindow.hasMoreBefore
+        && scrollView.contentOffset.y >=
+            scrollView.contentSize.height - 2 * scrollView.bounds.size.height) {
+
+        self.loadingOlderMessages = YES;
+        [self getMessages:kProximityLoadBurst
+            beforeMessage:self.messages.firstObject];
+    }
+
     if (!self.loadingNewerMessages
         && self.currentWindow.hasMoreAfter
-        && scrollView.contentOffset.y <= 2 * scrollView.height) {
+        && scrollView.contentOffset.y <=
+            2 * scrollView.bounds.size.height) {
+
         self.loadingNewerMessages = YES;
-        [self getNewerMessages:kProximityLoadBurst afterMessage:[self.messages lastObject]];
+        [self getNewerMessages:kProximityLoadBurst
+                  afterMessage:self.messages.lastObject];
     }
 }
 
@@ -2820,11 +2953,11 @@ static dispatch_queue_t chat_messages_queue;
                         completed:^(UIImage *image, NSError *error, SDImageCacheType cacheType, BOOL finished, NSURL *imageURL) {
                             dispatch_async(dispatch_get_main_queue(), ^{
                                 [UIApplication.sharedApplication setNetworkActivityIndicatorVisible:NO];
+                                if (image) {
+                                    self.selectedImage = image;
+                                    [self performSegueWithIdentifier:@"Chat to Gallery" sender:self];
+                                }
                             });
-                            if (image) {
-                                self.selectedImage = image;
-                                [self performSegueWithIdentifier:@"Chat to Gallery" sender:self];
-                            }
                         }];
 }
 

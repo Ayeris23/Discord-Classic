@@ -1358,11 +1358,15 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
 }
 
 + (DCGuild *)convertJsonGuild:(NSDictionary *)jsonGuild withMembers:(NSArray *)members {
-    DCGuild *newGuild  = DCGuild.new;
+    DCGuild *newGuild = DCGuild.new;
+
+    newGuild.snowflake = [jsonGuild objectForKey:@"id"];
+    newGuild.name = [jsonGuild objectForKey:@"name"];
+
     newGuild.userRoles = NSMutableArray.new;
-    newGuild.roles     = NSMutableDictionary.new;
-    newGuild.members   = NSMutableArray.new;
-    newGuild.emojis    = NSMutableDictionary.new;
+    newGuild.roles = NSMutableDictionary.new;
+    newGuild.members = NSMutableArray.new;
+    newGuild.emojis = NSMutableDictionary.new;
 
     // Get emojis
     for (NSDictionary *emoji in [jsonGuild objectForKey:@"emojis"]) {
@@ -1413,10 +1417,7 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
         }
     }
 
-    newGuild.name = [jsonGuild objectForKey:@"name"];
-
     // add new types here.
-    newGuild.snowflake = [jsonGuild objectForKey:@"id"];
     newGuild.channels  = NSMutableArray.new;
 
     NSNumber *longId = @([newGuild.snowflake longLongValue]);

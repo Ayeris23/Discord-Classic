@@ -3540,7 +3540,7 @@
 					/usr/include/libxml2,
 				);
 				INFOPLIST_FILE = Assets/Plists/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 5.1;
+				IPHONEOS_DEPLOYMENT_TARGET = 5.0;
 				ONLY_ACTIVE_ARCH = NO;
 				PRODUCT_NAME = discord;
 				SDKROOT = iphoneos7.1;
@@ -3573,7 +3573,7 @@
 					/usr/include/libxml2,
 				);
 				INFOPLIST_FILE = Assets/Plists/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 5.1;
+				IPHONEOS_DEPLOYMENT_TARGET = 5.0;
 				ONLY_ACTIVE_ARCH = NO;
 				"OTHER_LDFLAGS[arch=*]" = (
 					"-fobjc-arc",
