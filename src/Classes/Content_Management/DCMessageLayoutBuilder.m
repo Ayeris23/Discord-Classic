@@ -151,6 +151,7 @@
             showsAuthorName:(BOOL)showsAuthorName
                  textHeight:(CGFloat)textHeight
                  tableWidth:(CGFloat)tableWidth {
+    BOOL hasReference = message.messageType == DCMessageTypeReply;
     CGFloat contentWidth = tableWidth - 63;
 
     CGSize authorNameSize = CGSizeZero;
@@ -173,7 +174,7 @@
             (showsAuthorName ? authorNameSize.height : 0)
                 + (message.attachmentCount ? (hasVisibleContent ? contentSize.height : 0) : MAX(contentSize.height, 18))
                 + padding
-                + (message.referencedMessage != nil ? 16 : 0),
+                + (hasReference ? 16 : 0),
             (showsAuthorName ? authorNameSize.height : 0) + (hasVisibleContent ? [UIFont systemFontOfSize:14].lineHeight : 0) + padding
         );
     }

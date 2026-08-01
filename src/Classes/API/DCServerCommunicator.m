@@ -145,6 +145,18 @@ NSTimer *heartbeatTimer = nil;
         sharedInstance.token           = [[NSUserDefaults standardUserDefaults] stringForKey:@"token"];
         sharedInstance.currentUserInfo = nil;
 
+        NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
+        
+        [NSNotificationCenter.defaultCenter addObserver:sharedInstance
+                                               selector:@selector(handleBackgroundEntry)
+                                                   name:UIApplicationWillEnterForegroundNotification
+                                                 object:nil];
+
+        [NSNotificationCenter.defaultCenter addObserver:sharedInstance
+                                               selector:@selector(handleForegroundEntry)
+                                                   name:UIApplicationWillEnterForegroundNotification
+                                                 object:nil];
+
         if ([sharedInstance.token length] == 0) {
             return;
         }
@@ -164,10 +176,6 @@ NSTimer *heartbeatTimer = nil;
         } else {
             [sharedInstance showNonIntrusiveNotificationWithTitle:@"Connecting..."];
         }
-        [NSNotificationCenter.defaultCenter addObserver:sharedInstance
-                                               selector:@selector(handleForegroundEntry)
-                                                   name:UIApplicationWillEnterForegroundNotification
-                                                 object:nil];
     });
 
     return sharedInstance;
@@ -726,7 +734,6 @@ NSTimer *heartbeatTimer = nil;
     }
     // Persist guild/channel structure for cold-start cache
         [[DCCacheManager sharedInstance] saveGuilds:self.guilds];
-        [[DCCacheManager sharedInstance] saveGuilds:self.guilds];
         [[DCCacheManager sharedInstance] saveUserInfo:self.currentUserInfo];
 
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -1014,20 +1021,41 @@ NSTimer *heartbeatTimer = nil;
 
 - (void)handleHelloWithData:(NSDictionary *)d {
     __weak typeof(self) weakSelf = self;
-    int heartbeatInterval = [[d objectForKey:@"heartbeat_interval"] intValue];
-    if (!heartbeatTimer) {
-        float heartbeatSeconds = (float)heartbeatInterval / 1000;
-        float jitterHeartbeat  = heartbeatSeconds * (arc4random_uniform(1000) / 1000.0f);
-        self.gotHeartbeat      = false;
-        DBGLOG(@"Heartbeat is %f seconds, jitter is %f seconds", heartbeatSeconds, jitterHeartbeat);
-        dispatch_async(dispatch_get_main_queue(), ^{
-            heartbeatTimer = [NSTimer scheduledTimerWithTimeInterval:jitterHeartbeat
-                                                              target:self
-                                                            selector:@selector(jitterBeat:)
-                                                            userInfo:@{@"heartbeatInterval" : @(heartbeatSeconds)}
-                                                             repeats:NO];
-        });
-    };
+
+    NSTimeInterval heartbeatSeconds =
+        [[d objectForKey:@"heartbeat_interval"] doubleValue] /
+        1000.0;
+
+    self.heartbeatInterval = heartbeatSeconds;
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [heartbeatTimer invalidate];
+        heartbeatTimer = nil;
+
+        if (self.applicationSuspended) {
+            return;
+        }
+
+        NSTimeInterval jitter =
+            heartbeatSeconds *
+            (arc4random_uniform(1000) / 1000.0);
+
+        self.gotHeartbeat = NO;
+
+        DBGLOG(@"Heartbeat is %f seconds, jitter is %f seconds",
+               heartbeatSeconds,
+               jitter);
+
+        heartbeatTimer =
+            [NSTimer scheduledTimerWithTimeInterval:jitter
+                                             target:self
+                                           selector:@selector(jitterBeat:)
+                                           userInfo:@{
+                                               @"heartbeatInterval" :
+                                                   @(heartbeatSeconds)
+                                           }
+                                            repeats:NO];
+    });
     if (self.sequenceNumber && self.sessionId) {
         DBGLOG(@"Sending Resume with sequence number %li, session ID %@", (long)self.sequenceNumber, self.sessionId);
         // RESUME
@@ -1069,16 +1097,6 @@ NSTimer *heartbeatTimer = nil;
             self.loadedUsers  = NSMutableDictionary.new;
             self.loadedRoles  = NSMutableDictionary.new;
             self.loadedEmojis = NSMutableDictionary.new;
-        });
-        self.gotHeartbeat                                                 = true;
-        [UIApplication sharedApplication].networkActivityIndicatorVisible = NO;
-        // Reenable ability to identify in 5 seconds
-        dispatch_async(dispatch_get_main_queue(), ^{
-            self.cooldownTimer = [NSTimer scheduledTimerWithTimeInterval:5
-                                                                  target:self
-                                                                selector:@selector(refreshcanIdentify:)
-                                                                userInfo:nil
-                                                                 repeats:NO];
         });
     }
 }
@@ -1138,6 +1156,10 @@ NSTimer *heartbeatTimer = nil;
         dispatch_async(dispatch_get_main_queue(), ^{
             [self.alertView dismissWithClickedButtonIndex:0 animated:YES];
             [self dismissNotification];
+
+            [NSNotificationCenter.defaultCenter
+                postNotificationName:@"CONNECTION_RESTORED"
+                              object:self];
         });
         return;
     } else if ([t isEqualToString:MESSAGE_CREATE]) {
@@ -1250,34 +1272,88 @@ NSTimer *heartbeatTimer = nil;
     }
 }
 
+- (void)handleBackgroundEntry {
+    self.applicationSuspended = YES;
+
+    /*
+     * Invalidate any delayed reconnect block. It will check this
+     * generation before starting a replacement socket.
+     */
+    self.reconnectGeneration++;
+
+    if (self.isReconnecting) {
+        self.isReconnecting = NO;
+        self.reconnectPendingAfterForeground = YES;
+    }
+
+    [self stopHeartbeatTimer];
+
+    DBGLOG(@"[Background] Heartbeat and reconnect work suspended");
+}
+
 - (void)handleForegroundEntry {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        if (!self.didAuthenticate || !self.websocket) {
-            return;
-        }
+    self.applicationSuspended = NO;
 
-        DBGLOG(@"[Foreground] Sending probe heartbeat");
-        [self sendHeartbeat:nil];
+    BOOL definitelyNeedsReconnect =
+        self.reconnectPendingAfterForeground ||
+        !self.websocket ||
+        !self.didAuthenticate;
 
-        NSDate *probeTime = [NSDate date];
+    self.reconnectPendingAfterForeground = NO;
 
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{
-            if (!self.didAuthenticate) {
+    if (definitelyNeedsReconnect) {
+        DBGLOG(@"[Foreground] Connection unavailable — reconnecting");
+        [self reconnect];
+        return;
+    }
+
+    /*
+     * Do not call sendHeartbeat: here. That method contains the normal
+     * periodic missing-ACK watchdog and may reconnect based on stale
+     * pre-suspension state.
+     */
+    NSDate *probeTime = [NSDate date];
+    self.gotHeartbeat = NO;
+
+    DBGLOG(@"[Foreground] Sending direct probe heartbeat");
+
+    [self sendJSON:@{
+        @"op" : @(DCGatewayOpCodeHeartbeat),
+        @"d"  : @(self.sequenceNumber)
+    }];
+
+    dispatch_after(
+        dispatch_time(DISPATCH_TIME_NOW,
+                      (int64_t)(5.0 * NSEC_PER_SEC)),
+        dispatch_get_main_queue(),
+        ^{
+            /*
+             * User may have backgrounded the app again while the
+             * probe was outstanding.
+             */
+            if (self.applicationSuspended) {
                 return;
             }
-            BOOL ackReceived = self.lastHeartbeatAckDate &&
-                               [self.lastHeartbeatAckDate timeIntervalSinceDate:probeTime] > 0;
+
+            BOOL ackReceived =
+                self.lastHeartbeatAckDate &&
+                [self.lastHeartbeatAckDate
+                    timeIntervalSinceDate:probeTime] > 0.0;
+
             if (!ackReceived) {
-                DBGLOG(@"[Foreground] No heartbeat ACK after probe — reconnecting");
+                DBGLOG(@"[Foreground] Probe timed out — reconnecting");
                 [self reconnect];
-            } else {
-                DBGLOG(@"[Foreground] Connection confirmed live");
-                [NSNotificationCenter.defaultCenter postNotificationName:@"CONNECTION_RESTORED"
-                                                                  object:nil];
+                return;
             }
+
+            DBGLOG(@"[Foreground] Existing connection is healthy");
+
+            [self restartHeartbeatTimerAfterProbe];
+
+            [NSNotificationCenter.defaultCenter
+                postNotificationName:@"CONNECTION_RESTORED"
+                              object:nil];
         });
-    });
 }
 
 #pragma mark - WebSocket Handlers
@@ -1285,29 +1361,33 @@ NSTimer *heartbeatTimer = nil;
 - (void)startCommunicator {
     DBGLOG(@"Starting communicator!");
 
+    if (self.token == nil) {
+        DBGLOG(@"No token set, cannot start communicator");
+        return;
+    }
+
+    if (self.websocket) {
+        DBGLOG(@"Websocket already open, not doing anything");
+        return;
+    }
+
     [self initInflateStream];
     [self.alertView show];
     self.didAuthenticate = false;
     self.oldMode         = [[NSUserDefaults standardUserDefaults] boolForKey:@"hackyMode"];
 
     // Dev
-    [DCTools checkForAppUpdate];
+    // [DCTools checkForAppUpdate];
     // Devend
 
-    if (self.token == nil) {
-        DBGLOG(@"No token set, cannot start communicator");
-        return;
-    }
+    
 
     DBGLOG(@"Start websocket");
 
     // To prevent retain cycle
     __weak typeof(self) weakSelf = self;
 
-    if (self.websocket) {
-        DBGLOG(@"Websocket already open, not doing anything");
-        return;
-    }
+    
     // Establish websocket connection with Discord
     NSURL *websocketUrl = [NSURL URLWithString:self.gatewayURL];
     WSWebSocket *thisSocket = [[WSWebSocket alloc] initWithURL:websocketUrl protocols:nil];
@@ -1326,14 +1406,7 @@ NSTimer *heartbeatTimer = nil;
         } else if (statusCode == 2) {
             // kCFErrorDomainCFNetwork error 2 => DNS failure, likely not connected to the internet
             DBGLOG(@"DNS failure, likely not connected to the internet");
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [weakSelf.alertView setTitle:@"Waiting for connection..."];
-                [NSTimer scheduledTimerWithTimeInterval:5
-                                                 target:weakSelf
-                                               selector:@selector(reconnect)
-                                               userInfo:nil
-                                                repeats:NO];
-            });
+            [weakSelf reconnect];
         } else if (statusCode == 4004) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 [weakSelf performLogout];
@@ -1343,30 +1416,11 @@ NSTimer *heartbeatTimer = nil;
             [weakSelf reconnect];
         }
     };
-    // self.websocket.dataCallback = ^(NSData *data) {
-    //     #ifdef DEBUG
-    //         NSLog(@"Got data: %@", data);
-    //     #endif
-    // };
-    // self.websocket.pongCallback = ^(void) {
-    //     #ifdef DEBUG
-    //         NSLog(@"Got pong");
-    //     #endif
-    // };
-    // self.websocket.responseCallback = ^(NSHTTPURLResponse *response, NSData *data) {
-    //     #ifdef DEBUG
-    //         NSLog(@"Got response: %@", response);
-    //     #endif
-    //     // Check if the response is a 401 Unauthorized
-    //     if (response.statusCode == 401) {
-    //         DBGLOG(@"Unauthorized, closing websocket");
-    //         [weakSelf.websocket close];
-    //         weakSelf.websocket = nil;
-    //         [DCTools alert:@"Unauthorized" withMessage:@"Your Discord token is invalid. Please re-authenticate."];
-    //         return;
-    //     }
-    // };
     thisSocket.dataCallback = ^(NSData *data) {
+        if (weakSelf.websocket != thisSocket) {
+            DBGLOG(@"Ignoring data from stale WebSocket");
+            return;
+        }
         NSString *responseString = [weakSelf inflateGatewayData:data];
         if (!responseString) return; // incomplete message, waiting for more frames
 
@@ -1390,21 +1444,38 @@ NSTimer *heartbeatTimer = nil;
                         @"op" : @(DCGatewayOpCodeHeartbeat),
                         @"d" : @(weakSelf.sequenceNumber)
                     }];
+                    break;
                     // fallthrough to HEARTBEAT_ACK
                 }
                 case DCGatewayOpCodeHeartbeatAck: {
-#ifdef DEBUG
+                #ifdef DEBUG
+                if (heartbeatTimer && heartbeatTimer.fireDate) {
                     NSDate *now = [NSDate date];
-                    NSDate *nextFireDate = heartbeatTimer.fireDate;
-                    NSTimeInterval interval = heartbeatTimer.timeInterval;
-                    NSDate *previousFireDate = [nextFireDate dateByAddingTimeInterval:-interval];
-                    DBGLOG(@"Got heartbeat ack in %f seconds!", [now timeIntervalSinceDate:previousFireDate]);
-#endif
+                    NSDate *previousFireDate =
+                        [heartbeatTimer.fireDate
+                            dateByAddingTimeInterval:
+                                -heartbeatTimer.timeInterval];
+
+                    DBGLOG(@"Got heartbeat ack in %f seconds!",
+                           [now timeIntervalSinceDate:previousFireDate]);
+                } else {
+                    DBGLOG(@"Got heartbeat ACK");
+                }
+                #endif
                     weakSelf.gotHeartbeat = true;
                     weakSelf.lastHeartbeatAckDate = [NSDate date];
                     dispatch_async(dispatch_get_main_queue(), ^{
                         [UIApplication sharedApplication].networkActivityIndicatorVisible = NO;
                     });
+                    if (weakSelf.didAuthenticate && weakSelf.guilds.count > 0) {
+                        DCCacheManager *cache = [DCCacheManager sharedInstance];
+                        [cache saveGuilds:weakSelf.guilds];
+                        [cache saveUserInfo:weakSelf.currentUserInfo];
+                        if (weakSelf.cachedDisplayLayout.count > 0) {
+                            [cache saveDisplayLayout:weakSelf.cachedDisplayLayout];
+                        }
+                        DBGLOG(@"[HeartbeatACK] Flushed cold-start cache");
+                    }
                     break;
                 }
                 case DCGatewayOpCodeReconnect: {
@@ -1461,12 +1532,20 @@ NSTimer *heartbeatTimer = nil;
 - (void)reconnect {
     // Always marshal to main queue to serialize all reconnect logic
     dispatch_async(dispatch_get_main_queue(), ^{
+        if (self.applicationSuspended) {
+            DBGLOG(@"Reconnect requested while suspended — deferring");
+
+            self.reconnectPendingAfterForeground = YES;
+            return;
+        }
         // Reentrance guard — drop duplicate calls while one is already queued
         if (self.isReconnecting) {
             DBGLOG(@"Reconnect already in progress, ignoring duplicate call");
             return;
         }
         self.isReconnecting = YES;
+
+        NSUInteger reconnectGeneration = ++self.reconnectGeneration;
 
         // Tear down existing connection cleanly
         [heartbeatTimer invalidate];
@@ -1502,10 +1581,28 @@ NSTimer *heartbeatTimer = nil;
 
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
-            self.isReconnecting = NO;
-            // Double-check we haven't been asked to stop (e.g. logout)
-            if (!self.token) return;
-            [self startCommunicator];
+                /*
+                 * A background transition, newer reconnect, or logout may have
+                 * invalidated this attempt.
+                 */
+                if (reconnectGeneration != self.reconnectGeneration) {
+                    DBGLOG(@"Discarding stale reconnect attempt");
+                    return;
+                }
+
+                if (self.applicationSuspended) {
+                    self.isReconnecting = NO;
+                    self.reconnectPendingAfterForeground = YES;
+                    return;
+                }
+
+                self.isReconnecting = NO;
+
+                if (!self.token) {
+                    return;
+                }
+
+                [self startCommunicator];
         });
     });
 }
@@ -1545,6 +1642,38 @@ NSTimer *heartbeatTimer = nil;
         @"d" : @(self.sequenceNumber)
     }];
     DBGLOG(@"Sent heartbeat");
+}
+
+- (void)stopHeartbeatTimer {
+    NSAssert([NSThread isMainThread],
+             @"Heartbeat timer must be managed on the main thread");
+
+    [heartbeatTimer invalidate];
+    heartbeatTimer = nil;
+}
+
+- (void)restartHeartbeatTimerAfterProbe {
+    NSAssert([NSThread isMainThread],
+             @"Heartbeat timer must be managed on the main thread");
+
+    [heartbeatTimer invalidate];
+    heartbeatTimer = nil;
+
+    if (self.heartbeatInterval <= 0.0 || self.applicationSuspended || !self.didAuthenticate) {
+        return;
+    }
+
+    /*
+     * The foreground probe was acknowledged, so the next timer firing
+     * is allowed to send a new heartbeat.
+     */
+    self.gotHeartbeat = YES;
+
+    heartbeatTimer = [NSTimer scheduledTimerWithTimeInterval:self.heartbeatInterval
+                                                      target:self
+                                                    selector:@selector(sendHeartbeat:)
+                                                    userInfo:nil
+                                                     repeats:YES];
 }
 
 // Once the 5 second identify cooldown is over

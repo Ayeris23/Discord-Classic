@@ -309,9 +309,19 @@ didFailToRegisterForRemoteNotificationsWithError:(NSError *)error {
 
 
 - (void)applicationDidEnterBackground:(UIApplication *)application {
-    // NSLog(@"Did enter background");
     [[NSUserDefaults standardUserDefaults] synchronize];
     self.shouldReload = DCServerCommunicator.sharedInstance.didAuthenticate;
+    // Flush cold-start cache so it reflects current state if the app is killed.
+    if (DCServerCommunicator.sharedInstance.didAuthenticate
+        && DCServerCommunicator.sharedInstance.guilds.count > 0) {
+        DCCacheManager *cache = [DCCacheManager sharedInstance];
+        [cache saveGuilds:DCServerCommunicator.sharedInstance.guilds];
+        [cache saveUserInfo:DCServerCommunicator.sharedInstance.currentUserInfo];
+        NSArray *layout = DCServerCommunicator.sharedInstance.cachedDisplayLayout;
+        if (layout.count > 0) {
+            [cache saveDisplayLayout:layout];
+        }
+    }
 }
 
 

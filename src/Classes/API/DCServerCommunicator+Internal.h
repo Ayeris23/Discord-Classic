@@ -11,6 +11,10 @@
 @property (strong, nonatomic) UIView *notificationView;
 @property (assign, nonatomic) BOOL gotHeartbeat;
 @property (assign, nonatomic) BOOL heartbeatDefined;
+@property (assign, nonatomic) BOOL applicationSuspended;
+@property (assign, nonatomic) BOOL reconnectPendingAfterForeground;
+@property (assign, nonatomic) NSUInteger reconnectGeneration;
+@property (assign, nonatomic) NSTimeInterval heartbeatInterval;
 
 @property (assign, nonatomic) BOOL canIdentify;
 

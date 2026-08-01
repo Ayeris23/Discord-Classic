@@ -57,6 +57,13 @@ typedef NS_ENUM(NSInteger, DCMessageReferenceType) {
     DCMessageReferenceTypeForward = 1, // + message_snapshot
 };
 
+typedef NS_ENUM(NSInteger, DCMessageReferenceState) {
+    DCMessageReferenceStateNone = 0,
+    DCMessageReferenceStateResolved,
+    DCMessageReferenceStateDeleted,
+    DCMessageReferenceStateUnavailable
+};
+
 @interface DCMessage : NSObject
 @property (strong, nonatomic) DCSnowflake* snowflake;
 @property (strong, nonatomic) DCUser* author;
@@ -75,6 +82,7 @@ typedef NS_ENUM(NSInteger, DCMessageReferenceType) {
 @property (strong, nonatomic) NSString* preDefinedContent;
 @property (assign, nonatomic) NSInteger messageType;
 @property (strong, nonatomic) DCMessage* referencedMessage;
+@property (assign, nonatomic) DCMessageReferenceState referencedMessageState;
 @property (strong, nonatomic) NSMutableArray* emojis;
 @property (assign, nonatomic) BOOL isSticker;
 

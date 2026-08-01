@@ -247,6 +247,10 @@ static dispatch_queue_t chat_messages_queue;
                                                name:@"CONNECTION_RESTORED"
                                              object:nil];
     [NSNotificationCenter.defaultCenter addObserver:self
+                                           selector:@selector(handleForwardReconcile)
+                                               name:@"BACKGROUND_RECONNECT"
+                                             object:nil];
+    [NSNotificationCenter.defaultCenter addObserver:self
                                            selector:@selector(handleGuildMemberListUpdated:)
                                                name:@"GuildMemberListUpdated"
                                              object:nil];
@@ -825,11 +829,15 @@ static dispatch_queue_t chat_messages_queue;
         if (!cell) {
             // Cell is off-screen — clear configuredSnowflake so it 
             // reconfigures correctly when it scrolls back into view
-            [[DCCacheManager sharedInstance] invalidateSnowflake:message.snowflake];
+            // [[DCCacheManager sharedInstance] invalidateSnowflake:message.snowflake];
             continue;
         }
         if (authorMatches) {
+            message.author.profileImage = user.profileImage;
+            message.author.rawProfileImage = user.rawProfileImage;
+
             cell.profileImage.image = user.profileImage;
+
             DCMessageLayout *layout = [self layoutForModelIndex:i];
             if (!layout.grouped) {
                 NSString *displayName = [user displayNameInGuild:
@@ -840,6 +848,10 @@ static dispatch_queue_t chat_messages_queue;
             }
         }
         if (refAuthorMatches) {
+            message.referencedMessage.author.profileImage = user.profileImage;
+
+            message.referencedMessage.author.rawProfileImage = user.rawProfileImage;
+
             cell.referencedProfileImage.image = user.profileImage;
         }
     }
@@ -1153,6 +1165,9 @@ static dispatch_queue_t chat_messages_queue;
     newMessage.prettyTimestamp   = compareMessage.prettyTimestamp;
     newMessage.referencedMessage = compareMessage.referencedMessage;
 
+    newMessage.referencedMessage = compareMessage.referencedMessage;
+    newMessage.referencedMessageState = compareMessage.referencedMessageState;
+
     NSInteger rowCount = [self.chatTableView numberOfRowsInSection:0];
     NSUInteger idx     = [self.messages indexOfObject:compareMessage];
     if (rowCount != self.messages.count) {
@@ -1198,6 +1213,26 @@ static dispatch_queue_t chat_messages_queue;
         return;
     }
 
+    NSString *deletedID = [notification.userInfo objectForKey:@"id"];
+
+    NSMutableArray *affectedReplies = [NSMutableArray array];
+
+    for (DCMessage *candidate in self.messages) {
+        if ([candidate.referencedMessage.snowflake isEqualToString:deletedID]) {
+
+            candidate.referencedMessageState = DCMessageReferenceStateDeleted;
+
+            candidate.referencedMessage.content = @"Message deleted";
+
+            candidate.referencedMessage.author = nil;
+            candidate.referencedMessage.authorNameWidth = 80.0f;
+
+            [[DCCacheManager sharedInstance] invalidateSnowflake:candidate.snowflake];
+
+            [affectedReplies addObject:candidate];
+        }
+    }
+
     NSInteger rowCount = [self.chatTableView numberOfRowsInSection:0];
     if (rowCount != self.messages.count) {
         NSLog(@"%s: Row count mismatch! Expected %ld but got %ld", __PRETTY_FUNCTION__, (long)self.messages.count, (long)rowCount);
@@ -1210,6 +1245,22 @@ static dispatch_queue_t chat_messages_queue;
         [self.chatTableView deleteRowsAtIndexPaths:@[ indexPath ] withRowAnimation:UITableViewRowAnimationAutomatic];
         [self.chatTableView endUpdates];
     }
+
+    NSMutableArray *replyPaths = [NSMutableArray array];
+
+    for (DCMessage *reply in affectedReplies) {
+        NSUInteger replyIndex = [self.messages indexOfObjectIdenticalTo:reply];
+
+        if (replyIndex == NSNotFound) {
+            continue;
+        }
+
+        [replyPaths addObject:[NSIndexPath indexPathForRow:[self rowForModelIndex:replyIndex]inSection:0]];
+    }
+
+    if (replyPaths.count) {
+        [self.chatTableView reloadRowsAtIndexPaths:replyPaths withRowAnimation:UITableViewRowAnimationNone];
+    }
 }
 
 - (void)handleTyping:(NSNotification *)notification {
@@ -1219,13 +1270,7 @@ static dispatch_queue_t chat_messages_queue;
         });
         return;
     }
-    if (![self isViewLoaded] ||
-        self.view.window == nil ||
-        !self.typingIndicatorView) {
-        return;
-    }
-
-    if (!self.typingIndicatorView) {
+    if (![self isViewLoaded] || self.view.window == nil || !self.typingIndicatorView) {
         DBGLOG(@"%s: Typing indicator view is not initialized", __PRETTY_FUNCTION__);
         return;
     }
@@ -2051,6 +2096,16 @@ static dispatch_queue_t chat_messages_queue;
     self.loadingOlderMessages = NO;
 }
 
+- (void)ensureAvatarForUser:(DCUser *)user {
+    if (!user || !user.snowflake.length) {
+        return;
+    }
+
+    if (!user.profileImage) {
+        [DCTools getUserAvatar:user];
+    }
+}
+
 - (UITableViewCell *)tableView:(UITableView *)tableView
          cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     DCChatTableCell *cell;
@@ -2315,7 +2370,28 @@ static dispatch_queue_t chat_messages_queue;
                 self.editingMessage &&
                 [self.editingMessage.snowflake isEqualToString:messageAtRowIndex.snowflake];
 
-            if (sameMessage && sameLayout && !isReplyTarget && !isEditTarget) {
+            // Make the cells append avatars themselves
+            [self ensureAvatarForUser:messageAtRowIndex.author];
+
+            DCMessage *reference = messageAtRowIndex.referencedMessage;
+
+            BOOL referenceResolved = reference && reference.author &&
+                (messageAtRowIndex.referencedMessageState ==
+                    DCMessageReferenceStateResolved ||
+                 messageAtRowIndex.referencedMessageState ==
+                    DCMessageReferenceStateNone);
+
+            if (reference.author) {
+                [self ensureAvatarForUser:reference.author];
+            }
+
+            /*
+             * Fast path:
+             * If this reusable cell is already configured for this exact message and
+             * layout, refresh lightweight volatile fields only and skip the expensive
+             * markdown/layout/image attachment rebuild.
+             */
+            if (sameMessage && sameLayout && !layout.hasReference && !isReplyTarget && !isEditTarget) {
                 cell.profileImage.image = messageAtRowIndex.author.profileImage;
 
                 DCGuild *guild =
@@ -2397,40 +2473,79 @@ static dispatch_queue_t chat_messages_queue;
             [cell.referencedMessage removeAllCustomViewsForLinks];
 
             if (layout.hasReference) {
-                cell.referencedAuthorLabel.text = [messageAtRowIndex.referencedMessage.author 
-                    displayNameInGuild:DCServerCommunicator.sharedInstance.selectedChannel.parentGuild];
-                
-                NSAttributedString *referencedContent = [[DCMarkdownParser sharedParser]
-                    attributedStringFromMarkdown:messageAtRowIndex.referencedMessage.content
-                                     maxFontSize:10.0f
-                                           color:[UIColor colorWithRed:128/255.0f
-                                                                green:128/255.0f
-                                                                 blue:128/255.0f
-                                                                alpha:1.0f]];
-                cell.referencedMessage.attributedString = referencedContent;
-                
-                cell.referencedMessage.frame = CGRectMake(
-                    messageAtRowIndex.referencedMessage.authorNameWidth,
-                    cell.referencedMessage.y,
-                    self.chatTableView.width - messageAtRowIndex.referencedMessage.authorNameWidth,
-                    cell.referencedMessage.height
-                );
-                if (messageAtRowIndex.referencedMessage
-                    && cell.referencedProfileImage.image != messageAtRowIndex.referencedMessage.author.profileImage) {
-                    cell.referencedProfileImage.image = messageAtRowIndex.referencedMessage.author.profileImage;
+                NSString *referenceText = nil;
+                NSString *referenceAuthorName = @"";
+                CGFloat referenceAuthorWidth = 80.0f;
+
+                if (messageAtRowIndex.referencedMessageState == DCMessageReferenceStateDeleted) {
+
+                    referenceText = @"Message deleted";
+
+                } else if (!referenceResolved) {
+
+                    referenceText = @"Unable to load message";
+
+                } else {
+                    referenceText = reference.content.length ? reference.content : @"Unable to load message";
+
+                    referenceAuthorName = [reference.author displayNameInGuild:DCServerCommunicator.sharedInstance.selectedChannel.parentGuild] ?: @"";
+
+                    CGSize nameSize = [referenceAuthorName sizeWithFont: [UIFont boldSystemFontOfSize:10.0f]];
+
+                    referenceAuthorWidth = 80.0f + nameSize.width;
+
+                    CGFloat maximumAuthorWidth = MAX(80.0f, self.chatTableView.width - 80.0f);
+
+                    referenceAuthorWidth = MIN(referenceAuthorWidth, maximumAuthorWidth);
                 }
-                UIButton *referencedMessageButton = [UIButton buttonWithType:UIButtonTypeCustom];
-                referencedMessageButton.frame = CGRectMake(
-                    cell.referencedProfileImage.x, 
-                    cell.referencedMessage.y, 
-                    cell.referencedMessage.x + cell.referencedMessage.width - cell.referencedProfileImage.x, 
-                    cell.referencedMessage.height
-                );
-                referencedMessageButton.exclusiveTouch = YES;
-                [referencedMessageButton addTarget:self
-                                             action:@selector(tappedReferencedMessage:)
-                                      forControlEvents:UIControlEventTouchUpInside];
-                [cell addSubview:referencedMessageButton];
+
+                cell.referencedAuthorLabel.text = referenceAuthorName;
+
+                cell.referencedProfileImage.image = referenceResolved ? reference.author.profileImage : nil;
+
+                NSAttributedString *referencedContent =
+                    [[DCMarkdownParser sharedParser]
+                        attributedStringFromMarkdown:referenceText
+                                         maxFontSize:10.0f
+                                               color:
+                            [UIColor colorWithRed:128/255.0f
+                                            green:128/255.0f
+                                             blue:128/255.0f
+                                            alpha:1.0f]];
+
+                cell.referencedMessage.attributedString = referencedContent;
+
+                CGFloat referenceWidth = MAX(0.0f, self.chatTableView.width - referenceAuthorWidth);
+
+                cell.referencedMessage.frame =
+                    CGRectMake(referenceAuthorWidth,
+                               cell.referencedMessage.y,
+                               referenceWidth,
+                               cell.referencedMessage.height);
+
+                /*
+                 * Deleted and unavailable references should not behave like
+                 * navigable messages.
+                 */
+                if (referenceResolved && reference.snowflake.length) {
+
+                    UIButton *referencedMessageButton = [UIButton buttonWithType: UIButtonTypeCustom];
+
+                    referencedMessageButton.frame =
+                        CGRectMake(
+                            cell.referencedProfileImage.x,
+                            cell.referencedMessage.y,
+                            cell.referencedMessage.x +
+                                cell.referencedMessage.width -
+                                cell.referencedProfileImage.x,
+                            cell.referencedMessage.height);
+
+                    referencedMessageButton.exclusiveTouch = YES;
+
+                    [referencedMessageButton addTarget:self action: @selector(tappedReferencedMessage:) forControlEvents: UIControlEventTouchUpInside];
+
+                    [cell addSubview: referencedMessageButton];
+                }
             }
 
             if (!layout.grouped) {
@@ -3531,6 +3646,13 @@ static dispatch_queue_t chat_messages_queue;
         DBGLOG(@"Tapped referenced message, but referencedMessage is nil!");
         return;
     }
+
+    if (messageAtRowIndex.referencedMessageState !=
+            DCMessageReferenceStateResolved ||
+        !messageAtRowIndex.referencedMessage.snowflake.length) {
+        return;
+    }
+
     // scroll to referenced message
     NSUInteger referencedMessageIndex = [self.messages indexOfObjectPassingTest:^BOOL(DCMessage *obj, NSUInteger idx, BOOL *stop) {
         return [obj.snowflake isEqualToString:messageAtRowIndex.referencedMessage.snowflake];

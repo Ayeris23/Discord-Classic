@@ -280,6 +280,32 @@ typedef enum {
     }
 }
 
+- (void)threadedForceClose {
+    if (state == WSWebSocketStateClosed) {
+        return;
+    }
+
+    statusCode = 1000;
+    closingReason = nil;
+
+    [self closeConnection];
+
+    CFRunLoopStop(CFRunLoopGetCurrent());
+}
+
+- (void)forceClose {
+    if (!wsThread ||
+        state == WSWebSocketStateNone ||
+        state == WSWebSocketStateClosed) {
+        return;
+    }
+
+    [self performSelector:@selector(threadedForceClose)
+                 onThread:wsThread
+               withObject:nil
+            waitUntilDone:NO];
+}
+
 
 #pragma mark - Receive data
 

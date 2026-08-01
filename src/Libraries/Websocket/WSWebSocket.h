@@ -65,6 +65,12 @@
 - (void)close;
 
 /**
+ Immediately closes the underlying streams without waiting for
+ a WebSocket close handshake.
+ */
+- (void)forceClose;
+
+/**
  Sends the given data.
  @param data The data to be sent
  */

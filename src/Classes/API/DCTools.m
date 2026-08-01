@@ -384,45 +384,114 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
         // load referenced message if it exists
         float contentWidth = UIScreen.mainScreen.bounds.size.width - 63;
 
-        NSDictionary *referencedJsonMessage =
-            [jsonMessage objectForKey:@"referenced_message"];
-        if ([[jsonMessage objectForKey:@"referenced_message"]
+        id rawType = [jsonMessage objectForKey:@"type"];
+
+        if ([rawType respondsToSelector:@selector(integerValue)]) {
+            newMessage.messageType = [rawType integerValue];
+        } else {
+            newMessage.messageType = DCMessageTypeDefault;
+        }
+        
+        BOOL isReply = newMessage.messageType == DCMessageTypeReply;
+
+        NSDictionary *referenceMetadata = nil;
+        id rawReferenceMetadata = [jsonMessage objectForKey:@"message_reference"];
+
+        if ([rawReferenceMetadata
                 isKindOfClass:[NSDictionary class]]) {
-            DCMessage *referencedMessage = DCMessage.new;
+            referenceMetadata = rawReferenceMetadata;
+        }
 
-            NSString *referencedAuthorId =
-                [jsonMessage valueForKeyPath:@"referenced_message.author.id"];
+        id rawReferencedMessage = [jsonMessage objectForKey:@"referenced_message"];
 
-            DCUser *referencedAuthor = [DCServerCommunicator.sharedInstance userForSnowflake:referencedAuthorId];
-            if (!referencedAuthor && referencedAuthorId) {
-                referencedAuthor = [DCTools convertJsonUser:[jsonMessage valueForKeyPath:@"referenced_message.author"] cache:YES];
+        NSString *referenceID = nil;
+
+        if ([rawReferencedMessage
+                isKindOfClass:[NSDictionary class]]) {
+            referenceID = [(NSDictionary *)rawReferencedMessage objectForKey:@"id"];
+        }
+
+        if (!referenceID.length) {
+            id metadataID =
+                [referenceMetadata objectForKey:@"message_id"];
+
+            if ([metadataID isKindOfClass:[NSString class]]) {
+                referenceID = metadataID;
             }
+        }
 
-            referencedMessage.author = referencedAuthor;
-            if ([[referencedJsonMessage objectForKey:@"content"]
-                    isKindOfClass:[NSString class]]) {
-                referencedMessage.content =
-                    [referencedJsonMessage objectForKey:@"content"];
-                if ([referencedMessage.content isEqualToString:@""]) {
-                    referencedMessage.content = @"Click to view attachment";
+        if (isReply) {
+            DCMessage *reference = [DCMessage new];
+            reference.snowflake = referenceID;
+            reference.authorNameWidth = 80.0f;
+
+            if ([rawReferencedMessage
+                    isKindOfClass:[NSDictionary class]]) {
+
+                NSDictionary *referenceJSON =
+                    rawReferencedMessage;
+
+                NSDictionary *authorJSON =
+                    [referenceJSON objectForKey:@"author"];
+
+                NSString *authorID = nil;
+
+                if ([authorJSON
+                        isKindOfClass:[NSDictionary class]]) {
+                    id rawAuthorID = [authorJSON objectForKey:@"id"];
+
+                    if ([rawAuthorID
+                            isKindOfClass:[NSString class]]) {
+                        authorID = rawAuthorID;
+                    }
                 }
-            } else {
-                referencedMessage.content = @"";
-            }
-            referencedMessage.messageType     = [[referencedJsonMessage objectForKey:@"type"] intValue];
-            referencedMessage.snowflake       = [referencedJsonMessage objectForKey:@"id"];
-            CGSize authorNameSize             = [[referencedMessage.author 
-                displayNameInGuild:DCServerCommunicator.sharedInstance.selectedChannel.parentGuild]
-                     sizeWithFont:[UIFont boldSystemFontOfSize:10]
-                constrainedToSize:CGSizeMake(contentWidth, MAXFLOAT)
-                    lineBreakMode:(NSLineBreakMode)UILineBreakModeWordWrap];
-            referencedMessage.authorNameWidth = 80 + authorNameSize.width;
 
-            newMessage.referencedMessage = referencedMessage;
+                DCUser *referenceAuthor = nil;
+
+                if (authorID.length) {
+                    referenceAuthor = [DCServerCommunicator.sharedInstance userForSnowflake:authorID];
+
+                    if (!referenceAuthor) {
+                        referenceAuthor = [DCTools convertJsonUser:authorJSON cache:YES];
+                    }
+                }
+
+                NSString *content = [referenceJSON objectForKey:@"content"];
+
+                if (![content isKindOfClass:[NSString class]]) {
+                    content = nil;
+                }
+
+                if (referenceAuthor && referenceID.length) {
+                    reference.author = referenceAuthor;
+
+                    if (content.length) {
+                        reference.content = content;
+                    } else {
+                        reference.content = @"Click to view attachment";
+                    }
+
+                    newMessage.referencedMessageState = DCMessageReferenceStateResolved;
+                } else {
+                    reference.content = @"Unable to load message";
+
+                    newMessage.referencedMessageState = DCMessageReferenceStateUnavailable;
+                }
+            } else if (rawReferencedMessage ==
+                       [NSNull null]) {
+                reference.content = @"Message deleted";
+
+                newMessage.referencedMessageState = DCMessageReferenceStateDeleted;
+            } else {
+                reference.content = @"Unable to load message";
+
+                newMessage.referencedMessageState = DCMessageReferenceStateUnavailable;
+            }
+
+            newMessage.referencedMessage = reference;
         }
 
         newMessage.author          = authorUser;
-        newMessage.messageType     = [[jsonMessage objectForKey:@"type"] intValue];
         newMessage.content         = [jsonMessage objectForKey:@"content"];
         newMessage.rawContent      = newMessage.content;
         newMessage.snowflake       = [jsonMessage objectForKey:@"id"];
