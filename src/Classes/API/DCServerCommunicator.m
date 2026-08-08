@@ -38,6 +38,13 @@ NSTimer *heartbeatTimer = nil;
  * Keep this helper Foundation-only so it remains compatible with iOS 5/6
  * (NSURLComponents is too new for our deployment target).
  */
+
+static BOOL DCChannelTypeAppearsInGuildList(DCChannelType type) {
+    return type == DCChannelTypeGuildText
+        || type == DCChannelTypeGuildAnnouncement
+        || type == DCChannelTypeGuildCategory;
+}
+
 static NSString *DCConfiguredGatewayURL(NSString *urlString) {
     if ([urlString length] == 0) {
         return nil;
@@ -460,7 +467,8 @@ static NSString *DCConfiguredGatewayURL(NSString *urlString) {
             // this may actually suck
             // NSLog(@"%@", privateChannel);
             DCChannel *newChannel    = DCChannel.new;
-            newChannel.parentID      = [privateChannel objectForKey:@"parent_id"];
+            id privateParentID       = [privateChannel objectForKey:@"parent_id"];
+            newChannel.parentID      = [privateParentID isKindOfClass:[NSString class]] ? privateParentID : nil;
             newChannel.snowflake     = [privateChannel objectForKey:@"id"];
             newChannel.lastMessageId = [privateChannel objectForKey:@"last_message_id"];
             newChannel.parentGuild   = privateGuild;
@@ -913,24 +921,372 @@ static NSString *DCConfiguredGatewayURL(NSString *urlString) {
     }
 }
 
-- (void)handleChannelCreateWithData:(NSDictionary *)d {
-    DCChannel *newChannel = DCChannel.new;
-    newChannel.snowflake  = [d objectForKey:@"id"];
-    newChannel.parentID   = [d objectForKey:@"parent_id"];
-    newChannel.name       = [d objectForKey:@"name"];
-    newChannel.lastMessageId =
-        [d objectForKey:@"last_message_id"];
-    if ([d objectForKey:@"guild_id"] != nil) {
+- (DCGuild *)guildForChannelPayload:(NSDictionary *)d {
+    id guildID = [d objectForKey:@"guild_id"];
+    if ([guildID isKindOfClass:[NSString class]]) {
         for (DCGuild *guild in self.guilds) {
-            if ([guild.snowflake isEqualToString:[d objectForKey:@"guild_id"]]) {
-                newChannel.parentGuild = guild;
-                break;
-            }
+            if ([guild.snowflake isEqualToString:guildID]) return guild;
+        }
+        return nil;
+    }
+
+    // Private channels live inside Classic's synthetic Direct Messages guild.
+    for (DCGuild *guild in self.guilds) {
+        if (!guild.snowflake && [guild.name isEqualToString:@"Direct Messages"]) {
+            return guild;
         }
     }
-    newChannel.type       = [[d objectForKey:@"type"] intValue];
-    NSString *rawPosition = [d objectForKey:@"position"];
-    newChannel.position   = rawPosition ? [rawPosition intValue] : 0;
+    return nil;
+}
+
+- (DCChannel *)channelInGuild:(DCGuild *)guild withSnowflake:(NSString *)channelID {
+    if (!guild || !channelID) return nil;
+    for (DCChannel *candidate in guild.channels) {
+        if ([candidate.snowflake isEqualToString:channelID]) return candidate;
+    }
+    return nil;
+}
+
+- (void)ensureChannel:(DCChannel *)channel
+      membershipInGuild:(DCGuild *)guild
+          shouldAppear:(BOOL)shouldAppear {
+    if (!guild || !channel.snowflake) return;
+    if (!guild.channels) guild.channels = [NSMutableArray array];
+
+    DCChannel *listed = [self channelInGuild:guild withSnowflake:channel.snowflake];
+    if (!shouldAppear) {
+        if (listed) [guild.channels removeObject:listed];
+        return;
+    }
+
+    if (!listed) {
+        [guild.channels addObject:channel];
+    } else if (listed != channel) {
+        NSUInteger index = [guild.channels indexOfObjectIdenticalTo:listed];
+        if (index != NSNotFound) [guild.channels replaceObjectAtIndex:index withObject:channel];
+    }
+}
+
+- (void)rebuildPrivateChannelRelationships:(DCChannel *)channel
+                                   fromData:(NSDictionary *)d {
+    NSArray *recipientIDs = nil;
+    id rawRecipientIDs = [d objectForKey:@"recipient_ids"];
+    if ([rawRecipientIDs isKindOfClass:[NSArray class]]) {
+        recipientIDs = rawRecipientIDs;
+    } else {
+        id rawRecipients = [d objectForKey:@"recipients"];
+        if ([rawRecipients isKindOfClass:[NSArray class]]) {
+            NSMutableArray *ids = [NSMutableArray array];
+            for (id rawRecipient in rawRecipients) {
+                if (![rawRecipient isKindOfClass:[NSDictionary class]]) continue;
+                DCUser *user = [DCTools convertJsonUser:rawRecipient cache:YES];
+                if (user.snowflake) [ids addObject:user.snowflake];
+            }
+            recipientIDs = ids;
+        }
+    }
+
+    if (!recipientIDs) return;
+
+    channel.recipientIDs = [NSArray arrayWithArray:recipientIDs];
+    NSMutableArray *recipients = [NSMutableArray array];
+    for (NSString *recipientID in recipientIDs) {
+        DCUser *recipient = [self userForSnowflake:recipientID];
+        if (recipient) [recipients addObject:recipient];
+    }
+    channel.recipients = recipients;
+
+    NSMutableArray *users = [recipients mutableCopy];
+    DCUser *currentUser = [self userForSnowflake:self.snowflake];
+    if (currentUser) [users addObject:currentUser];
+    channel.users = users;
+}
+
+- (void)updateWriteabilityForChannel:(DCChannel *)channel
+                            fromData:(NSDictionary *)d
+                               guild:(DCGuild *)guild {
+    if (!guild || !guild.snowflake) {
+        channel.writeable = YES;
+        return;
+    }
+
+    NSArray *rawOverwrites = [d objectForKey:@"permission_overwrites"];
+    if (![rawOverwrites isKindOfClass:[NSArray class]]) return;
+
+    BOOL canWrite = YES;
+    NSArray *overwrites = [rawOverwrites sortedArrayUsingComparator:
+        ^NSComparisonResult(NSDictionary *perm1, NSDictionary *perm2) {
+            DCRole *role1 = [guild.roles objectForKey:[perm1 objectForKey:@"id"]];
+            DCRole *role2 = [guild.roles objectForKey:[perm2 objectForKey:@"id"]];
+            NSInteger p1 = role1 ? role1.position : 0;
+            NSInteger p2 = role2 ? role2.position : 0;
+            if (p1 < p2) return NSOrderedAscending;
+            if (p1 > p2) return NSOrderedDescending;
+            return NSOrderedSame;
+        }];
+
+    for (NSDictionary *permission in overwrites) {
+        NSInteger type = [[permission objectForKey:@"type"] integerValue];
+        NSString *identifier = [permission objectForKey:@"id"];
+        uint64_t deny = [[permission objectForKey:@"deny"] longLongValue];
+        uint64_t allow = [[permission objectForKey:@"allow"] longLongValue];
+
+        if (type == 0) {
+            if (![guild.userRoles containsObject:identifier]) continue;
+            if ((deny & DCPermissionSendMessages) == DCPermissionSendMessages)
+                canWrite = NO;
+            if ((allow & DCPermissionSendMessages) == DCPermissionSendMessages)
+                canWrite = YES;
+        } else if (type == 1 && [identifier isEqualToString:self.snowflake]) {
+            if ((deny & DCPermissionSendMessages) == DCPermissionSendMessages)
+                canWrite = NO;
+            if ((allow & DCPermissionSendMessages) == DCPermissionSendMessages)
+                canWrite = YES;
+            break;
+        }
+    }
+
+    channel.writeable = canWrite || [guild.ownerID isEqualToString:self.snowflake];
+}
+
+- (void)mergeChannel:(DCChannel *)channel
+             fromData:(NSDictionary *)d
+                guild:(DCGuild *)guild {
+    id value = [d objectForKey:@"id"];
+    if ([value isKindOfClass:[NSString class]]) channel.snowflake = value;
+
+    if ([d objectForKey:@"parent_id"] != nil) {
+        value = [d objectForKey:@"parent_id"];
+        channel.parentID = [value isKindOfClass:[NSString class]] ? value : nil;
+    }
+
+    if ([d objectForKey:@"name"] != nil) {
+        value = [d objectForKey:@"name"];
+        channel.name = [value isKindOfClass:[NSString class]] ? value : nil;
+    }
+
+    if ([d objectForKey:@"last_message_id"] != nil) {
+        value = [d objectForKey:@"last_message_id"];
+        channel.lastMessageId = [value isKindOfClass:[NSString class]] ? value : nil;
+    }
+
+    value = [d objectForKey:@"type"];
+    if ([value respondsToSelector:@selector(integerValue)])
+        channel.type = (DCChannelType)[value integerValue];
+
+    value = [d objectForKey:@"position"];
+    if ([value respondsToSelector:@selector(integerValue)])
+        channel.position = [value integerValue];
+
+    if ([d objectForKey:@"icon"] != nil) {
+        value = [d objectForKey:@"icon"];
+        NSString *newIconID = [value isKindOfClass:[NSString class]] ? value : nil;
+        BOOL changed = (channel.iconID != newIconID)
+            && ![channel.iconID isEqualToString:newIconID];
+        if (changed) {
+            channel.iconID = newIconID;
+            channel.icon = nil;
+        }
+    }
+
+    channel.parentGuild = guild;
+    [self rebuildPrivateChannelRelationships:channel fromData:d];
+    [self updateWriteabilityForChannel:channel fromData:d guild:guild];
+
+    // 1:1 DMs have no explicit name. Keep their label tied to the canonical
+    // user so a restored/updated display name appears without another fetch.
+    if (channel.type == DCChannelTypeDM && channel.recipients.count == 1) {
+        NSString *displayName = [[channel.recipients objectAtIndex:0] displayName];
+        if (displayName.length > 0) channel.name = displayName;
+    } else if (channel.type == DCChannelTypeGroupDM && channel.name.length == 0
+               && channel.recipients.count > 0) {
+        NSMutableArray *names = [NSMutableArray array];
+        for (DCUser *recipient in channel.recipients) {
+            NSString *displayName = [recipient displayName];
+            if (displayName.length > 0) [names addObject:displayName];
+        }
+        if (names.count > 0) channel.name = [names componentsJoinedByString:@", "];
+    }
+}
+
+- (void)resortChannelsForGuild:(DCGuild *)guild {
+    if (!guild || guild.channels.count < 2) return;
+
+    if (!guild.snowflake) {
+        [guild.channels sortUsingComparator:^NSComparisonResult(DCChannel *a, DCChannel *b) {
+            NSString *idA = [a.lastMessageId isKindOfClass:[NSString class]] ? a.lastMessageId : @"0";
+            NSString *idB = [b.lastMessageId isKindOfClass:[NSString class]] ? b.lastMessageId : @"0";
+            return [idB compare:idA options:NSNumericSearch];
+        }];
+        return;
+    }
+
+    NSMutableArray *categories = [NSMutableArray array];
+    NSMutableArray *channels = [NSMutableArray array];
+    for (DCChannel *channel in guild.channels) {
+        // Older READY/cached channel objects may contain NSNull for parent_id.
+        // Normalize it here too so structural events can safely resort a mixed
+        // pre-hotfix object graph without waiting for a fresh READY.
+        if (![channel.parentID isKindOfClass:[NSString class]])
+            channel.parentID = nil;
+
+        if (channel.type == DCChannelTypeGuildCategory)
+            [categories addObject:channel];
+        else
+            [channels addObject:channel];
+    }
+
+    [categories sortUsingComparator:^NSComparisonResult(DCChannel *a, DCChannel *b) {
+        if (a.position < b.position) return NSOrderedAscending;
+        if (a.position > b.position) return NSOrderedDescending;
+        return [a.snowflake compare:b.snowflake];
+    }];
+
+    [channels sortUsingComparator:^NSComparisonResult(DCChannel *channel1, DCChannel *channel2) {
+        BOOL hasParent1 = [channel1.parentID isKindOfClass:[NSString class]];
+        BOOL hasParent2 = [channel2.parentID isKindOfClass:[NSString class]];
+        if (hasParent1 != hasParent2)
+            return hasParent1 ? NSOrderedDescending : NSOrderedAscending;
+
+        if (hasParent1 && ![channel1.parentID isEqualToString:channel2.parentID]) {
+            DCChannel *parent1 = [self.channels objectForKey:channel1.parentID];
+            DCChannel *parent2 = [self.channels objectForKey:channel2.parentID];
+            if (parent1.position < parent2.position) return NSOrderedAscending;
+            if (parent1.position > parent2.position) return NSOrderedDescending;
+        }
+
+        if (channel1.position < channel2.position) return NSOrderedAscending;
+        if (channel1.position > channel2.position) return NSOrderedDescending;
+        return [channel1.snowflake compare:channel2.snowflake];
+    }];
+
+    NSMutableArray *ordered = [channels mutableCopy];
+    for (DCChannel *category in categories) {
+        if (![category.snowflake isKindOfClass:[NSString class]])
+            continue;
+
+        NSUInteger firstChild = [ordered indexOfObjectPassingTest:
+            ^BOOL(DCChannel *candidate, NSUInteger idx, BOOL *stop) {
+                if (![candidate.parentID isKindOfClass:[NSString class]])
+                    return NO;
+                return [(NSString *)candidate.parentID isEqualToString:category.snowflake];
+            }];
+        if (firstChild == NSNotFound)
+            [ordered addObject:category];
+        else
+            [ordered insertObject:category atIndex:firstChild];
+    }
+    guild.channels = ordered;
+}
+
+- (void)checkpointChannelStructure {
+    // Channel structural events are infrequent enough that a complete guild
+    // structure checkpoint is acceptable for now. This will become dirty-ID
+    // persistence once the cache is normalized.
+    [[DCCacheManager sharedInstance] saveGuilds:self.guilds];
+}
+
+- (void)handleChannelCreateWithData:(NSDictionary *)d {
+    NSString *channelID = [d objectForKey:@"id"];
+    if (![channelID isKindOfClass:[NSString class]] || channelID.length == 0)
+        return;
+
+    if (!self.channels) self.channels = [NSMutableDictionary dictionary];
+
+    DCGuild *guild = [self guildForChannelPayload:d];
+    DCChannel *channel = [self.channels objectForKey:channelID];
+    if (!channel && guild) channel = [self channelInGuild:guild withSnowflake:channelID];
+    BOOL created = (channel == nil);
+    if (!channel) channel = [DCChannel new];
+
+    [self mergeChannel:channel fromData:d guild:guild];
+    [self.channels setObject:channel forKey:channelID];
+
+    if (guild) {
+        BOOL shouldAppear = !guild.snowflake
+            || DCChannelTypeAppearsInGuildList(channel.type);
+        [self ensureChannel:channel membershipInGuild:guild shouldAppear:shouldAppear];
+        [self resortChannelsForGuild:guild];
+        [guild checkIfRead];
+    }
+
+    DBGLOG(@"[%@] %@ channel %@ (%@)",
+           created ? @"CHANNEL_CREATE" : @"CHANNEL_CREATE replay",
+           created ? @"Inserted" : @"Merged existing",
+           channel.name ?: @"(unnamed)", channelID);
+
+    [self checkpointChannelStructure];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [NSNotificationCenter.defaultCenter
+            postNotificationName:@"RELOAD CHANNEL LIST" object:channel];
+    });
+}
+
+- (void)handleChannelUpdateWithData:(NSDictionary *)d {
+    NSString *channelID = [d objectForKey:@"id"];
+    if (![channelID isKindOfClass:[NSString class]] || channelID.length == 0)
+        return;
+
+    DCChannel *channel = [self.channels objectForKey:channelID];
+    if (!channel) {
+        // Treat an update for an object we somehow missed as an upsert. This is
+        // safe for Gateway replay and avoids requiring a master refresh.
+        [self handleChannelCreateWithData:d];
+        return;
+    }
+
+    DCGuild *oldGuild = channel.parentGuild;
+    DCGuild *guild = [self guildForChannelPayload:d] ?: oldGuild;
+    [self mergeChannel:channel fromData:d guild:guild];
+
+    if (oldGuild && oldGuild != guild) {
+        DCChannel *oldListed = [self channelInGuild:oldGuild withSnowflake:channelID];
+        if (oldListed) [oldGuild.channels removeObject:oldListed];
+        [self resortChannelsForGuild:oldGuild];
+    }
+
+    if (guild) {
+        BOOL shouldAppear = !guild.snowflake
+            || DCChannelTypeAppearsInGuildList(channel.type);
+        [self ensureChannel:channel membershipInGuild:guild shouldAppear:shouldAppear];
+        [self resortChannelsForGuild:guild];
+        [guild checkIfRead];
+    }
+
+    DBGLOG(@"[CHANNEL_UPDATE] Merged channel %@ (%@)",
+           channel.name ?: @"(unnamed)", channelID);
+    [self checkpointChannelStructure];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [NSNotificationCenter.defaultCenter
+            postNotificationName:@"RELOAD CHANNEL LIST" object:channel];
+    });
+}
+
+- (void)handleChannelDeleteWithData:(NSDictionary *)d {
+    NSString *channelID = [d objectForKey:@"id"];
+    if (![channelID isKindOfClass:[NSString class]] || channelID.length == 0)
+        return;
+
+    DCChannel *channel = [self.channels objectForKey:channelID];
+    DCGuild *guild = channel.parentGuild ?: [self guildForChannelPayload:d];
+
+    if (guild) {
+        DCChannel *listed = [self channelInGuild:guild withSnowflake:channelID];
+        if (listed) [guild.channels removeObject:listed];
+        [self resortChannelsForGuild:guild];
+        [guild checkIfRead];
+    }
+    [self.channels removeObjectForKey:channelID];
+
+    if ([self.selectedChannel.snowflake isEqualToString:channelID])
+        self.selectedChannel = nil;
+
+    DBGLOG(@"[CHANNEL_DELETE] Removed channel %@", channelID);
+    [self checkpointChannelStructure];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [NSNotificationCenter.defaultCenter
+            postNotificationName:@"RELOAD CHANNEL LIST" object:channel];
+    });
 }
 
 - (id)handleGuildMemberItemWithItem:(NSDictionary *)item guild:(DCGuild *)guild {
@@ -1314,6 +1670,12 @@ static NSString *DCConfiguredGatewayURL(NSString *urlString) {
         return;
     } else if ([t isEqualToString:THREAD_CREATE] || [t isEqualToString:CHANNEL_CREATE]) {
         [self handleChannelCreateWithData:d];
+        return;
+    } else if ([t isEqualToString:THREAD_UPDATE] || [t isEqualToString:CHANNEL_UPDATE]) {
+        [self handleChannelUpdateWithData:d];
+        return;
+    } else if ([t isEqualToString:THREAD_DELETE] || [t isEqualToString:CHANNEL_DELETE]) {
+        [self handleChannelDeleteWithData:d];
         return;
     } else if ([t isEqualToString:CHANNEL_UNREAD_UPDATE]) {
         if (!self.channels) {

@@ -1493,6 +1493,8 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
 
     newGuild.snowflake = [jsonGuild objectForKey:@"id"];
     newGuild.name = [jsonGuild objectForKey:@"name"];
+    id ownerID = [jsonGuild objectForKey:@"owner_id"];
+    if ([ownerID isKindOfClass:[NSString class]]) newGuild.ownerID = ownerID;
 
     newGuild.userRoles = NSMutableArray.new;
     newGuild.roles = NSMutableDictionary.new;
@@ -1630,7 +1632,8 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
         DCChannel *newChannel = DCChannel.new;
 
         newChannel.snowflake = [jsonChannel objectForKey:@"id"];
-        newChannel.parentID  = [jsonChannel objectForKey:@"parent_id"];
+        id parentID = [jsonChannel objectForKey:@"parent_id"];
+        newChannel.parentID  = [parentID isKindOfClass:[NSString class]] ? parentID : nil;
         newChannel.name      = [jsonChannel objectForKey:@"name"];
         newChannel.lastMessageId =
             [jsonChannel objectForKey:@"last_message_id"];

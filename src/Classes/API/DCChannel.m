@@ -1025,7 +1025,8 @@ static dispatch_queue_t channel_send_queue;
     self = [super init];
     if (self) {
         self.snowflake         = [aDecoder decodeObjectForKey:@"snowflake"];
-        self.parentID          = [aDecoder decodeObjectForKey:@"parentID"];
+        id decodedParentID     = [aDecoder decodeObjectForKey:@"parentID"];
+        self.parentID          = [decodedParentID isKindOfClass:[NSString class]] ? decodedParentID : nil;
         self.name              = [aDecoder decodeObjectForKey:@"name"];
         self.lastMessageId     = [aDecoder decodeObjectForKey:@"lastMessageId"];
         self.lastReadMessageId = [aDecoder decodeObjectForKey:@"lastReadMessageId"];
