@@ -102,37 +102,88 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
 // object Also keeps the user in DCServerCommunicator.loadedUsers if cache:YES
 + (DCUser *)convertJsonUser:(NSDictionary *)jsonUser cache:(BOOL)cache {
     NSString *snowflake = [jsonUser objectForKey:@"id"];
-    if (!snowflake) return nil;
+    if (![snowflake isKindOfClass:[NSString class]] || snowflake.length == 0)
+        return nil;
 
-    DCUser *user = nil;
-    if (cache) {
-        user = [DCServerCommunicator.sharedInstance userForSnowflake:snowflake];
-        if (user && user.username.length > 0) {
-            return user;
+    // Treat Discord user payloads as patches to one canonical DCUser object.
+    // Gateway payloads such as PRESENCE_UPDATE may contain only a subset of
+    // user fields, so an absent key must never erase a value we already know.
+    DCUser *user = cache
+        ? [DCServerCommunicator.sharedInstance userForSnowflake:snowflake]
+        : nil;
+    BOOL createdUser = (user == nil);
+    if (!user) user = [DCUser new];
+
+    user.snowflake = snowflake;
+
+    id value = [jsonUser objectForKey:@"username"];
+    if ([value isKindOfClass:[NSString class]]) {
+        user.username = value;
+    }
+
+    if ([jsonUser objectForKey:@"global_name"] != nil) {
+        value = [jsonUser objectForKey:@"global_name"];
+        user.globalName = [value isKindOfClass:[NSString class]] ? value : nil;
+    }
+
+    if ([jsonUser objectForKey:@"avatar"] != nil) {
+        value = [jsonUser objectForKey:@"avatar"];
+        NSString *newAvatarID = [value isKindOfClass:[NSString class]] ? value : nil;
+        NSString *oldAvatarID = ([user.avatarID isKindOfClass:[NSString class]])
+            ? (NSString *)user.avatarID
+            : nil;
+        BOOL avatarChanged = (oldAvatarID != newAvatarID) &&
+            ![oldAvatarID isEqualToString:newAvatarID];
+
+        if (avatarChanged) {
+            user.avatarID = newAvatarID;
+            // The CDN URL is hash-versioned. Clearing only the runtime images is
+            // enough; the next request naturally uses the new avatar hash and
+            // SDWebImage will either hit that URL on disk or fetch it.
+            user.profileImage = nil;
+            user.rawProfileImage = nil;
+        } else if (createdUser) {
+            user.avatarID = newAvatarID;
         }
     }
 
-    if (!user) {
-        user = DCUser.new;
+    if ([jsonUser objectForKey:@"avatar_decoration_data"] != nil) {
+        id decorationData = [jsonUser objectForKey:@"avatar_decoration_data"];
+        NSString *newDecorationID = nil;
+        if ([decorationData isKindOfClass:[NSDictionary class]]) {
+            id asset = [decorationData objectForKey:@"asset"];
+            if ([asset isKindOfClass:[NSString class]]) newDecorationID = asset;
+        }
+
+        NSString *oldDecorationID =
+            ([user.avatarDecorationID isKindOfClass:[NSString class]])
+                ? (NSString *)user.avatarDecorationID
+                : nil;
+        BOOL decorationChanged = (oldDecorationID != newDecorationID) &&
+            ![oldDecorationID isEqualToString:newDecorationID];
+        if (decorationChanged) {
+            user.avatarDecorationID = newDecorationID;
+            user.avatarDecoration = nil;
+            // profileImage may already contain the old decoration composite.
+            // Rebuild it lazily from rawProfileImage when the new decoration is
+            // requested.
+            user.profileImage = nil;
+        } else if (createdUser) {
+            user.avatarDecorationID = newDecorationID;
+        }
     }
 
-    NSString *username = [jsonUser objectForKey:@"username"];
-    if (username) user.username = username;
-
-    // globalName defaults to username; override if a real global_name is present
-    user.globalName = username;
-    if ([jsonUser objectForKey:@"global_name"] &&
-        [[jsonUser objectForKey:@"global_name"] isKindOfClass:[NSString class]]) {
-        user.globalName = [jsonUser objectForKey:@"global_name"];
+    if ([jsonUser objectForKey:@"discriminator"] != nil) {
+        value = [jsonUser objectForKey:@"discriminator"];
+        if ([value respondsToSelector:@selector(integerValue)])
+            user.discriminator = [value integerValue];
     }
 
-    user.snowflake          = snowflake;
-    user.avatarID           = [jsonUser objectForKey:@"avatar"];
-    user.avatarDecorationID = [jsonUser valueForKeyPath:@"avatar_decoration_data.asset"];
-    user.discriminator      = [[jsonUser objectForKey:@"discriminator"] integerValue];
-
-    if (!user.status) {
+    if (createdUser) {
         user.status = DCUserStatusOffline;
+        user.guildNicknames = [NSMutableDictionary dictionary];
+    } else if (!user.guildNicknames) {
+        user.guildNicknames = [NSMutableDictionary dictionary];
     }
 
     if (cache) {

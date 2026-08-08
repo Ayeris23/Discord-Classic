@@ -40,14 +40,18 @@ typedef NS_ENUM(NSInteger, DCChannelType) {
 @property (strong, nonatomic) DCSnowflake* lastReadMessageId;
 // Icon for a DM
 @property (strong, nonatomic) UIImage* icon;
+// Durable CDN hash for group-DM/channel icons. Runtime UIImage stays memory-only.
+@property (strong, nonatomic) NSString* iconID;
 @property (assign, nonatomic) BOOL unread;
 @property (nonatomic) NSInteger mentionCount;
 @property (assign, nonatomic) BOOL muted;
 @property (assign, nonatomic) BOOL writeable;
 @property (assign, nonatomic) enum DCChannelType type;
 @property (assign, nonatomic) NSInteger position;
-// Holds NSDictionary* of Users
+// Canonical DCUser objects participating in a DM/group DM (excluding self).
 @property (strong, nonatomic) NSMutableArray* recipients;
+// Durable relationship keys used to relink recipients after a cold launch.
+@property (strong, nonatomic) NSArray* recipientIDs;
 @property (weak, nonatomic) DCGuild* parentGuild;
 // Holds NSDictionary* of Users
 @property (strong, nonatomic) NSArray* users;

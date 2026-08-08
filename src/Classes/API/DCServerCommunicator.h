@@ -272,6 +272,10 @@ typedef NS_ENUM(uint64_t, DCGatewayCapabilities) {
 
 - (DCUser *)userForSnowflake:(NSString *)snowflake;
 - (void)setUser:(DCUser *)user forSnowflake:(NSString *)snowflake;
+// Shallow, thread-safe snapshot used by the disk cache. The DCUser objects
+// themselves remain canonical live objects; DCCacheManager extracts only
+// durable scalar/string/dictionary fields from them.
+- (NSDictionary *)loadedUsersSnapshot;
 - (DCRole *)roleForSnowflake:(NSString *)snowflake;
 - (void)setRole:(DCRole *)role forSnowflake:(NSString *)snowflake;
 - (DCEmoji *)emojiForSnowflake:(NSString *)snowflake;

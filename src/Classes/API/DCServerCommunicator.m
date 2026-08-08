@@ -31,10 +31,12 @@ UIActivityIndicatorView *spinner;
 NSTimer *heartbeatTimer = nil;
 
 /*
- * READY gives a resume_gateway_url without any guarantee that it carries
- * the same query parameters as the initial Gateway connection. Discord
+ * READY gives us a resume_gateway_url without any guarantee that it carries
+ * the same query parameters as our initial Gateway connection. Discord
  * requires Resume to use the same API version, encoding, and compression.
- * It will EXPLODE if it doesn't match. Jk, the app will just hate itself :3
+ *
+ * Keep this helper Foundation-only so it remains compatible with iOS 5/6
+ * (NSURLComponents is too new for our deployment target).
  */
 static NSString *DCConfiguredGatewayURL(NSString *urlString) {
     if ([urlString length] == 0) {
@@ -216,6 +218,14 @@ static NSString *DCConfiguredGatewayURL(NSString *urlString) {
     dispatch_barrier_async(self.accessQueue, ^{
         self.loadedUsers[snowflake] = user;
     });
+}
+
+- (NSDictionary *)loadedUsersSnapshot {
+    __block NSDictionary *snapshot = nil;
+    dispatch_sync(self.accessQueue, ^{
+        snapshot = [NSDictionary dictionaryWithDictionary:self.loadedUsers ?: @{}];
+    });
+    return snapshot;
 }
 
 - (void)requestMemberChunkForUserIds:(NSArray *)userIds
@@ -454,7 +464,10 @@ static NSString *DCConfiguredGatewayURL(NSString *urlString) {
             newChannel.snowflake     = [privateChannel objectForKey:@"id"];
             newChannel.lastMessageId = [privateChannel objectForKey:@"last_message_id"];
             newChannel.parentGuild   = privateGuild;
-            newChannel.type          = DCChannelTypeDM; // Direct Message channel
+            id privateChannelType = [privateChannel objectForKey:@"type"];
+            newChannel.type          = [privateChannelType respondsToSelector:@selector(integerValue)]
+                ? (DCChannelType)[privateChannelType integerValue]
+                : DCChannelTypeDM;
             newChannel.writeable     = YES;             // DMs are always writeable
             newChannel.recipients    = NSMutableArray.new;
             { // default icon
@@ -463,7 +476,15 @@ static NSString *DCConfiguredGatewayURL(NSString *urlString) {
                 newChannel.icon  = [DCContentManager processedIcon:[[DCUser defaultAvatars] objectAtIndex:selector] context:DCAssetContextList];
             }
             NSArray *recipientIds = [privateChannel objectForKey:@"recipient_ids"];
-            if (recipientIds && recipientIds.count > 0) {
+            if ([recipientIds isKindOfClass:[NSArray class]]) {
+                newChannel.recipientIDs = [NSArray arrayWithArray:recipientIds];
+            }
+            id privateChannelIcon = [privateChannel objectForKey:@"icon"];
+            if ([privateChannelIcon isKindOfClass:[NSString class]] &&
+                [(NSString *)privateChannelIcon length] > 0) {
+                newChannel.iconID = privateChannelIcon;
+            }
+            if ([recipientIds isKindOfClass:[NSArray class]] && recipientIds.count > 0) {
                 for (NSString *userId in recipientIds) {
                     DCUser *recipient = [self userForSnowflake:userId];
                     if (!recipient) {
@@ -477,9 +498,9 @@ static NSString *DCConfiguredGatewayURL(NSString *urlString) {
                 [mUsers addObject:[self userForSnowflake:self.snowflake]];
                 newChannel.users = mUsers;
             }
-            if ([privateChannel objectForKey:@"icon"] && [privateChannel objectForKey:@"icon"] != [NSNull null]) {
+            if (newChannel.iconID.length > 0) {
                 NSURL *iconURL = [NSURL URLWithString:[NSString stringWithFormat:@"https://cdn.discordapp.com/channel-icons/%@/%@.png?size=64",
-                    newChannel.snowflake, [privateChannel objectForKey:@"icon"]]];
+                    newChannel.snowflake, newChannel.iconID]];
                 SDWebImageManager *manager = [SDWebImageManager sharedManager];
                 [manager downloadImageWithURL:iconURL
                                       options:0
@@ -498,8 +519,8 @@ static NSString *DCConfiguredGatewayURL(NSString *urlString) {
                                     }];
             } else {
                 if (newChannel.recipients.count > 0) {
-                    NSInteger channelType = [[privateChannel objectForKey:@"type"] integerValue];
-                    if (channelType == 1) {
+                    NSInteger channelType = newChannel.type;
+                    if (channelType == DCChannelTypeDM) {
                         // 1-on-1 DM — use buddy's avatar via getUserAvatar:
                         DCUser *user = [newChannel.recipients objectAtIndex:0];
                         [DCTools getUserAvatar:user];
@@ -766,6 +787,7 @@ static NSString *DCConfiguredGatewayURL(NSString *urlString) {
     // Persist guild/channel structure for cold-start cache
         [[DCCacheManager sharedInstance] saveGuilds:self.guilds];
         [[DCCacheManager sharedInstance] saveUserInfo:self.currentUserInfo];
+        [[DCCacheManager sharedInstance] saveUsers:[self loadedUsersSnapshot]];
 
         dispatch_async(dispatch_get_main_queue(), ^{
             [NSNotificationCenter.defaultCenter postNotificationName:@"READY" object:self];
@@ -780,26 +802,31 @@ static NSString *DCConfiguredGatewayURL(NSString *urlString) {
         NSString *userId = [d valueForKeyPath:@"user.id"];
         NSString *status = [d objectForKey:@"status"];
         if (!userId || !status) {
-            // NSLog(@"[PRESENCE_UPDATE] Missing user ID or status in payload: %@", d);
             return;
         }
-        DCUser *user = [self userForSnowflake:userId];
-        if (user) {
-            user.status = [DCUser statusFromString:status];
-            // NSLog(@"[PRESENCE_UPDATE] Updated user %@ (ID: %@) to status: %ld", user.username, userId, (long)user.status);
-        } else {
-            // Cache user if not already in loadedUsers
-            NSDictionary *userDict = [d objectForKey:@"user"];
-            if (userDict) {
-                user = [DCTools convertJsonUser:userDict cache:YES];
-                [self setUser:user forSnowflake:userId];
-                user.status = [DCUser statusFromString:status];
-                // NSLog(@"[PRESENCE_UPDATE] Cached and updated user %@ (ID: %@) to status: %ld", user.username, userId, (long)user.status);
-            }
+
+        NSDictionary *userDict = [d objectForKey:@"user"];
+        DCUser *user = nil;
+        if ([userDict isKindOfClass:[NSDictionary class]]) {
+            // PRESENCE_UPDATE can carry partial identity changes (including
+            // avatar/name changes). Merge them into the canonical user rather
+            // than ignoring the payload just because the user already exists.
+            user = [DCTools convertJsonUser:userDict cache:YES];
         }
-        // IMPORTANT: Post a notification so we can refresh DM status dots
+        if (!user) user = [self userForSnowflake:userId];
+        if (!user) return;
+
+        user.status = [DCUser statusFromString:status];
+
+        // Presence itself is ephemeral. Identity fields in this payload are
+        // merged immediately in RAM and will be checkpointed by the normal
+        // READY/background cache flush rather than rewriting the whole user
+        // archive for every presence event.
+
         dispatch_async(dispatch_get_main_queue(), ^{
-            [NSNotificationCenter.defaultCenter postNotificationName:@"USER_PRESENCE_UPDATED" object:user];
+            [NSNotificationCenter.defaultCenter
+                postNotificationName:@"USER_PRESENCE_UPDATED"
+                              object:user];
         });
     }
 }
@@ -1125,7 +1152,13 @@ static NSString *DCConfiguredGatewayURL(NSString *urlString) {
         /* do not initialize guilds and channels here,
            could cause concurrency issues while guilds and channels are being loaded */
         dispatch_sync(dispatch_get_main_queue(), ^{
-            self.loadedUsers  = NSMutableDictionary.new;
+            // loadedUsers is a canonical store and may have been restored from
+            // disk before this IDENTIFY. Do not throw it away here; READY will
+            // merge fresh user fields into those existing objects.
+            if (!self.loadedUsers) self.loadedUsers = NSMutableDictionary.new;
+
+            // Roles/emojis are not persistent yet, so retain their existing
+            // pre-cache behavior for this first persistence slice.
             self.loadedRoles  = NSMutableDictionary.new;
             self.loadedEmojis = NSMutableDictionary.new;
         });
@@ -1180,6 +1213,37 @@ static NSString *DCConfiguredGatewayURL(NSString *urlString) {
         return;
     } else if ([t isEqualToString:PRESENCE_UPDATE_EVENT]) {
         [self handlePresenceUpdateEventWithData:d];
+        return;
+    } else if ([t isEqualToString:USER_UPDATE]) {
+        DCUser *user = [DCTools convertJsonUser:d cache:YES];
+        if (user) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [NSNotificationCenter.defaultCenter
+                    postNotificationName:@"RELOAD USER DATA"
+                                  object:user];
+            });
+        }
+        return;
+    } else if ([t isEqualToString:GUILD_MEMBER_UPDATE]) {
+        NSDictionary *userDict = [d objectForKey:@"user"];
+        DCUser *user = [userDict isKindOfClass:[NSDictionary class]]
+            ? [DCTools convertJsonUser:userDict cache:YES]
+            : nil;
+        NSString *guildId = [d objectForKey:@"guild_id"];
+        if (user && guildId) {
+            id nick = [d objectForKey:@"nick"];
+            if (!user.guildNicknames) user.guildNicknames = NSMutableDictionary.new;
+            if ([nick isKindOfClass:[NSString class]] && [nick length] > 0)
+                [user.guildNicknames setObject:nick forKey:guildId];
+            else if (nick == [NSNull null] || nick != nil)
+                [user.guildNicknames removeObjectForKey:guildId];
+
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [NSNotificationCenter.defaultCenter
+                    postNotificationName:@"RELOAD USER DATA"
+                                  object:user];
+            });
+        }
         return;
     } else if ([t isEqualToString:RESUMED]) {
         DBGLOG(@"Gateway RESUMED successfully at sequence %li", (long)self.sequenceNumber);
@@ -1420,7 +1484,7 @@ static NSString *DCConfiguredGatewayURL(NSString *urlString) {
     __weak typeof(self) weakSelf = self;
 
     
-    // Establish websocket connection with Discord. If it still has a session
+    // Establish websocket connection with Discord. If we still have a session
     // that handleHelloWithData: will attempt to RESUME, use the per-session
     // resume gateway supplied by READY.
     BOOL hasResumableSession =
@@ -1864,6 +1928,7 @@ static NSString *DCConfiguredGatewayURL(NSString *urlString) {
     [NSUserDefaults.standardUserDefaults synchronize];
 
     [[DCCacheManager sharedInstance] invalidateAllMessages];
+    [[DCCacheManager sharedInstance] invalidateUserCache];
     [[DCCacheManager sharedInstance] handleMemoryWarning];
 
     [[NSNotificationCenter defaultCenter] postNotificationName:@"DCUserDidLogOut" object:nil];

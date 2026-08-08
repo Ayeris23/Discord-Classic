@@ -988,8 +988,29 @@ static dispatch_queue_t channel_send_queue;
     [aCoder encodeBool:self.writeable           forKey:@"writeable"];
     [aCoder encodeInteger:self.type             forKey:@"type"];
     [aCoder encodeInteger:self.position         forKey:@"position"];
+    [aCoder encodeObject:self.iconID            forKey:@"iconID"];
 
-    // For DM channels: encode recipient display names only (no full DCUser graph)
+    // Persist DM relationships by snowflake, never by archiving DCUser objects.
+    // Preserve the durable ID set when present; otherwise derive it from the
+    // live canonical recipients before archiving.
+    NSMutableArray *recipientIDs = [NSMutableArray array];
+    if (self.recipientIDs.count > 0) {
+        // Keep the full durable relationship set even if a cold restore could
+        // only relink a subset of users from an older/incomplete user cache.
+        [recipientIDs addObjectsFromArray:self.recipientIDs];
+    } else {
+        for (id recipient in self.recipients) {
+            if ([recipient respondsToSelector:@selector(snowflake)]) {
+                NSString *userID = [recipient snowflake];
+                if (userID.length > 0) [recipientIDs addObject:userID];
+            }
+        }
+    }
+    [aCoder encodeObject:recipientIDs forKey:@"recipientIDs"];
+
+    // Keep the old display-name field for backwards compatibility with older
+    // Discord Classic builds that may read this archive. It is not used for
+    // relationship reconstruction because names are not stable identifiers.
     NSMutableArray *recipientNames = [NSMutableArray array];
     for (id recipient in self.recipients) {
         if ([recipient respondsToSelector:@selector(displayName)]) {
@@ -1013,8 +1034,13 @@ static dispatch_queue_t channel_send_queue;
         self.writeable         = [aDecoder decodeBoolForKey:@"writeable"];
         self.type              = (DCChannelType)[aDecoder decodeIntegerForKey:@"type"];
         self.position          = [aDecoder decodeIntegerForKey:@"position"];
-        // recipientNames decoded but not used yet — full recipient objects
-        // come from the live READY payload. Channel name is sufficient for display.
+        self.iconID            = [aDecoder decodeObjectForKey:@"iconID"];
+        self.recipientIDs      = [aDecoder decodeObjectForKey:@"recipientIDs"];
+        self.recipients        = [NSMutableArray array];
+        self.users             = [NSArray array];
+        // Older archives contain only recipientNames. Those names are left as
+        // display fallback in self.name; after one live READY the archive will
+        // be rewritten with stable recipientIDs.
     }
     return self;
 }

@@ -16,10 +16,70 @@
 #import "DCCacheManager.h"
 #import "DCGuild.h"
 #import "DCChannel.h"
+#import "DCContentManager.h"
 
 @interface DCAppDelegate ()
 @property (assign, nonatomic) BOOL shouldReload;
 @end
+
+static UIImage *DCDefaultPrivateChannelIcon(DCChannel *channel) {
+    if (!channel.snowflake.length) return nil;
+    NSNumber *longId = @([channel.snowflake longLongValue]);
+    int selector = (int)(([longId longLongValue] >> 22) % 6);
+    return [DCContentManager processedIcon:[[DCUser defaultAvatars] objectAtIndex:selector]
+                                   context:DCAssetContextList];
+}
+
+static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
+    if (!channel || !channel.snowflake.length) return;
+
+    channel.icon = DCDefaultPrivateChannelIcon(channel);
+
+    NSString *assetURLString = nil;
+    if (channel.iconID.length > 0) {
+        assetURLString = [NSString stringWithFormat:
+            @"https://cdn.discordapp.com/channel-icons/%@/%@.png?size=64",
+            channel.snowflake, channel.iconID];
+    } else if (channel.recipients.count > 0) {
+        DCUser *recipient = [channel.recipients objectAtIndex:0];
+        if (recipient.avatarID.length > 0) {
+            assetURLString = [NSString stringWithFormat:
+                @"https://cdn.discordapp.com/avatars/%@/%@.png?size=64",
+                recipient.snowflake, recipient.avatarID];
+        } else {
+            int selector = 0;
+            if (recipient.discriminator == 0) {
+                NSNumber *longId = @([recipient.snowflake longLongValue]);
+                selector = (int)(([longId longLongValue] >> 22) % 6);
+            } else {
+                selector = (int)(recipient.discriminator % 5);
+            }
+            channel.icon = [DCContentManager processedIcon:
+                [[DCUser defaultAvatars] objectAtIndex:selector]
+                                                  context:DCAssetContextList];
+        }
+    }
+
+    if (!assetURLString.length) return;
+    NSURL *assetURL = [NSURL URLWithString:assetURLString];
+    if (!assetURL) return;
+
+    [[SDWebImageManager sharedManager]
+        downloadImageWithURL:assetURL
+                     options:0
+                    progress:nil
+                   completed:^(UIImage *image, NSError *error, SDImageCacheType cacheType,
+                               BOOL finished, NSURL *imageURL) {
+                       if (!image || !finished) return;
+                       dispatch_async(dispatch_get_main_queue(), ^{
+                           channel.icon = [DCContentManager processedIcon:image
+                                                                  context:DCAssetContextList];
+                           [NSNotificationCenter.defaultCenter
+                               postNotificationName:@"RELOAD CHANNEL LIST"
+                                             object:nil];
+                       });
+                   }];
+}
 
 @implementation DCAppDelegate
 
@@ -126,7 +186,21 @@
     }
 
     if (DCServerCommunicator.sharedInstance.token.length) {
-        NSArray *cachedGuilds = [[DCCacheManager sharedInstance] loadCachedGuilds];
+        DCCacheManager *cache = [DCCacheManager sharedInstance];
+
+        // Restore canonical users before guild/channel UI state. READY will
+        // merge fresh payloads into these same objects instead of rebuilding
+        // the user registry from scratch.
+        NSDictionary *cachedUsers = [cache loadCachedUsers];
+        if (cachedUsers.count > 0) {
+            DCServerCommunicator.sharedInstance.loadedUsers = [cachedUsers mutableCopy];
+            NSLog(@"[ColdStart] Restored %lu cached users",
+                  (unsigned long)cachedUsers.count);
+        } else if (!DCServerCommunicator.sharedInstance.loadedUsers) {
+            DCServerCommunicator.sharedInstance.loadedUsers = NSMutableDictionary.new;
+        }
+
+        NSArray *cachedGuilds = [cache loadCachedGuilds];
         if (cachedGuilds.count) {
             DCServerCommunicator.sharedInstance.guilds = [cachedGuilds mutableCopy];
             NSArray *cachedLayout = [[DCCacheManager sharedInstance] loadDisplayLayout];
@@ -151,6 +225,11 @@
             DCUserInfo *cachedUserInfo = [[DCCacheManager sharedInstance] loadCachedUserInfo];
             if (cachedUserInfo) {
                 DCServerCommunicator.sharedInstance.currentUserInfo = cachedUserInfo;
+                // READY normally establishes this value. Restore it early so
+                // cached DM channel.users can be reconstructed before networking.
+                if (cachedUserInfo.id.length > 0) {
+                    DCServerCommunicator.sharedInstance.snowflake = cachedUserInfo.id;
+                }
             } else {
                 DCUserInfo *stub = [DCUserInfo new];
                 stub.guildPositions = [NSMutableArray array];
@@ -159,15 +238,66 @@
             }
 
             NSMutableDictionary *channels = [NSMutableDictionary dictionary];
+            NSUInteger relinkedDMCount = 0;
+            NSUInteger hydratedDMIconCount = 0;
+            // Only hydrate the first screen-ish worth of DM icons during cold
+            // launch. The relationship graph is restored for every DM, but we
+            // avoid creating a network/cache thundering herd for offscreen rows.
+            const NSUInteger DCColdStartDMIconHydrationLimit = 12;
             for (DCGuild *guild in cachedGuilds) {
+                BOOL isPrivateGuild = (guild.snowflake == nil &&
+                    [guild.name isEqualToString:@"Direct Messages"]);
                 for (DCChannel *channel in guild.channels) {
                     channel.parentGuild = guild;
+
+                    if (isPrivateGuild && channel.recipientIDs.count > 0) {
+                        // Migrate caches produced before private-channel type was
+                        // parsed correctly. More than one recipient implies Group DM.
+                        if (channel.type == DCChannelTypeDM && channel.recipientIDs.count > 1) {
+                            channel.type = DCChannelTypeGroupDM;
+                        }
+
+                        NSMutableArray *recipients = [NSMutableArray array];
+                        for (NSString *recipientID in channel.recipientIDs) {
+                            DCUser *recipient = [DCServerCommunicator.sharedInstance
+                                userForSnowflake:recipientID];
+                            if (recipient) [recipients addObject:recipient];
+                        }
+                        channel.recipients = recipients;
+
+                        NSMutableArray *users = [recipients mutableCopy];
+                        DCUser *currentUser = [DCServerCommunicator.sharedInstance
+                            userForSnowflake:DCServerCommunicator.sharedInstance.snowflake];
+                        if (currentUser) [users addObject:currentUser];
+                        channel.users = users;
+
+                        if (channel.type == DCChannelTypeDM && recipients.count == 1) {
+                            DCUser *recipient = [recipients objectAtIndex:0];
+                            NSString *displayName = [recipient displayName];
+                            if (displayName.length > 0) channel.name = displayName;
+                        }
+
+                        if (recipients.count > 0) {
+                            if (hydratedDMIconCount < DCColdStartDMIconHydrationLimit) {
+                                DCHydrateCachedPrivateChannelIcon(channel);
+                                hydratedDMIconCount++;
+                            } else {
+                                channel.icon = DCDefaultPrivateChannelIcon(channel);
+                            }
+                            relinkedDMCount++;
+                        }
+                    }
+
                     if (channel.snowflake) {
                         [channels setObject:channel forKey:channel.snowflake];
                     }
                 }
             }
             DCServerCommunicator.sharedInstance.channels = channels;
+            if (relinkedDMCount > 0) {
+                NSLog(@"[ColdStart] Relinked %lu cached private channels to canonical users",
+                      (unsigned long)relinkedDMCount);
+            }
 
             [NSNotificationCenter.defaultCenter
                 postNotificationName:@"READY"
@@ -317,6 +447,7 @@ didFailToRegisterForRemoteNotificationsWithError:(NSError *)error {
         DCCacheManager *cache = [DCCacheManager sharedInstance];
         [cache saveGuilds:DCServerCommunicator.sharedInstance.guilds];
         [cache saveUserInfo:DCServerCommunicator.sharedInstance.currentUserInfo];
+        [cache saveUsers:[DCServerCommunicator.sharedInstance loadedUsersSnapshot]];
         NSArray *layout = DCServerCommunicator.sharedInstance.cachedDisplayLayout;
         if (layout.count > 0) {
             [cache saveDisplayLayout:layout];

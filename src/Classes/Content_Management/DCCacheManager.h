@@ -88,6 +88,13 @@
 - (void)saveDisplayLayout:(NSArray *)displayGuilds;
 - (NSArray *)loadDisplayLayout;
 
+// --- User cache (disk-backed) ---
+// Users are persisted as small durable records rather than archiving runtime
+// DCUser state (UIImages, presence, processed assets, etc.).
+- (void)saveUsers:(NSDictionary *)users;
+- (NSDictionary *)loadCachedUsers;
+- (void)invalidateUserCache;
+
 // --- User Info cache (disk-backed) ---
 - (void)saveUserInfo:(DCUserInfo *)userInfo;
 - (DCUserInfo *)loadCachedUserInfo;

@@ -8,6 +8,7 @@
 
 #import "DCCacheManager.h"
 #import "DCMessageLayout.h"
+#import "DCUser.h"
 
 @implementation DCMessageCacheEntry
 @end
@@ -280,6 +281,163 @@
         [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
         return nil;
     }
+}
+
+
+// --- User cache (disk-backed) ---
+
+static const NSInteger DCUserCacheVersion = 1;
+
+- (NSString *)userCachePath {
+    NSArray *paths = NSSearchPathForDirectoriesInDomains(
+        NSDocumentDirectory, NSUserDomainMask, YES);
+    return [[paths objectAtIndex:0]
+        stringByAppendingPathComponent:@"dc_users_cache.archive"];
+}
+
+- (NSDictionary *)persistentRecordForUser:(DCUser *)user {
+    if (!user || !user.snowflake) return nil;
+
+    NSMutableDictionary *record = [NSMutableDictionary dictionary];
+    [record setObject:user.snowflake forKey:@"id"];
+
+    if (user.username)           [record setObject:user.username forKey:@"username"];
+    if (user.globalName)         [record setObject:user.globalName forKey:@"globalName"];
+    if (user.avatarID && (id)user.avatarID != [NSNull null])
+        [record setObject:user.avatarID forKey:@"avatar"];
+    if (user.avatarDecorationID && (id)user.avatarDecorationID != [NSNull null])
+        [record setObject:user.avatarDecorationID forKey:@"avatarDecoration"];
+    if (user.biography)          [record setObject:user.biography forKey:@"biography"];
+    if (user.guildNicknames.count)
+        [record setObject:[NSDictionary dictionaryWithDictionary:user.guildNicknames]
+                   forKey:@"guildNicknames"];
+
+    [record setObject:[NSNumber numberWithInteger:user.discriminator]
+               forKey:@"discriminator"];
+    return record;
+}
+
+- (DCUser *)userFromPersistentRecord:(NSDictionary *)record {
+    if (![record isKindOfClass:[NSDictionary class]]) return nil;
+
+    NSString *snowflake = [record objectForKey:@"id"];
+    if (![snowflake isKindOfClass:[NSString class]] || snowflake.length == 0)
+        return nil;
+
+    DCUser *user = [DCUser new];
+    user.snowflake = snowflake;
+
+    id value = [record objectForKey:@"username"];
+    if ([value isKindOfClass:[NSString class]]) user.username = value;
+
+    value = [record objectForKey:@"globalName"];
+    if ([value isKindOfClass:[NSString class]]) user.globalName = value;
+
+    value = [record objectForKey:@"avatar"];
+    if ([value isKindOfClass:[NSString class]]) user.avatarID = value;
+
+    value = [record objectForKey:@"avatarDecoration"];
+    if ([value isKindOfClass:[NSString class]]) user.avatarDecorationID = value;
+
+    value = [record objectForKey:@"biography"];
+    if ([value isKindOfClass:[NSString class]]) user.biography = value;
+
+    value = [record objectForKey:@"guildNicknames"];
+    if ([value isKindOfClass:[NSDictionary class]])
+        user.guildNicknames = [value mutableCopy];
+    else
+        user.guildNicknames = [NSMutableDictionary dictionary];
+
+    value = [record objectForKey:@"discriminator"];
+    if ([value respondsToSelector:@selector(integerValue)])
+        user.discriminator = [value integerValue];
+
+    // Presence is intentionally ephemeral. A restored user starts offline until
+    // the Gateway tells us otherwise. Images are also restored lazily from the
+    // normal image cache using the persisted hashes.
+    user.status = DCUserStatusOffline;
+    return user;
+}
+
+- (void)saveUsers:(NSDictionary *)users {
+    if (!users.count) return;
+
+    // Capture the dictionary membership now, then build the archive on the
+    // serial cache queue so callers never block on thousands of user records.
+    NSDictionary *snapshot = [NSDictionary dictionaryWithDictionary:users];
+    NSString *path = [self userCachePath];
+
+    dispatch_async(self.cacheQueue, ^{
+        @autoreleasepool {
+            @try {
+                NSMutableDictionary *records = [NSMutableDictionary dictionaryWithCapacity:snapshot.count];
+                for (NSString *snowflake in snapshot) {
+                    DCUser *user = [snapshot objectForKey:snowflake];
+                    NSDictionary *record = [self persistentRecordForUser:user];
+                    if (record) [records setObject:record forKey:snowflake];
+                }
+
+                NSDictionary *root = @{
+                    @"version" : [NSNumber numberWithInteger:DCUserCacheVersion],
+                    @"users" : records
+                };
+
+                NSData *data = [NSKeyedArchiver archivedDataWithRootObject:root];
+                if (![data writeToFile:path atomically:YES]) {
+                    NSLog(@"[DCCacheManager] User cache save failed writing %@", path);
+                }
+            }
+            @catch (NSException *e) {
+                NSLog(@"[DCCacheManager] User cache save failed: %@", e);
+                [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+            }
+        }
+    });
+}
+
+- (NSDictionary *)loadCachedUsers {
+    NSString *path = [self userCachePath];
+    if (![[NSFileManager defaultManager] fileExistsAtPath:path]) return nil;
+
+    @try {
+        NSDictionary *root = [NSKeyedUnarchiver unarchiveObjectWithFile:path];
+        if (![root isKindOfClass:[NSDictionary class]]) {
+            [self invalidateUserCache];
+            return nil;
+        }
+
+        NSNumber *version = [root objectForKey:@"version"];
+        if (![version respondsToSelector:@selector(integerValue)] ||
+            [version integerValue] != DCUserCacheVersion) {
+            NSLog(@"[DCCacheManager] Unsupported user cache version %@, discarding", version);
+            [self invalidateUserCache];
+            return nil;
+        }
+
+        NSDictionary *records = [root objectForKey:@"users"];
+        if (![records isKindOfClass:[NSDictionary class]]) return nil;
+
+        NSMutableDictionary *users = [NSMutableDictionary dictionaryWithCapacity:records.count];
+        for (NSString *snowflake in records) {
+            DCUser *user = [self userFromPersistentRecord:[records objectForKey:snowflake]];
+            if (user) [users setObject:user forKey:user.snowflake];
+        }
+        return users;
+    }
+    @catch (NSException *e) {
+        NSLog(@"[DCCacheManager] User cache corrupt, discarding: %@", e);
+        [self invalidateUserCache];
+        return nil;
+    }
+}
+
+- (void)invalidateUserCache {
+    NSString *path = [self userCachePath];
+    // Serialize invalidation behind any queued save so logout cannot leave a
+    // just-written cache file behind.
+    dispatch_sync(self.cacheQueue, ^{
+        [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+    });
 }
 
 // --- User Info cache (disk-backed) ---

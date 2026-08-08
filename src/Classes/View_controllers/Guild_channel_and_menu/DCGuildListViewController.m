@@ -74,11 +74,9 @@
     didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     if ([DCServerCommunicator.sharedInstance.guilds objectAtIndex:indexPath.row]
         != DCServerCommunicator.sharedInstance.selectedGuild) {
-        // Clear the loaded users array for lazy memory management. This will be
-        // fleshed out more later
-        dispatch_barrier_async(DCServerCommunicator.sharedInstance.accessQueue, ^{
-            DCServerCommunicator.sharedInstance.loadedUsers = NSMutableDictionary.new;
-        });
+        // loadedUsers is now the canonical user store and may have been
+        // restored from disk. Guild switches must not discard it; expensive
+        // image/layout state is handled by the dedicated caches instead.
         // Assign the selected guild
         DCServerCommunicator.sharedInstance.selectedGuild =
             [DCServerCommunicator.sharedInstance.guilds
