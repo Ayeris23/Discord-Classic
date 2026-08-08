@@ -20,6 +20,7 @@
 
 @property (assign, nonatomic) NSInteger sequenceNumber;
 @property (strong, nonatomic) NSString *sessionId;
+@property (strong, nonatomic) NSString *resumeGatewayURL;
 
 @property (assign, nonatomic) BOOL isReconnecting;
 @property (assign, nonatomic) NSInteger reconnectAttempts;

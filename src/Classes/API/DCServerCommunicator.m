@@ -30,6 +30,26 @@
 UIActivityIndicatorView *spinner;
 NSTimer *heartbeatTimer = nil;
 
+/*
+ * READY gives a resume_gateway_url without any guarantee that it carries
+ * the same query parameters as the initial Gateway connection. Discord
+ * requires Resume to use the same API version, encoding, and compression.
+ * It will EXPLODE if it doesn't match. Jk, the app will just hate itself :3
+ */
+static NSString *DCConfiguredGatewayURL(NSString *urlString) {
+    if ([urlString length] == 0) {
+        return nil;
+    }
+
+    NSRange queryRange = [urlString rangeOfString:@"?"];
+    NSString *baseURL = (queryRange.location == NSNotFound)
+        ? urlString
+        : [urlString substringToIndex:queryRange.location];
+
+    return [baseURL stringByAppendingString:
+        @"?encoding=json&v=9&compress=zlib-stream"];
+}
+
 
 // Header for push requests. Critical for keeping Discord servers happy. Thanks JWI!
 + (NSString *)superPropertiesBase64 {
@@ -149,7 +169,7 @@ NSTimer *heartbeatTimer = nil;
         
         [NSNotificationCenter.defaultCenter addObserver:sharedInstance
                                                selector:@selector(handleBackgroundEntry)
-                                                   name:UIApplicationWillEnterForegroundNotification
+                                                   name:UIApplicationDidEnterBackgroundNotification
                                                  object:nil];
 
         [NSNotificationCenter.defaultCenter addObserver:sharedInstance
@@ -360,8 +380,19 @@ NSTimer *heartbeatTimer = nil;
             [self showNonIntrusiveNotificationWithTitle:@"Getting Ready..."];
         });
     }
-    // Grab session id (used for RESUME) and user id
+    // Grab session state used for RESUME. Discord requires reconnects to use
+    // resume_gateway_url rather than the generic Gateway hostname.
     self.sessionId = [NSString stringWithFormat:@"%@", [d valueForKeyPath:@"session_id"]];
+
+    id resumeGatewayURL = [d objectForKey:@"resume_gateway_url"];
+    if ([resumeGatewayURL isKindOfClass:[NSString class]] &&
+        [(NSString *)resumeGatewayURL length] > 0) {
+        self.resumeGatewayURL = (NSString *)resumeGatewayURL;
+        DBGLOG(@"Cached resume gateway URL: %@", self.resumeGatewayURL);
+    } else {
+        self.resumeGatewayURL = nil;
+        DBGLOG(@"READY did not contain a usable resume_gateway_url");
+    }
     // THIS IS US, hey hey hey this is MEEEEE BITCCCH MORTY DID YOU HEAR, THIS IS ME, AND MY USER ID, YES MORT(BUÜÜÜRPP)Y, THIS IS ME. BITCCHHHH. 100 YEARS OF DISCORD CLASSIC MORTYY YOU AND MEEEE
     self.snowflake       = [NSString stringWithFormat:@"%@", [d valueForKeyPath:@"user.id"]];
     DCUserInfo *userInfo = [DCUserInfo new];
@@ -1151,6 +1182,7 @@ NSTimer *heartbeatTimer = nil;
         [self handlePresenceUpdateEventWithData:d];
         return;
     } else if ([t isEqualToString:RESUMED]) {
+        DBGLOG(@"Gateway RESUMED successfully at sequence %li", (long)self.sequenceNumber);
         self.didAuthenticate = true;
         self.reconnectAttempts = 0;
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -1388,8 +1420,29 @@ NSTimer *heartbeatTimer = nil;
     __weak typeof(self) weakSelf = self;
 
     
-    // Establish websocket connection with Discord
-    NSURL *websocketUrl = [NSURL URLWithString:self.gatewayURL];
+    // Establish websocket connection with Discord. If it still has a session
+    // that handleHelloWithData: will attempt to RESUME, use the per-session
+    // resume gateway supplied by READY.
+    BOOL hasResumableSession =
+        self.sequenceNumber != 0 && [self.sessionId length] > 0;
+
+    NSString *gatewayBaseURL = self.gatewayURL;
+    if (hasResumableSession && [self.resumeGatewayURL length] > 0) {
+        gatewayBaseURL = self.resumeGatewayURL;
+    }
+
+    NSString *connectionURLString = DCConfiguredGatewayURL(gatewayBaseURL);
+    NSURL *websocketUrl = [NSURL URLWithString:connectionURLString];
+
+    if (hasResumableSession && [self.resumeGatewayURL length] > 0) {
+        DBGLOG(@"Opening resume gateway: %@", connectionURLString);
+    } else if (hasResumableSession) {
+        DBGLOG(@"Resume state exists but no resume_gateway_url is cached; using primary gateway: %@",
+               connectionURLString);
+    } else {
+        DBGLOG(@"Opening primary gateway: %@", connectionURLString);
+    }
+
     WSWebSocket *thisSocket = [[WSWebSocket alloc] initWithURL:websocketUrl protocols:nil];
     self.websocket = thisSocket;
 
@@ -1494,8 +1547,9 @@ NSTimer *heartbeatTimer = nil;
                     } else {
                         // Hard invalidation — drop session state and do a clean identify
                         DBGLOG(@"INVALID_SESSION: invalidated, clearing session and reconnecting...");
-                        weakSelf.sequenceNumber = 0;
-                        weakSelf.sessionId      = nil;
+                        weakSelf.sequenceNumber  = 0;
+                        weakSelf.sessionId       = nil;
+                        weakSelf.resumeGatewayURL = nil;
                         dispatch_async(dispatch_get_main_queue(), ^{
                             [weakSelf reconnect];
                         });
@@ -1779,8 +1833,9 @@ NSTimer *heartbeatTimer = nil;
     [self.cooldownTimer invalidate];
     self.cooldownTimer  = nil;
     self.canIdentify    = YES;
-    self.sessionId      = nil;
-    self.sequenceNumber = 0;
+    self.sessionId        = nil;
+    self.resumeGatewayURL = nil;
+    self.sequenceNumber   = 0;
     [self.websocket close];
     self.websocket = nil;
     [self resetInflateStream];
