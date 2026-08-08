@@ -87,6 +87,7 @@
 // --- Diaply Layout cache (disk-backed) ---
 - (void)saveDisplayLayout:(NSArray *)displayGuilds;
 - (NSArray *)loadDisplayLayout;
+- (void)invalidateDisplayLayout;
 
 // --- User cache (disk-backed) ---
 // Users are persisted as small durable records rather than archiving runtime

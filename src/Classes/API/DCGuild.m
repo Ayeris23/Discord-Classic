@@ -62,7 +62,9 @@ refreshMarker:
     [aCoder encodeInteger:self.memberCount forKey:@"memberCount"];
     [aCoder encodeBool:self.muted         forKey:@"muted"];
     [aCoder encodeObject:self.channels    forKey:@"channels"];
-    [aCoder encodeObject:self.iconURL forKey:@"iconURL"];
+    [aCoder encodeObject:self.iconID      forKey:@"iconID"];
+    [aCoder encodeObject:self.iconURL     forKey:@"iconURL"];
+    [aCoder encodeObject:self.bannerID    forKey:@"bannerID"];
 }
 
 - (id)initWithCoder:(NSCoder *)aDecoder {
@@ -74,7 +76,20 @@ refreshMarker:
         self.memberCount = [aDecoder decodeIntegerForKey:@"memberCount"];
         self.muted       = [aDecoder decodeBoolForKey:@"muted"];
         self.channels    = [aDecoder decodeObjectForKey:@"channels"];
-        self.iconURL = [aDecoder decodeObjectForKey:@"iconURL"];
+        self.iconID    = [aDecoder decodeObjectForKey:@"iconID"];
+        self.iconURL   = [aDecoder decodeObjectForKey:@"iconURL"];
+        self.bannerID  = [aDecoder decodeObjectForKey:@"bannerID"];
+
+        // Migrate pre-hash caches. The old archive retained the hash-bearing
+        // CDN URL but not the hash as a first-class field. Recover it once so
+        // the first GUILD_UPDATE after upgrading does not falsely look like an
+        // icon change.
+        if (!self.iconID.length && self.iconURL.length) {
+            NSURL *url = [NSURL URLWithString:self.iconURL];
+            NSString *filename = [[url path] lastPathComponent];
+            NSString *hash = [filename stringByDeletingPathExtension];
+            if (hash.length) self.iconID = hash;
+        }
 
         // These get populated by the live READY — initialize empty so nothing crashes
         self.members   = [NSMutableArray array];

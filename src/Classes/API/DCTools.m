@@ -1496,6 +1496,10 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
     id ownerID = [jsonGuild objectForKey:@"owner_id"];
     if ([ownerID isKindOfClass:[NSString class]]) newGuild.ownerID = ownerID;
 
+    id memberCount = [jsonGuild objectForKey:@"member_count"];
+    if ([memberCount respondsToSelector:@selector(integerValue)])
+        newGuild.memberCount = [memberCount integerValue];
+
     newGuild.userRoles = NSMutableArray.new;
     newGuild.roles = NSMutableDictionary.new;
     newGuild.members = NSMutableArray.new;
@@ -1567,10 +1571,12 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
 
     SDWebImageManager *manager = [SDWebImageManager sharedManager];
 
-    if ([jsonGuild objectForKey:@"icon"] && [jsonGuild objectForKey:@"icon"] != [NSNull null]) {
+    id guildIconHash = [jsonGuild objectForKey:@"icon"];
+    if ([guildIconHash isKindOfClass:[NSString class]]) {
+        newGuild.iconID = guildIconHash;
         NSURL *iconURL = [NSURL URLWithString:[NSString
                                                   stringWithFormat:@"https://cdn.discordapp.com/icons/%@/%@.png?size=80",
-                                                                   newGuild.snowflake, [jsonGuild objectForKey:@"icon"]]];
+                                                                   newGuild.snowflake, guildIconHash]];
         newGuild.iconURL = [iconURL absoluteString];
         [manager downloadImageWithURL:iconURL
                               options:SDWebImageRetryFailed
@@ -1602,10 +1608,12 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
                             }];
     }
 
-    if ([jsonGuild objectForKey:@"banner"] && [jsonGuild objectForKey:@"banner"] != [NSNull null]) {
+    id guildBannerHash = [jsonGuild objectForKey:@"banner"];
+    if ([guildBannerHash isKindOfClass:[NSString class]]) {
+        newGuild.bannerID = guildBannerHash;
         NSURL *bannerURL = [NSURL URLWithString:[NSString
                                                     stringWithFormat:@"https://cdn.discordapp.com/banners/%@/%@.png?size=320",
-                                                                     newGuild.snowflake, [jsonGuild objectForKey:@"banner"]]];
+                                                                     newGuild.snowflake, guildBannerHash]];
         [manager downloadImageWithURL:bannerURL
                               options:SDWebImageRetryFailed
                              progress:nil
@@ -1625,7 +1633,13 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
 
     NSMutableArray *categories = NSMutableArray.new;
 
-    NSArray *combined             = [[jsonGuild objectForKey:@"channels"] arrayByAddingObjectsFromArray:[jsonGuild objectForKey:@"threads"]];
+    id rawGuildChannels = [jsonGuild objectForKey:@"channels"];
+    id rawGuildThreads  = [jsonGuild objectForKey:@"threads"];
+    NSArray *guildChannels = [rawGuildChannels isKindOfClass:[NSArray class]]
+        ? rawGuildChannels : [NSArray array];
+    NSArray *guildThreads = [rawGuildThreads isKindOfClass:[NSArray class]]
+        ? rawGuildThreads : [NSArray array];
+    NSArray *combined = [guildChannels arrayByAddingObjectsFromArray:guildThreads];
     NSMutableDictionary *channels = NSMutableDictionary.new;
     for (NSDictionary *jsonChannel in combined) {
         // regardless of implementation or permissions, add to channels list so they're visible in <#snowflake>

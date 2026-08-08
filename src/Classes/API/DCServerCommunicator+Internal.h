@@ -30,4 +30,20 @@
 
 - (void)showNonIntrusiveNotificationWithTitle:(NSString *)title;
 - (void)dismissNotification;
+
+// Canonical guild/channel mutation helpers used by Gateway replay. Declaring
+// these here keeps the old compiler from inferring id-returning selectors when
+// one private helper calls another defined later in the implementation file.
+- (DCGuild *)guildWithSnowflake:(NSString *)guildID;
+- (DCGuild *)privateGuild;
+- (DCChannel *)channelInGuild:(DCGuild *)guild withSnowflake:(NSString *)channelID;
+- (void)ensureChannel:(DCChannel *)channel
+      membershipInGuild:(DCGuild *)guild
+          shouldAppear:(BOOL)shouldAppear;
+- (void)mergeChannel:(DCChannel *)channel fromData:(NSDictionary *)d guild:(DCGuild *)guild;
+- (void)resortChannelsForGuild:(DCGuild *)guild;
+- (void)handleUserSettingsProtoUpdateWithData:(NSDictionary *)d;
+- (void)handleGuildCreateWithData:(NSDictionary *)d;
+- (void)handleGuildUpdateWithData:(NSDictionary *)d;
+- (void)handleGuildDeleteWithData:(NSDictionary *)d;
 @end

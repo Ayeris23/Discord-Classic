@@ -36,6 +36,11 @@
                                            selector:@selector(handleReady)
                                                name:@"RELOAD GUILD LIST"
                                              object:nil];
+
+    [NSNotificationCenter.defaultCenter addObserver:self
+                                           selector:@selector(handleReady)
+                                               name:@"RELOAD GUILD"
+                                             object:nil];
 }
 
 

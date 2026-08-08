@@ -25,6 +25,8 @@
 #include "SDWebImageManager.h"
 #import "DCContentManager.h"
 #import "DCCacheManager.h"
+#import "Base64.h"
+#include <stdint.h>
 
 @implementation DCServerCommunicator
 UIActivityIndicatorView *spinner;
@@ -45,6 +47,15 @@ static BOOL DCChannelTypeAppearsInGuildList(DCChannelType type) {
         || type == DCChannelTypeGuildCategory;
 }
 
+static UIImage *DCDefaultGuildIconForSnowflake(NSString *snowflake) {
+    if (![snowflake isKindOfClass:[NSString class]] || snowflake.length == 0)
+        return nil;
+    unsigned long long value = [snowflake longLongValue];
+    NSUInteger selector = (NSUInteger)((value >> 22) % 6);
+    NSArray *defaults = [DCUser defaultAvatars];
+    return selector < defaults.count ? [defaults objectAtIndex:selector] : nil;
+}
+
 static NSString *DCConfiguredGatewayURL(NSString *urlString) {
     if ([urlString length] == 0) {
         return nil;
@@ -57,6 +68,283 @@ static NSString *DCConfiguredGatewayURL(NSString *urlString) {
 
     return [baseURL stringByAppendingString:
         @"?encoding=json&v=9&compress=zlib-stream"];
+}
+
+
+#pragma mark - Minimal user-settings protobuf reader
+
+/*
+ * USER_SETTINGS_PROTO_UPDATE carries settings.proto as a Base64-encoded
+ * PreloadedUserSettings protobuf. Pulling in a full protobuf runtime just to
+ * keep the guild sidebar synchronized is unnecessary on our old targets, so
+ * this tiny reader understands only the protobuf wire types needed by
+ * PreloadedUserSettings.guild_folders:
+ *
+ *   PreloadedUserSettings field 14 -> GuildFolders
+ *   GuildFolders field 1          -> repeated GuildFolder
+ *   GuildFolder field 1           -> packed fixed64 guild IDs
+ *   GuildFolder field 2           -> google.protobuf.Int64Value folder ID
+ *   GuildFolder field 3           -> google.protobuf.StringValue name
+ *   GuildFolder field 4           -> google.protobuf.UInt64Value color
+ *
+ * Unknown fields are skipped, making this intentionally narrow but tolerant
+ * of unrelated Discord settings being added to the proto.
+ */
+
+typedef struct {
+    const uint8_t *bytes;
+    NSUInteger length;
+    NSUInteger offset;
+} DCProtoReader;
+
+static BOOL DCProtoReadVarint(DCProtoReader *reader, uint64_t *valueOut) {
+    if (!reader || !valueOut) return NO;
+
+    uint64_t value = 0;
+    unsigned int shift = 0;
+    for (unsigned int i = 0; i < 10; i++) {
+        if (reader->offset >= reader->length) return NO;
+        uint8_t byte = reader->bytes[reader->offset++];
+        value |= ((uint64_t)(byte & 0x7F)) << shift;
+        if ((byte & 0x80) == 0) {
+            *valueOut = value;
+            return YES;
+        }
+        shift += 7;
+    }
+    return NO;
+}
+
+static BOOL DCProtoReadLengthDelimited(DCProtoReader *reader,
+                                       const uint8_t **bytesOut,
+                                       NSUInteger *lengthOut) {
+    uint64_t length64 = 0;
+    if (!DCProtoReadVarint(reader, &length64)) return NO;
+    if (length64 > (uint64_t)(reader->length - reader->offset)) return NO;
+
+    NSUInteger length = (NSUInteger)length64;
+    if (bytesOut) *bytesOut = reader->bytes + reader->offset;
+    if (lengthOut) *lengthOut = length;
+    reader->offset += length;
+    return YES;
+}
+
+static BOOL DCProtoSkipField(DCProtoReader *reader, unsigned int wireType) {
+    if (!reader) return NO;
+
+    switch (wireType) {
+        case 0: {
+            uint64_t ignored = 0;
+            return DCProtoReadVarint(reader, &ignored);
+        }
+        case 1: // fixed64
+            if (reader->length - reader->offset < 8) return NO;
+            reader->offset += 8;
+            return YES;
+        case 2: // length-delimited
+            return DCProtoReadLengthDelimited(reader, NULL, NULL);
+        case 5: // fixed32
+            if (reader->length - reader->offset < 4) return NO;
+            reader->offset += 4;
+            return YES;
+        default:
+            return NO;
+    }
+}
+
+static uint64_t DCProtoReadLittleEndian64(const uint8_t *bytes) {
+    uint64_t value = 0;
+    for (unsigned int i = 0; i < 8; i++) {
+        value |= ((uint64_t)bytes[i]) << (i * 8);
+    }
+    return value;
+}
+
+static BOOL DCProtoReadWrappedVarint(const uint8_t *bytes,
+                                     NSUInteger length,
+                                     uint64_t *valueOut) {
+    DCProtoReader reader = { bytes, length, 0 };
+    while (reader.offset < reader.length) {
+        uint64_t key = 0;
+        if (!DCProtoReadVarint(&reader, &key)) return NO;
+        unsigned int fieldNumber = (unsigned int)(key >> 3);
+        unsigned int wireType = (unsigned int)(key & 0x7);
+        if (fieldNumber == 1 && wireType == 0) {
+            return DCProtoReadVarint(&reader, valueOut);
+        }
+        if (!DCProtoSkipField(&reader, wireType)) return NO;
+    }
+    return NO;
+}
+
+static NSString *DCProtoReadWrappedString(const uint8_t *bytes,
+                                          NSUInteger length) {
+    DCProtoReader reader = { bytes, length, 0 };
+    while (reader.offset < reader.length) {
+        uint64_t key = 0;
+        if (!DCProtoReadVarint(&reader, &key)) return nil;
+        unsigned int fieldNumber = (unsigned int)(key >> 3);
+        unsigned int wireType = (unsigned int)(key & 0x7);
+        if (fieldNumber == 1 && wireType == 2) {
+            const uint8_t *stringBytes = NULL;
+            NSUInteger stringLength = 0;
+            if (!DCProtoReadLengthDelimited(&reader, &stringBytes, &stringLength)) return nil;
+            return [[NSString alloc] initWithBytes:stringBytes
+                                      length:stringLength
+                                    encoding:NSUTF8StringEncoding];
+        }
+        if (!DCProtoSkipField(&reader, wireType)) return nil;
+    }
+    return nil;
+}
+
+static DCGuildFolder *DCDecodeGuildFolderProto(const uint8_t *bytes,
+                                                NSUInteger length) {
+    DCProtoReader reader = { bytes, length, 0 };
+    NSMutableArray *guildIDs = [NSMutableArray array];
+    NSInteger folderID = 0;
+    NSString *folderName = nil;
+    NSInteger folderColor = 0;
+
+    while (reader.offset < reader.length) {
+        uint64_t key = 0;
+        if (!DCProtoReadVarint(&reader, &key)) return nil;
+        unsigned int fieldNumber = (unsigned int)(key >> 3);
+        unsigned int wireType = (unsigned int)(key & 0x7);
+
+        if (fieldNumber == 1 && wireType == 2) {
+            // repeated fixed64 is packed by Discord's proto3 encoder.
+            const uint8_t *packed = NULL;
+            NSUInteger packedLength = 0;
+            if (!DCProtoReadLengthDelimited(&reader, &packed, &packedLength)) return nil;
+            if ((packedLength % 8) != 0) return nil;
+            for (NSUInteger i = 0; i < packedLength; i += 8) {
+                unsigned long long guildID = (unsigned long long)DCProtoReadLittleEndian64(packed + i);
+                [guildIDs addObject:[NSString stringWithFormat:@"%llu", guildID]];
+            }
+            continue;
+        } else if (fieldNumber == 1 && wireType == 1) {
+            // Be liberal in case Discord ever emits an unpacked fixed64.
+            if (reader.length - reader.offset < 8) return nil;
+            unsigned long long guildID = (unsigned long long)DCProtoReadLittleEndian64(reader.bytes + reader.offset);
+            reader.offset += 8;
+            [guildIDs addObject:[NSString stringWithFormat:@"%llu", guildID]];
+            continue;
+        } else if ((fieldNumber == 2 || fieldNumber == 4) && wireType == 2) {
+            const uint8_t *wrapper = NULL;
+            NSUInteger wrapperLength = 0;
+            if (!DCProtoReadLengthDelimited(&reader, &wrapper, &wrapperLength)) return nil;
+            uint64_t wrappedValue = 0;
+            if (!DCProtoReadWrappedVarint(wrapper, wrapperLength, &wrappedValue)) continue;
+            if (fieldNumber == 2) {
+                // Int64Value uses ordinary int64 varint encoding. Casting the
+                // uint64_t bit pattern recovers negative folder IDs correctly.
+                folderID = (NSInteger)((int64_t)wrappedValue);
+            } else {
+                folderColor = (NSInteger)wrappedValue;
+            }
+            continue;
+        } else if (fieldNumber == 3 && wireType == 2) {
+            const uint8_t *wrapper = NULL;
+            NSUInteger wrapperLength = 0;
+            if (!DCProtoReadLengthDelimited(&reader, &wrapper, &wrapperLength)) return nil;
+            folderName = DCProtoReadWrappedString(wrapper, wrapperLength);
+            continue;
+        }
+
+        if (!DCProtoSkipField(&reader, wireType)) return nil;
+    }
+
+    DCGuildFolder *folder = [DCGuildFolder new];
+    folder.id = folderID;
+    folder.name = folderName;
+    folder.color = folderColor;
+    folder.guildIds = guildIDs;
+
+    NSNumber *opened = nil;
+    if (folder.id != 0) {
+        NSDictionary *folderPrefs = [[NSUserDefaults standardUserDefaults]
+            dictionaryForKey:[@(folder.id) stringValue]];
+        opened = [folderPrefs objectForKey:@"opened"];
+    }
+    folder.opened = opened ? [opened boolValue] : YES;
+    return folder;
+}
+
+static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
+                                     NSMutableArray **positionsOut,
+                                     NSMutableArray **foldersOut) {
+    if (![protoData length]) return NO;
+
+    DCProtoReader top = { (const uint8_t *)[protoData bytes], [protoData length], 0 };
+    const uint8_t *guildFoldersBytes = NULL;
+    NSUInteger guildFoldersLength = 0;
+
+    // PreloadedUserSettings.guild_folders is field 14 in the current wire
+    // format. Ignore all other top-level settings.
+    while (top.offset < top.length) {
+        uint64_t key = 0;
+        if (!DCProtoReadVarint(&top, &key)) return NO;
+        unsigned int fieldNumber = (unsigned int)(key >> 3);
+        unsigned int wireType = (unsigned int)(key & 0x7);
+        if (fieldNumber == 14 && wireType == 2) {
+            if (!DCProtoReadLengthDelimited(&top, &guildFoldersBytes, &guildFoldersLength)) return NO;
+            break;
+        }
+        if (!DCProtoSkipField(&top, wireType)) return NO;
+    }
+
+    // A settings update for an unrelated top-level field is not an error.
+    if (!guildFoldersBytes) return NO;
+
+    NSMutableArray *positions = [NSMutableArray array];
+    NSMutableArray *folders = [NSMutableArray array];
+    NSMutableArray *deprecatedPositions = [NSMutableArray array];
+    DCProtoReader layout = { guildFoldersBytes, guildFoldersLength, 0 };
+
+    while (layout.offset < layout.length) {
+        uint64_t key = 0;
+        if (!DCProtoReadVarint(&layout, &key)) return NO;
+        unsigned int fieldNumber = (unsigned int)(key >> 3);
+        unsigned int wireType = (unsigned int)(key & 0x7);
+
+        if (fieldNumber == 1 && wireType == 2) {
+            const uint8_t *folderBytes = NULL;
+            NSUInteger folderLength = 0;
+            if (!DCProtoReadLengthDelimited(&layout, &folderBytes, &folderLength)) return NO;
+            DCGuildFolder *folder = DCDecodeGuildFolderProto(folderBytes, folderLength);
+            if (!folder) return NO;
+
+            [folders addObject:folder];
+            // Modern Discord includes ungrouped guilds as anonymous folders,
+            // so flattening this repeated list is the authoritative sidebar
+            // order and also preserves order inside named folders.
+            [positions addObjectsFromArray:folder.guildIds];
+            continue;
+        } else if (fieldNumber == 2 && wireType == 2) {
+            // Deprecated guild_positions. Keep only as a fallback for an older
+            // payload that somehow omits the modern folders list.
+            const uint8_t *packed = NULL;
+            NSUInteger packedLength = 0;
+            if (!DCProtoReadLengthDelimited(&layout, &packed, &packedLength)) return NO;
+            if ((packedLength % 8) != 0) return NO;
+            for (NSUInteger i = 0; i < packedLength; i += 8) {
+                unsigned long long guildID = (unsigned long long)DCProtoReadLittleEndian64(packed + i);
+                [deprecatedPositions addObject:[NSString stringWithFormat:@"%llu", guildID]];
+            }
+            continue;
+        }
+
+        if (!DCProtoSkipField(&layout, wireType)) return NO;
+    }
+
+    if (folders.count == 0 && deprecatedPositions.count) {
+        [positions addObjectsFromArray:deprecatedPositions];
+    }
+
+    if (positionsOut) *positionsOut = positions;
+    if (foldersOut) *foldersOut = folders;
+    return YES;
 }
 
 
@@ -921,6 +1209,461 @@ static NSString *DCConfiguredGatewayURL(NSString *urlString) {
     }
 }
 
+- (DCGuild *)guildWithSnowflake:(NSString *)guildID {
+    if (![guildID isKindOfClass:[NSString class]]) return nil;
+    for (DCGuild *guild in self.guilds) {
+        if ([guild.snowflake isEqualToString:guildID]) return guild;
+    }
+    return nil;
+}
+
+- (DCGuild *)privateGuild {
+    for (DCGuild *guild in self.guilds) {
+        if (!guild.snowflake && [guild.name isEqualToString:@"Direct Messages"])
+            return guild;
+    }
+    return nil;
+}
+
+- (void)loadGuildIconHash:(NSString *)iconHash forGuild:(DCGuild *)guild {
+    if (!guild || !guild.snowflake) return;
+
+    guild.iconID = iconHash;
+    if (!iconHash.length) {
+        guild.iconURL = nil;
+        guild.icon = DCDefaultGuildIconForSnowflake(guild.snowflake);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [NSNotificationCenter.defaultCenter postNotificationName:@"RELOAD GUILD"
+                                                              object:guild];
+        });
+        return;
+    }
+
+    NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:
+        @"https://cdn.discordapp.com/icons/%@/%@.png?size=80",
+        guild.snowflake, iconHash]];
+    guild.iconURL = [url absoluteString];
+    // Do not display an explicitly stale icon while the hash-versioned asset
+    // is being resolved from SDWebImage's disk cache/network.
+    guild.icon = DCDefaultGuildIconForSnowflake(guild.snowflake);
+
+    [[SDWebImageManager sharedManager]
+        downloadImageWithURL:url
+                     options:SDWebImageRetryFailed
+                    progress:nil
+                   completed:^(UIImage *image, NSError *error,
+                               SDImageCacheType cacheType, BOOL finished,
+                               NSURL *imageURL) {
+        if (!image || !finished) {
+            DBGLOG(@"[GUILD_UPDATE] Failed icon %@ for guild %@: %@",
+                   iconHash, guild.snowflake, error);
+            return;
+        }
+        // A second update may have arrived while this request was in flight.
+        if (![guild.iconID isEqualToString:iconHash]) return;
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (![guild.iconID isEqualToString:iconHash]) return;
+            CGSize itemSize = CGSizeMake(40, 40);
+            UIGraphicsBeginImageContextWithOptions(itemSize, NO,
+                                                   UIScreen.mainScreen.scale);
+            [image drawInRect:CGRectMake(0, 0, itemSize.width, itemSize.height)];
+            UIImage *resized = UIGraphicsGetImageFromCurrentImageContext();
+            UIGraphicsEndImageContext();
+            guild.icon = resized ?: image;
+            [NSNotificationCenter.defaultCenter postNotificationName:@"RELOAD GUILD"
+                                                              object:guild];
+        });
+    }];
+}
+
+- (void)loadGuildBannerHash:(NSString *)bannerHash forGuild:(DCGuild *)guild {
+    if (!guild || !guild.snowflake) return;
+
+    guild.bannerID = bannerHash;
+    guild.banner = nil;
+    if (!bannerHash.length) return;
+
+    NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:
+        @"https://cdn.discordapp.com/banners/%@/%@.png?size=320",
+        guild.snowflake, bannerHash]];
+    [[SDWebImageManager sharedManager]
+        downloadImageWithURL:url
+                     options:SDWebImageRetryFailed
+                    progress:nil
+                   completed:^(UIImage *image, NSError *error,
+                               SDImageCacheType cacheType, BOOL finished,
+                               NSURL *imageURL) {
+        if (!image || !finished) {
+            DBGLOG(@"[GUILD_UPDATE] Failed banner %@ for guild %@: %@",
+                   bannerHash, guild.snowflake, error);
+            return;
+        }
+        if (![guild.bannerID isEqualToString:bannerHash]) return;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (![guild.bannerID isEqualToString:bannerHash]) return;
+            guild.banner = image;
+            if (self.selectedGuild == guild ||
+                [self.selectedGuild.snowflake isEqualToString:guild.snowflake]) {
+                [NSNotificationCenter.defaultCenter
+                    postNotificationName:@"RELOAD GUILD" object:guild];
+            }
+        });
+    }];
+}
+
+- (void)mergeGuild:(DCGuild *)guild fromData:(NSDictionary *)d {
+    if (!guild || ![d isKindOfClass:[NSDictionary class]]) return;
+
+    id value = [d objectForKey:@"id"];
+    if ([value isKindOfClass:[NSString class]]) guild.snowflake = value;
+
+    if ([d objectForKey:@"name"] != nil) {
+        value = [d objectForKey:@"name"];
+        if ([value isKindOfClass:[NSString class]]) guild.name = value;
+    }
+
+    if ([d objectForKey:@"owner_id"] != nil) {
+        value = [d objectForKey:@"owner_id"];
+        guild.ownerID = [value isKindOfClass:[NSString class]] ? value : nil;
+    }
+
+    value = [d objectForKey:@"member_count"];
+    if ([value respondsToSelector:@selector(integerValue)])
+        guild.memberCount = [value integerValue];
+
+    if ([d objectForKey:@"icon"] != nil) {
+        value = [d objectForKey:@"icon"];
+        NSString *newHash = [value isKindOfClass:[NSString class]] ? value : nil;
+        NSString *oldHash = [guild.iconID isKindOfClass:[NSString class]]
+            ? guild.iconID : nil;
+        BOOL changed = (oldHash != newHash) && ![oldHash isEqualToString:newHash];
+        if (changed) [self loadGuildIconHash:newHash forGuild:guild];
+    }
+
+    if ([d objectForKey:@"banner"] != nil) {
+        value = [d objectForKey:@"banner"];
+        NSString *newHash = [value isKindOfClass:[NSString class]] ? value : nil;
+        NSString *oldHash = [guild.bannerID isKindOfClass:[NSString class]]
+            ? guild.bannerID : nil;
+        BOOL changed = (oldHash != newHash) && ![oldHash isEqualToString:newHash];
+        if (changed) [self loadGuildBannerHash:newHash forGuild:guild];
+    }
+}
+
+- (void)mergeGuildCreateSnapshot:(NSDictionary *)d intoGuild:(DCGuild *)guild {
+    [self mergeGuild:guild fromData:d];
+
+    // GUILD_CREATE is also the authoritative rehydration event after a guild
+    // was temporarily unavailable. Refresh roles/emojis if supplied before
+    // recalculating channel permission state.
+    id rawRoles = [d objectForKey:@"roles"];
+    if ([rawRoles isKindOfClass:[NSArray class]]) {
+        NSMutableDictionary *roles = [NSMutableDictionary dictionary];
+        for (NSDictionary *roleData in rawRoles) {
+            if (![roleData isKindOfClass:[NSDictionary class]]) continue;
+            DCRole *role = [DCTools convertJsonRole:roleData cache:YES];
+            NSString *roleID = [roleData objectForKey:@"id"];
+            if (role && [roleID isKindOfClass:[NSString class]])
+                [roles setObject:role forKey:roleID];
+        }
+        guild.roles = roles;
+        if (!guild.userRoles) guild.userRoles = [NSMutableArray array];
+        // @everyone's role ID is the guild ID and always applies.
+        if (guild.snowflake && ![guild.userRoles containsObject:guild.snowflake])
+            [guild.userRoles insertObject:guild.snowflake atIndex:0];
+    }
+
+    id rawEmojis = [d objectForKey:@"emojis"];
+    if ([rawEmojis isKindOfClass:[NSArray class]]) {
+        NSMutableDictionary *emojis = [NSMutableDictionary dictionary];
+        for (NSDictionary *emojiData in rawEmojis) {
+            if (![emojiData isKindOfClass:[NSDictionary class]]) continue;
+            DCEmoji *emoji = [DCTools convertJsonEmoji:emojiData cache:YES];
+            NSString *emojiID = [emojiData objectForKey:@"id"];
+            if (emoji && [emojiID isKindOfClass:[NSString class]])
+                [emojis setObject:emoji forKey:emojiID];
+        }
+        guild.emojis = emojis;
+    }
+
+    id rawMembers = [d objectForKey:@"members"];
+    if ([rawMembers isKindOfClass:[NSArray class]]) {
+        for (NSDictionary *member in rawMembers) {
+            if (![member isKindOfClass:[NSDictionary class]]) continue;
+            NSDictionary *userData = [member objectForKey:@"user"];
+            DCUser *user = [userData isKindOfClass:[NSDictionary class]]
+                ? [DCTools convertJsonUser:userData cache:YES] : nil;
+            NSString *userID = user.snowflake;
+            NSString *nick = [member objectForKey:@"nick"];
+            if (user && [nick isKindOfClass:[NSString class]] && nick.length) {
+                if (!user.guildNicknames) user.guildNicknames = [NSMutableDictionary dictionary];
+                [user.guildNicknames setObject:nick forKey:guild.snowflake];
+            }
+            if ([userID isEqualToString:self.snowflake]) {
+                NSMutableArray *currentRoles = [NSMutableArray array];
+                if (guild.snowflake) [currentRoles addObject:guild.snowflake];
+                id memberRoles = [member objectForKey:@"roles"];
+                if ([memberRoles isKindOfClass:[NSArray class]])
+                    [currentRoles addObjectsFromArray:memberRoles];
+                guild.userRoles = currentRoles;
+            }
+        }
+    }
+
+    NSArray *rawChannels = [d objectForKey:@"channels"];
+    NSArray *rawThreads = [d objectForKey:@"threads"];
+    BOOL hasChannelSnapshot = [rawChannels isKindOfClass:[NSArray class]];
+    if (!hasChannelSnapshot && ![rawThreads isKindOfClass:[NSArray class]]) return;
+
+    NSMutableArray *combined = [NSMutableArray array];
+    if ([rawChannels isKindOfClass:[NSArray class]]) [combined addObjectsFromArray:rawChannels];
+    if ([rawThreads isKindOfClass:[NSArray class]]) [combined addObjectsFromArray:rawThreads];
+    NSMutableSet *incomingIDs = [NSMutableSet set];
+    NSMutableSet *listedIDs = [NSMutableSet set];
+
+    if (!guild.channels) guild.channels = [NSMutableArray array];
+    if (!self.channels) self.channels = [NSMutableDictionary dictionary];
+
+    for (NSDictionary *rawChannel in combined) {
+        if (![rawChannel isKindOfClass:[NSDictionary class]]) continue;
+        NSString *channelID = [rawChannel objectForKey:@"id"];
+        if (![channelID isKindOfClass:[NSString class]]) continue;
+        [incomingIDs addObject:channelID];
+
+        DCChannel *channel = [self.channels objectForKey:channelID];
+        if (!channel) channel = [self channelInGuild:guild withSnowflake:channelID];
+        if (!channel) channel = [DCChannel new];
+
+        NSMutableDictionary *payload = [rawChannel mutableCopy];
+        [payload setObject:guild.snowflake forKey:@"guild_id"];
+        [self mergeChannel:channel fromData:payload guild:guild];
+        [self.channels setObject:channel forKey:channelID];
+
+        BOOL shouldAppear = DCChannelTypeAppearsInGuildList(channel.type);
+        [self ensureChannel:channel membershipInGuild:guild shouldAppear:shouldAppear];
+        if (shouldAppear) [listedIDs addObject:channelID];
+    }
+
+    if (hasChannelSnapshot) {
+        // A GUILD_CREATE channel list is a snapshot. Remove visible channels
+        // that were in our stale outage cache but no longer exist in it.
+        NSArray *oldListed = [guild.channels copy];
+        for (DCChannel *channel in oldListed) {
+            if (![listedIDs containsObject:channel.snowflake])
+                [guild.channels removeObject:channel];
+        }
+
+        NSArray *allKnownIDs = [self.channels allKeys];
+        for (NSString *channelID in allKnownIDs) {
+            DCChannel *channel = [self.channels objectForKey:channelID];
+            if (channel.parentGuild == guild && ![incomingIDs containsObject:channelID])
+                [self.channels removeObjectForKey:channelID];
+        }
+    }
+
+    [self resortChannelsForGuild:guild];
+    [guild checkIfRead];
+}
+
+- (void)invalidateGuildDisplayLayout {
+    self.cachedDisplayLayout = nil;
+    self.guildsIsSorted = NO;
+    [[DCCacheManager sharedInstance] invalidateDisplayLayout];
+}
+
+- (void)checkpointGuildState {
+    DCCacheManager *cache = [DCCacheManager sharedInstance];
+    [cache saveGuilds:self.guilds];
+    if (self.currentUserInfo) [cache saveUserInfo:self.currentUserInfo];
+}
+
+- (void)handleUserSettingsProtoUpdateWithData:(NSDictionary *)d {
+    if (![d isKindOfClass:[NSDictionary class]]) return;
+
+    NSDictionary *settings = [d objectForKey:@"settings"];
+    if (![settings isKindOfClass:[NSDictionary class]]) return;
+
+    // Type 1 is PreloadedUserSettings. Other settings protos (frecency, etc.)
+    // do not contain the guild sidebar layout we care about here.
+    id typeValue = [settings objectForKey:@"type"];
+    if ([typeValue respondsToSelector:@selector(integerValue)] &&
+        [typeValue integerValue] != 1) {
+        return;
+    }
+
+    NSString *encodedProto = [settings objectForKey:@"proto"];
+    if (![encodedProto isKindOfClass:[NSString class]] || encodedProto.length == 0)
+        return;
+
+    NSData *protoData = [NSData dataWithBase64EncodedString:encodedProto];
+    if (![protoData length]) {
+        DBGLOG(@"[USER_SETTINGS_PROTO_UPDATE] Could not decode Base64 settings proto");
+        return;
+    }
+
+    NSMutableArray *guildPositions = nil;
+    NSMutableArray *guildFolders = nil;
+    if (!DCDecodeGuildLayoutProto(protoData, &guildPositions, &guildFolders)) {
+        // Most settings changes are unrelated to guild layout. Silently ignore
+        // a valid PreloadedUserSettings update that does not include field 14.
+        return;
+    }
+
+    if (!self.currentUserInfo) self.currentUserInfo = [DCUserInfo new];
+    self.currentUserInfo.guildPositions = guildPositions ?: [NSMutableArray array];
+    self.currentUserInfo.guildFolders = guildFolders ?: [NSMutableArray array];
+
+    [self invalidateGuildDisplayLayout];
+    [[DCCacheManager sharedInstance] saveUserInfo:self.currentUserInfo];
+
+    DBGLOG(@"[USER_SETTINGS_PROTO_UPDATE] Applied guild layout: %lu guilds, %lu folder entries",
+           (unsigned long)self.currentUserInfo.guildPositions.count,
+           (unsigned long)self.currentUserInfo.guildFolders.count);
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [NSNotificationCenter.defaultCenter postNotificationName:@"RELOAD GUILD LIST"
+                                                          object:self];
+    });
+}
+
+- (void)handleGuildCreateWithData:(NSDictionary *)d {
+    NSString *guildID = [d objectForKey:@"id"];
+    if (![guildID isKindOfClass:[NSString class]] || guildID.length == 0) return;
+
+    id unavailable = [d objectForKey:@"unavailable"];
+    if ([unavailable respondsToSelector:@selector(boolValue)] && [unavailable boolValue]) {
+        DBGLOG(@"[GUILD_CREATE] Guild %@ is still unavailable; retaining cached state", guildID);
+        return;
+    }
+
+    DCGuild *guild = [self guildWithSnowflake:guildID];
+    BOOL created = (guild == nil);
+    if (created) {
+        guild = [DCTools convertJsonGuild:d withMembers:nil];
+        if (!guild) return;
+        if (!self.guilds) self.guilds = [NSMutableArray array];
+        [self.guilds addObject:guild];
+        if (self.currentUserInfo.guildPositions &&
+            ![self.currentUserInfo.guildPositions containsObject:guildID]) {
+            [self.currentUserInfo.guildPositions addObject:guildID];
+        }
+        [self invalidateGuildDisplayLayout];
+    } else {
+        [self mergeGuildCreateSnapshot:d intoGuild:guild];
+    }
+
+    DBGLOG(@"[GUILD_CREATE] %@ guild %@ (%@)",
+           created ? @"Inserted" : @"Rehydrated", guild.name ?: @"(unnamed)", guildID);
+    [self checkpointGuildState];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [NSNotificationCenter.defaultCenter postNotificationName:@"RELOAD GUILD LIST"
+                                                          object:guild];
+        [NSNotificationCenter.defaultCenter postNotificationName:@"RELOAD CHANNEL LIST"
+                                                          object:nil];
+    });
+}
+
+- (void)handleGuildUpdateWithData:(NSDictionary *)d {
+    NSString *guildID = [d objectForKey:@"id"];
+    if (![guildID isKindOfClass:[NSString class]] || guildID.length == 0) return;
+
+    DCGuild *guild = [self guildWithSnowflake:guildID];
+    if (!guild) {
+        // UPDATE normally targets a known guild, but preserve forward progress
+        // if our cache missed it. Create a minimal canonical shell rather than
+        // forcing a master refresh.
+        guild = [DCGuild new];
+        guild.snowflake = guildID;
+        guild.channels = [NSMutableArray array];
+        guild.members = [NSMutableArray array];
+        guild.roles = [NSMutableDictionary dictionary];
+        guild.userRoles = [NSMutableArray arrayWithObject:guildID];
+        guild.emojis = [NSMutableDictionary dictionary];
+        if (!self.guilds) self.guilds = [NSMutableArray array];
+        [self.guilds addObject:guild];
+        [self invalidateGuildDisplayLayout];
+    }
+
+    NSString *oldName = guild.name;
+    NSString *oldIcon = guild.iconID;
+    NSString *oldBanner = guild.bannerID;
+    [self mergeGuild:guild fromData:d];
+
+    DBGLOG(@"[GUILD_UPDATE] Merged guild %@ (%@)%@%@%@",
+           guild.name ?: @"(unnamed)", guildID,
+           (oldName != guild.name && ![oldName isEqualToString:guild.name]) ? @" name" : @"",
+           (oldIcon != guild.iconID && ![oldIcon isEqualToString:guild.iconID]) ? @" icon" : @"",
+           (oldBanner != guild.bannerID && ![oldBanner isEqualToString:guild.bannerID]) ? @" banner" : @"");
+
+    [self checkpointGuildState];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [NSNotificationCenter.defaultCenter postNotificationName:@"RELOAD GUILD"
+                                                          object:guild];
+    });
+}
+
+- (void)handleGuildDeleteWithData:(NSDictionary *)d {
+    NSString *guildID = [d objectForKey:@"id"];
+    if (![guildID isKindOfClass:[NSString class]] || guildID.length == 0) return;
+
+    id unavailable = [d objectForKey:@"unavailable"];
+    if ([unavailable respondsToSelector:@selector(boolValue)] && [unavailable boolValue]) {
+        // Discord uses GUILD_DELETE for temporary outages too. The last-known
+        // cache is more useful than an empty hole; GUILD_CREATE will rehydrate
+        // this same canonical object when the guild becomes available again.
+        DBGLOG(@"[GUILD_DELETE] Guild %@ temporarily unavailable; retaining cached state", guildID);
+        return;
+    }
+
+    DCGuild *guild = [self guildWithSnowflake:guildID];
+    if (!guild) return; // idempotent replay/delete
+
+    NSArray *allChannelIDs = [[self.channels allKeys] copy];
+    for (NSString *channelID in allChannelIDs) {
+        DCChannel *channel = [self.channels objectForKey:channelID];
+        if (channel.parentGuild == guild ||
+            [channel.parentGuild.snowflake isEqualToString:guildID]) {
+            [self.channels removeObjectForKey:channelID];
+        }
+    }
+    [self.guilds removeObject:guild];
+
+    // Drop guild-scoped identity metadata while keeping canonical users.
+    for (DCUser *user in [self.loadedUsers allValues]) {
+        [user.guildNicknames removeObjectForKey:guildID];
+    }
+    for (NSString *roleID in [guild.roles allKeys])
+        [self.loadedRoles removeObjectForKey:roleID];
+    for (NSString *emojiID in [guild.emojis allKeys])
+        [self.loadedEmojis removeObjectForKey:emojiID];
+
+    [self.currentUserInfo.guildPositions removeObject:guildID];
+    for (DCGuildFolder *folder in self.currentUserInfo.guildFolders) {
+        if (![folder.guildIds containsObject:guildID]) continue;
+        NSMutableArray *ids = [folder.guildIds mutableCopy];
+        [ids removeObject:guildID];
+        folder.guildIds = ids;
+    }
+
+    if ([self.selectedGuild.snowflake isEqualToString:guildID] ||
+        [self.selectedChannel.parentGuild.snowflake isEqualToString:guildID]) {
+        self.selectedGuild = [self privateGuild];
+        self.selectedChannel = nil;
+    }
+
+    [self invalidateGuildDisplayLayout];
+    [self checkpointGuildState];
+    DBGLOG(@"[GUILD_DELETE] Removed guild %@", guildID);
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [NSNotificationCenter.defaultCenter postNotificationName:@"RELOAD GUILD LIST"
+                                                          object:guild];
+        [NSNotificationCenter.defaultCenter postNotificationName:@"RELOAD CHANNEL LIST"
+                                                          object:nil];
+    });
+}
+
 - (DCGuild *)guildForChannelPayload:(NSDictionary *)d {
     id guildID = [d objectForKey:@"guild_id"];
     if ([guildID isKindOfClass:[NSString class]]) {
@@ -1601,6 +2344,9 @@ static NSString *DCConfiguredGatewayURL(NSString *urlString) {
             });
         }
         return;
+    } else if ([t isEqualToString:@"USER_SETTINGS_PROTO_UPDATE"]) {
+        [self handleUserSettingsProtoUpdateWithData:d];
+        return;
     } else if ([t isEqualToString:RESUMED]) {
         DBGLOG(@"Gateway RESUMED successfully at sequence %li", (long)self.sequenceNumber);
         self.didAuthenticate = true;
@@ -1657,16 +2403,13 @@ static NSString *DCConfiguredGatewayURL(NSString *urlString) {
                               object:d[@"user_id"]];
         });
     } else if ([t isEqualToString:GUILD_CREATE]) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            for (DCGuild *g in self.guilds) {
-                if ([g.snowflake isEqualToString:[d objectForKey:@"id"]]) {
-                    DBGLOG(@"Guild with ID %@ ready for member list!", [d objectForKey:@"id"]);
-                    return;
-                }
-            }
-            [self.guilds addObject:[DCTools convertJsonGuild:d withMembers:nil]];
-            self.guildsIsSorted = NO;
-        });
+        [self handleGuildCreateWithData:d];
+        return;
+    } else if ([t isEqualToString:GUILD_UPDATE]) {
+        [self handleGuildUpdateWithData:d];
+        return;
+    } else if ([t isEqualToString:GUILD_DELETE]) {
+        [self handleGuildDeleteWithData:d];
         return;
     } else if ([t isEqualToString:THREAD_CREATE] || [t isEqualToString:CHANNEL_CREATE]) {
         [self handleChannelCreateWithData:d];

@@ -206,10 +206,29 @@
 // reload
 - (void)handleReady {
     dispatch_async(dispatch_get_main_queue(), ^{
-        // Refresh selectedGuild pointer if it's the DM guild
-        if (self.selectedGuild && 
-            [self.selectedGuild.name isEqualToString:@"Direct Messages"]) {
-            self.selectedGuild = DCServerCommunicator.sharedInstance.guilds.firstObject;
+        // Refresh selectedGuild pointer if it's the DM guild, or recover if a
+        // live GUILD_DELETE removed the guild currently shown in the channel pane.
+        BOOL selectedGuildStillExists = NO;
+        if (self.selectedGuild) {
+            for (DCGuild *guild in DCServerCommunicator.sharedInstance.guilds) {
+                if (guild == self.selectedGuild ||
+                    (guild.snowflake && [guild.snowflake isEqualToString:self.selectedGuild.snowflake])) {
+                    self.selectedGuild = guild;
+                    selectedGuildStillExists = YES;
+                    break;
+                }
+            }
+        }
+        if (!selectedGuildStillExists && DCServerCommunicator.sharedInstance.guilds.count) {
+            self.selectedGuild = [DCServerCommunicator.sharedInstance.guilds objectAtIndex:0];
+            self.selectedChannel = nil;
+            DCServerCommunicator.sharedInstance.selectedGuild = self.selectedGuild;
+        }
+
+        if (self.selectedGuild) {
+            [self.navigationItem setTitle:self.selectedGuild.name];
+            self.guildLabel.text = self.selectedGuild.name;
+            self.guildBanner.image = self.selectedGuild.banner ?: [UIImage imageNamed:@"No-Header"];
         }
 
         [self.guildTableView reloadData];
@@ -282,7 +301,20 @@
 - (void)reloadGuild:(NSNotification *)notification {
     assertMainThread();
     DCGuild *guild = notification.object;
-    if (self.displayGuilds == nil || guild == nil) {
+    if (guild == nil) return;
+
+    // Keep the selected-guild chrome synchronized with surgical GUILD_UPDATE
+    // events without needing a full READY-style table rebuild.
+    if (self.selectedGuild == guild ||
+        (self.selectedGuild.snowflake &&
+         [self.selectedGuild.snowflake isEqualToString:guild.snowflake])) {
+        self.selectedGuild = guild;
+        [self.navigationItem setTitle:guild.name];
+        self.guildLabel.text = guild.name;
+        self.guildBanner.image = guild.banner ?: [UIImage imageNamed:@"No-Header"];
+    }
+
+    if (self.displayGuilds == nil) {
         return;
     }
     if (!DCServerCommunicator.sharedInstance.guildsIsSorted) {

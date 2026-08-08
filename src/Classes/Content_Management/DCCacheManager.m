@@ -283,6 +283,11 @@
     }
 }
 
+- (void)invalidateDisplayLayout {
+    NSString *path = [self displayLayoutCachePath];
+    [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+}
+
 
 // --- User cache (disk-backed) ---
 

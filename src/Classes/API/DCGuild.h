@@ -30,9 +30,13 @@
 
 // The guild's icon
 @property (strong, nonatomic) UIImage* icon;
+// Discord asset hashes are durable version identifiers. iconURL remains for
+// compatibility with the existing cold-start SDWebImage hydration path.
+@property (strong, nonatomic) NSString *iconID;
 @property (strong, nonatomic) NSString *iconURL;
 // The guild's banner
 @property (strong, nonatomic) UIImage* banner;
+@property (strong, nonatomic) NSString *bannerID;
 
 // Array of child DCChannel objects
 @property (strong, nonatomic) NSMutableArray* channels;
