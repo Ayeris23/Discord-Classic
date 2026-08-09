@@ -14,6 +14,7 @@
 #import "DCServerCommunicator.h"
 #import "DCEmoji.h"
 #import "DTImageTextAttachment.h"
+#import "DCContentManager.h"
 #import <CoreText/CoreText.h>
 
 // Constants defined here, declared extern in header
@@ -1053,16 +1054,29 @@ static CGFloat DCEmojiGetWidth(void *refCon)   { return 20.0f; }
 
         NSString *emojiID   = [string.string substringWithRange:[match rangeAtIndex:3]];
         NSString *emojiName = [string.string substringWithRange:[match rangeAtIndex:2]];
+        BOOL animated       = [match rangeAtIndex:1].length > 0;
         DCEmoji *emoji      = [DCServerCommunicator.sharedInstance emojiForSnowflake:emojiID];
 
+        /*
+         * The Discord token contains everything required to resolve the CDN
+         * object.  Do not require READY/guild emoji state to exist first: a
+         * cold-restored chat is intentionally rendered before IDENTIFY/READY,
+         * and external emojis may not belong to the selected guild anyway.
+         */
         if (!emoji) {
-            // Token from a guild the client hasn't loaded — degrade gracefully
-            NSString *fallback = [NSString stringWithFormat:@":%@:", emojiName];
-            [string replaceCharactersInRange:match.range withString:fallback];
-            [protectedRanges addObject:[NSValue valueWithRange:
-                NSMakeRange(match.range.location, fallback.length)]];
-            continue;
+            emoji = [DCEmoji new];
+            emoji.snowflake = emojiID;
+            emoji.name = emojiName;
+            emoji.animated = animated;
+            [DCServerCommunicator.sharedInstance setEmoji:emoji forSnowflake:emojiID];
+        } else {
+            if (!emoji.name.length) emoji.name = emojiName;
+            emoji.animated = animated;
         }
+
+        // SDWebImage handles the disk hit/miss.  If it completes later, the
+        // existing EMOJI IMAGE READY notification relayouts visible cells.
+        [DCContentManager fetchEmojiImage:emoji];
 
         // Build the inline attachment. Image may be nil if the fetch hasn't
         // completed yet — the view will be empty until EMOJI IMAGE READY fires

@@ -68,6 +68,8 @@ typedef NS_ENUM(NSInteger, DCMessageReferenceState) {
 @property (strong, nonatomic) DCSnowflake* snowflake;
 @property (strong, nonatomic) DCUser* author;
 @property (strong, nonatomic) NSString *rawContent;
+// Original Discord message dictionary. Disk-backed windows replay this through DCTools.
+@property (strong, nonatomic) NSDictionary *sourceJSON;
 @property (strong, nonatomic) NSString* content;
 @property (strong, nonatomic) NSAttributedString* attributedContent;
 @property (nonatomic) CGFloat textHeight;

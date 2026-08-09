@@ -9,7 +9,7 @@
         <!--View Controller-->
         <scene sceneID="fKN-Pb-4hz">
             <objects>
-                <navigationController extendedLayoutIncludesOpaqueBars="YES" definesPresentationContext="YES" id="I1M-Vv-1nm" customClass="DCViewController" sceneMemberID="viewController">
+                <navigationController storyboardIdentifier="DiscordRootNavigationController" extendedLayoutIncludesOpaqueBars="YES" definesPresentationContext="YES" id="I1M-Vv-1nm" customClass="DCViewController" sceneMemberID="viewController">
                     <navigationBar key="navigationBar" opaque="NO" clearsContextBeforeDrawing="NO" contentMode="scaleToFill" barStyle="black" translucent="NO" id="QVn-au-26c">
                         <rect key="frame" x="0.0" y="-44" width="0.0" height="44"/>
                         <autoresizingMask key="autoresizingMask"/>
@@ -262,7 +262,7 @@ Use only as a last resort.</string>
         <!--Chat View Controller - Chat-->
         <scene sceneID="0a4-kq-TlO">
             <objects>
-                <viewController extendedLayoutIncludesOpaqueBars="YES" id="SPS-Go-Xtj" customClass="DCChatViewController" sceneMemberID="viewController">
+                <viewController storyboardIdentifier="DiscordChatViewController" extendedLayoutIncludesOpaqueBars="YES" id="SPS-Go-Xtj" customClass="DCChatViewController" sceneMemberID="viewController">
                     <view key="view" contentMode="scaleToFill" id="JGz-6g-F3U">
                         <rect key="frame" x="0.0" y="64" width="320" height="504"/>
                         <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
@@ -1207,7 +1207,7 @@ Use only as a last resort.</string>
         <!--Menu View Controller-->
         <scene sceneID="xCE-qA-hyt">
             <objects>
-                <viewController id="xVl-Lb-Tkb" customClass="DCMenuViewController" sceneMemberID="viewController">
+                <viewController storyboardIdentifier="DiscordMenuViewController" id="xVl-Lb-Tkb" customClass="DCMenuViewController" sceneMemberID="viewController">
                     <view key="view" contentMode="scaleToFill" id="4Vz-wr-LiF">
                         <rect key="frame" x="0.0" y="64" width="320" height="504"/>
                         <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>

@@ -16,6 +16,7 @@
 #include <Foundation/NSObjCRuntime.h>
 #include <UIKit/UIKit.h>
 #include <malloc/malloc.h>
+#include <math.h>
 #include <objc/NSObjCRuntime.h>
 #import <MediaPlayer/MediaPlayer.h>
 
@@ -618,6 +619,7 @@ static dispatch_queue_t chat_messages_queue;
                     window.atPresentTime = NO;
 
                     [self saveScrollPositionForWindow:window];
+                    [[DCMessageStore sharedInstance] scheduleCheckpointForWindow:window];
                     return;
                 }
 
@@ -645,6 +647,7 @@ static dispatch_queue_t chat_messages_queue;
                 self.restoringWindowPosition = NO;
 
                 [self saveScrollPositionForWindow:window];
+                [[DCMessageStore sharedInstance] scheduleCheckpointForWindow:window];
                 return;
             }
 
@@ -744,6 +747,7 @@ static dispatch_queue_t chat_messages_queue;
             self.restoringWindowPosition = NO;
 
             [self saveScrollPositionForWindow:window];
+            [[DCMessageStore sharedInstance] scheduleCheckpointForWindow:window];
         });
     });
 }
@@ -758,10 +762,16 @@ static dispatch_queue_t chat_messages_queue;
         return;
     }
 
+    // A non-nil saved chat ID is the entire cold-launch "screen" state.
+    // Persist it immediately so an actual crash still reopens this channel.
+    [[DCCacheManager sharedInstance]
+        saveLastActiveChatChannelID:channel.snowflake];
+
     DCChannelWindow *previousWindow = _currentWindow;
 
     if (previousWindow) {
         [self saveScrollPositionForWindow:previousWindow];
+        [[DCMessageStore sharedInstance] checkpointWindow:previousWindow];
     }
 
     [self syncWindowForSelectedChannel];
@@ -775,12 +785,26 @@ static dispatch_queue_t chat_messages_queue;
      */
     self.restoringWindowPosition = YES;
 
-    // Immediately display cached content.
+    // Immediately display cached content.  At the normal live-tail position,
+    // do not force UITableView to synchronously lay out the entire visible pass
+    // before UIKit's first frame.  A historical saved offset still takes the
+    // precise synchronous path so restoration does not visibly jump.
     [self.chatTableView reloadData];
-    [self.chatTableView layoutIfNeeded];
 
-    if (self.messages.count > 0) {
+    BOOL needsPreciseSavedOffset =
+        self.messages.count > 0 &&
+        self.currentWindow.hasSavedContentOffset &&
+        fabs(self.currentWindow.savedContentOffsetY +
+             self.chatTableView.contentInset.top) > 8.0f;
+
+    if (needsPreciseSavedOffset) {
+        [self.chatTableView layoutIfNeeded];
         [self restoreScrollPositionForCurrentWindow];
+    } else if (self.messages.count > 0) {
+        [self.chatTableView setContentOffset:
+            CGPointMake(self.chatTableView.contentOffset.x,
+                        -self.chatTableView.contentInset.top)
+                                  animated:NO];
     }
 
     self.restoringWindowPosition = NO;
@@ -1079,6 +1103,7 @@ static dispatch_queue_t chat_messages_queue;
     self.restoringWindowPosition = NO;
 
     [self saveScrollPositionForWindow:self.currentWindow];
+    [[DCMessageStore sharedInstance] scheduleCheckpointForWindow:self.currentWindow];
 }
 
 - (void)handleGuildMemberListUpdated:(NSNotification *)notification {
@@ -1144,6 +1169,20 @@ static dispatch_queue_t chat_messages_queue;
 
     DCMessage *newMessage = [DCTools convertJsonMessage:notification.userInfo];
 
+    // MESSAGE_UPDATE is partial. Keep a complete server-shaped payload for the
+    // next disk checkpoint by overlaying changed top-level fields on the last
+    // full payload.
+    NSMutableDictionary *mergedSource = [NSMutableDictionary dictionary];
+    if ([compareMessage.sourceJSON isKindOfClass:[NSDictionary class]]) {
+        [mergedSource addEntriesFromDictionary:compareMessage.sourceJSON];
+    }
+    if ([notification.userInfo isKindOfClass:[NSDictionary class]]) {
+        [mergedSource addEntriesFromDictionary:notification.userInfo];
+    }
+    if (mergedSource.count) {
+        newMessage.sourceJSON = [NSDictionary dictionaryWithDictionary:mergedSource];
+    }
+
     // fix any potential missing fields from a partial response
     if (newMessage.author == nil || (NSNull *)newMessage.author == [NSNull null]) {
         newMessage.author = compareMessage.author;
@@ -1175,6 +1214,7 @@ static dispatch_queue_t chat_messages_queue;
         [self.messages replaceObjectAtIndex:idx
                                  withObject:newMessage];
         [self handleAsyncReload];
+        [[DCMessageStore sharedInstance] scheduleCheckpointForWindow:self.currentWindow];
         return;
     }
     [self.chatTableView beginUpdates];
@@ -1198,6 +1238,7 @@ static dispatch_queue_t chat_messages_queue;
 
     [self.chatTableView reloadRowsAtIndexPaths:reloadPaths withRowAnimation:UITableViewRowAnimationAutomatic];
     [self.chatTableView endUpdates];
+    [[DCMessageStore sharedInstance] scheduleCheckpointForWindow:self.currentWindow];
 }
 
 - (void)handleMessageDelete:(NSNotification *)notification {
@@ -1261,6 +1302,7 @@ static dispatch_queue_t chat_messages_queue;
     if (replyPaths.count) {
         [self.chatTableView reloadRowsAtIndexPaths:replyPaths withRowAnimation:UITableViewRowAnimationNone];
     }
+    [[DCMessageStore sharedInstance] scheduleCheckpointForWindow:self.currentWindow];
 }
 
 - (void)handleTyping:(NSNotification *)notification {
@@ -1742,6 +1784,7 @@ static dispatch_queue_t chat_messages_queue;
                 }
             }
 
+            [[DCMessageStore sharedInstance] scheduleCheckpointForWindow:targetWindow];
             self.loadingOlderMessages = NO;
         });
 
@@ -1969,6 +2012,7 @@ static dispatch_queue_t chat_messages_queue;
                 [self evictOldestDownToCeiling];
             }
             [self updatePresentTimeFromTablePosition];
+            [[DCMessageStore sharedInstance] scheduleCheckpointForWindow:targetWindow];
 
             self.loadingNewerMessages = NO;
         });
@@ -4009,6 +4053,9 @@ static dispatch_queue_t chat_messages_queue;
 
     [self invalidateAllTypingTimers];
 
+    // Popping/dismissing the chat means the user's last active screen is now
+    // the main menu. Do not clear this for temporary modal/profile transitions.
+    [[DCCacheManager sharedInstance] clearLastActiveChatChannel];
     DCServerCommunicator.sharedInstance.selectedChannel = nil;
 
     [NSNotificationCenter.defaultCenter

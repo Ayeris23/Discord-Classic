@@ -276,6 +276,7 @@ typedef NS_ENUM(uint64_t, DCGatewayCapabilities) {
 // themselves remain canonical live objects; DCCacheManager extracts only
 // durable scalar/string/dictionary fields from them.
 - (NSDictionary *)loadedUsersSnapshot;
+- (void)mergeCachedUsers:(NSDictionary *)cachedUsers;
 - (DCRole *)roleForSnowflake:(NSString *)snowflake;
 - (void)setRole:(DCRole *)role forSnowflake:(NSString *)snowflake;
 - (DCEmoji *)emojiForSnowflake:(NSString *)snowflake;

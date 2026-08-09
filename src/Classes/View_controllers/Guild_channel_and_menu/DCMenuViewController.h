@@ -54,4 +54,8 @@
 
 + (NSString *)imageNameForStatus:(DCUserStatus)status;
 
+// Cold-launch restoration uses a prebuilt navigation stack. Mark the saved
+// chat request consumed so returning to the menu does not auto-open it again.
+- (void)markColdChatRestoreHandled;
+
 @end

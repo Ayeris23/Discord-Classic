@@ -12,6 +12,9 @@
 @property (strong, nonatomic) IBOutlet UIImageView *playButton;
 @property (weak, nonatomic) IBOutlet UIImageView *thumbnail;
 @property (strong, nonatomic) NSURL *videoURL;
+@property (strong, nonatomic) NSURL *thumbnailURL;
+@property (assign, nonatomic) CGSize naturalSize;
+@property (assign, nonatomic) BOOL thumbnailLoading;
 @property (weak, nonatomic) IBOutlet UILabel *videoWarning;
 @property (nonatomic, strong) NSURL *linkURL;
 

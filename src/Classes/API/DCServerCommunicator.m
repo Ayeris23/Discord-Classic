@@ -25,6 +25,7 @@
 #include "SDWebImageManager.h"
 #import "DCContentManager.h"
 #import "DCCacheManager.h"
+#import "DCMessageStore.h"
 #import "Base64.h"
 #include <stdint.h>
 
@@ -523,6 +524,95 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
     return snapshot;
 }
 
+- (void)mergeCachedUsers:(NSDictionary *)cachedUsers {
+    if (![cachedUsers isKindOfClass:[NSDictionary class]] || cachedUsers.count == 0)
+        return;
+
+    /*
+     * Cold-start user hydration is deliberately late now.  Merge the disk
+     * snapshot conservatively so live Gateway data always wins, while cached
+     * data can still fill placeholders created by a restored message window.
+     */
+    NSMutableArray *changedPlaceholders = [NSMutableArray array];
+    dispatch_barrier_sync(self.accessQueue, ^{
+        if (!self.loadedUsers)
+            self.loadedUsers = [NSMutableDictionary dictionary];
+
+        for (NSString *snowflake in cachedUsers) {
+            DCUser *cached = [cachedUsers objectForKey:snowflake];
+            if (![cached isKindOfClass:[DCUser class]] || !snowflake.length)
+                continue;
+
+            DCUser *existing = [self.loadedUsers objectForKey:snowflake];
+            if (!existing) {
+                [self.loadedUsers setObject:cached forKey:snowflake];
+                continue;
+            }
+
+            BOOL changed = NO;
+            BOOL placeholderName =
+                !existing.username.length ||
+                [existing.username isEqualToString:@"Unknown User"];
+            BOOL placeholderGlobalName =
+                !existing.globalName.length ||
+                [existing.globalName isEqualToString:@"Unknown User"];
+
+            if (placeholderName && cached.username.length) {
+                existing.username = cached.username;
+                changed = YES;
+            }
+            if (placeholderGlobalName && cached.globalName.length) {
+                existing.globalName = cached.globalName;
+                changed = YES;
+            }
+            if (!existing.avatarID && cached.avatarID) {
+                existing.avatarID = cached.avatarID;
+                /*
+                 * A placeholder may already have generated a default avatar
+                 * before late hydration supplied the real hash.  Clear that
+                 * runtime image so the next visible-cell request uses the real
+                 * hash-versioned CDN asset instead of keeping the placeholder.
+                 */
+                existing.profileImage = nil;
+                existing.rawProfileImage = nil;
+                changed = YES;
+            }
+            if (!existing.avatarDecorationID && cached.avatarDecorationID) {
+                existing.avatarDecorationID = cached.avatarDecorationID;
+                existing.avatarDecoration = nil;
+                existing.profileImage = nil;
+                changed = YES;
+            }
+            if (!existing.biography.length && cached.biography.length)
+                existing.biography = cached.biography;
+            if (existing.discriminator == 0 && cached.discriminator != 0)
+                existing.discriminator = cached.discriminator;
+
+            if (!existing.guildNicknames)
+                existing.guildNicknames = [NSMutableDictionary dictionary];
+            for (NSString *guildID in cached.guildNicknames) {
+                if (![existing.guildNicknames objectForKey:guildID]) {
+                    id nickname = [cached.guildNicknames objectForKey:guildID];
+                    if (nickname)
+                        [existing.guildNicknames setObject:nickname forKey:guildID];
+                }
+            }
+
+            if (changed) [changedPlaceholders addObject:existing];
+        }
+    });
+
+    if (changedPlaceholders.count) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            for (DCUser *user in changedPlaceholders) {
+                [NSNotificationCenter.defaultCenter
+                    postNotificationName:@"RELOAD USER DATA"
+                                  object:user];
+            }
+        });
+    }
+}
+
 - (void)requestMemberChunkForUserIds:(NSArray *)userIds
                              inGuild:(NSString *)guildId {
     if (!userIds.count || !guildId) return;
@@ -569,6 +659,10 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
 - (void)setEmoji:(DCEmoji *)emoji forSnowflake:(NSString *)snowflake {
     if (!snowflake || !emoji) return;
     dispatch_barrier_async(self.accessQueue, ^{
+        // Cached chats can parse custom emoji before IDENTIFY creates the
+        // normal READY-era registry.  NSMutableDictionary messaging to nil is
+        // a silent no-op, so lazily create the canonical store on first write.
+        if (!self.loadedEmojis) self.loadedEmojis = NSMutableDictionary.new;
         self.loadedEmojis[snowflake] = emoji;
     });
 }
@@ -1624,6 +1718,7 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
         DCChannel *channel = [self.channels objectForKey:channelID];
         if (channel.parentGuild == guild ||
             [channel.parentGuild.snowflake isEqualToString:guildID]) {
+            [[DCMessageStore sharedInstance] removeWindowForChannel:channelID];
             [self.channels removeObjectForKey:channelID];
         }
     }
@@ -1648,6 +1743,7 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
 
     if ([self.selectedGuild.snowflake isEqualToString:guildID] ||
         [self.selectedChannel.parentGuild.snowflake isEqualToString:guildID]) {
+        [[DCCacheManager sharedInstance] clearLastActiveChatChannel];
         self.selectedGuild = [self privateGuild];
         self.selectedChannel = nil;
     }
@@ -2020,9 +2116,12 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
         [guild checkIfRead];
     }
     [self.channels removeObjectForKey:channelID];
+    [[DCMessageStore sharedInstance] removeWindowForChannel:channelID];
 
-    if ([self.selectedChannel.snowflake isEqualToString:channelID])
+    if ([self.selectedChannel.snowflake isEqualToString:channelID]) {
+        [[DCCacheManager sharedInstance] clearLastActiveChatChannel];
         self.selectedChannel = nil;
+    }
 
     DBGLOG(@"[CHANNEL_DELETE] Removed channel %@", channelID);
     [self checkpointChannelStructure];
@@ -2256,10 +2355,12 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
             // merge fresh user fields into those existing objects.
             if (!self.loadedUsers) self.loadedUsers = NSMutableDictionary.new;
 
-            // Roles/emojis are not persistent yet, so retain their existing
-            // pre-cache behavior for this first persistence slice.
-            self.loadedRoles  = NSMutableDictionary.new;
-            self.loadedEmojis = NSMutableDictionary.new;
+            // Roles are still rebuilt from READY.  Emoji objects, however,
+            // may already have been synthesized from cached/external message
+            // tokens before IDENTIFY; preserve those so their image fetches and
+            // inline attachment lookups remain valid across authentication.
+            self.loadedRoles = NSMutableDictionary.new;
+            if (!self.loadedEmojis) self.loadedEmojis = NSMutableDictionary.new;
         });
     }
 }
@@ -2693,9 +2794,6 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
                         DCCacheManager *cache = [DCCacheManager sharedInstance];
                         [cache saveGuilds:weakSelf.guilds];
                         [cache saveUserInfo:weakSelf.currentUserInfo];
-                        if (weakSelf.cachedDisplayLayout.count > 0) {
-                            [cache saveDisplayLayout:weakSelf.cachedDisplayLayout];
-                        }
                         DBGLOG(@"[HeartbeatACK] Flushed cold-start cache");
                     }
                     break;

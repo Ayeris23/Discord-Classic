@@ -24,9 +24,52 @@
 @interface DCMenuViewController ()
 @property NSMutableArray *displayGuilds;
 @property DCChannel *optionChannel;
+@property (assign, nonatomic) BOOL shouldAttemptColdChatRestore;
+@property (assign, nonatomic) BOOL coldChatRestoreAlreadyHandled;
 @end
 
 @implementation DCMenuViewController
+
+- (BOOL)isDirectMessagesGuild:(DCGuild *)guild {
+    return guild && guild.snowflake == nil &&
+           [guild.name isEqualToString:@"Direct Messages"];
+}
+
+- (void)synchronizeSelectedGuildUI {
+    DCGuild *guild = self.selectedGuild;
+    if (!guild) {
+        [self.navigationItem setTitle:@"Discord"];
+        self.guildLabel.text = @"Discord";
+        self.totalView.hidden = YES;
+        self.guildTotalView.hidden = NO;
+        return;
+    }
+
+    DCServerCommunicator.sharedInstance.selectedGuild = guild;
+
+    NSString *guildName = guild.name ?: @"Discord";
+    [self.navigationItem setTitle:guildName];
+    self.guildLabel.text = guildName;
+
+    if ([self isDirectMessagesGuild:guild]) {
+        [guild.channels sortUsingComparator:^NSComparisonResult(DCChannel *a, DCChannel *b) {
+            NSString *idA = ([a.lastMessageId isKindOfClass:[NSString class]]) ? a.lastMessageId : @"0";
+            NSString *idB = ([b.lastMessageId isKindOfClass:[NSString class]]) ? b.lastMessageId : @"0";
+            return [idB localizedStandardCompare:idA];
+        }];
+
+        self.totalView.hidden = NO;
+        self.userName.text = DCServerCommunicator.sharedInstance.currentUserInfo.globalName;
+        self.globalName.text = [NSString stringWithFormat:@"@%@",
+                                DCServerCommunicator.sharedInstance.currentUserInfo.username ?: @""];
+        self.guildTotalView.hidden = YES;
+        self.guildBanner.image = [UIImage imageNamed:@"No-Header"];
+    } else {
+        self.totalView.hidden = YES;
+        self.guildTotalView.hidden = NO;
+        self.guildBanner.image = guild.banner ?: [UIImage imageNamed:@"No-Header"];
+    }
+}
 
 - (BOOL)shouldAutorotateToInterfaceOrientation:(UIInterfaceOrientation)interfaceOrientation {
     if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
@@ -48,6 +91,7 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
+    self.shouldAttemptColdChatRestore = !self.coldChatRestoreAlreadyHandled;
     // Guard against duplicate registration on viewDidLoad re-fire (iOS 5 memory warning)
     [NSNotificationCenter.defaultCenter removeObserver:self];
 
@@ -161,6 +205,47 @@
     }
 }
 
+// Cold-launch fallback. The normal Phase 5 path is restored by the app
+// delegate before first presentation using the storyboard's chat identifier.
+// This remains only for a cache miss where READY later discovers the channel.
+- (void)attemptColdChatRestoreIfNeeded {
+    if (!self.shouldAttemptColdChatRestore) return;
+
+    NSString *channelID =
+        [[DCCacheManager sharedInstance] loadLastActiveChatChannelID];
+
+    if (channelID.length == 0) {
+        self.shouldAttemptColdChatRestore = NO;
+        return;
+    }
+
+    for (DCGuild *guild in DCServerCommunicator.sharedInstance.guilds) {
+        for (DCChannel *channel in guild.channels) {
+            if (![channel.snowflake isEqualToString:channelID]) continue;
+
+            self.shouldAttemptColdChatRestore = NO;
+            DBGLOG(@"[ColdStart] Late-restoring chat %@ after cache miss",
+                   channelID);
+            [self navigateToChannelWithId:channelID];
+            return;
+        }
+    }
+
+    if (!DCServerCommunicator.sharedInstance.didAuthenticate) {
+        return;
+    }
+
+    DBGLOG(@"[ColdStart] Saved chat %@ no longer exists; returning to menu",
+           channelID);
+    [[DCCacheManager sharedInstance] clearLastActiveChatChannel];
+    self.shouldAttemptColdChatRestore = NO;
+}
+
+- (void)markColdChatRestoreHandled {
+    self.coldChatRestoreAlreadyHandled = YES;
+    self.shouldAttemptColdChatRestore = NO;
+}
+
 // block that handles what the app does if you open it via a push ntoification
 
 - (void)handleNotificationTap:(NSNotification *)notification {
@@ -234,10 +319,6 @@
         [self.guildTableView reloadData];
         [self.channelTableView reloadData];
 
-        if (DCServerCommunicator.sharedInstance.didAuthenticate && self.displayGuilds.count) {
-            [[DCCacheManager sharedInstance] saveDisplayLayout:self.displayGuilds];
-        }
-
         if (!self.refreshControl) {
             self.refreshControl = UIRefreshControl.new;
 
@@ -250,6 +331,8 @@
                                     action:@selector(reconnect)
                           forControlEvents:UIControlEventValueChanged];
         }
+
+        [self attemptColdChatRestoreIfNeeded];
     });
 }
 
@@ -421,7 +504,7 @@
 
             if (channelInSelectedGuild || isDMChannel) {
                 // Re-sort DM list if we're viewing Direct Messages
-                if ([self.selectedGuild.name isEqualToString:@"Direct Messages"]) {
+                if ([self isDirectMessagesGuild:self.selectedGuild]) {
                     [self.selectedGuild.channels sortUsingComparator:^NSComparisonResult(DCChannel *a, DCChannel *b) {
                         NSString *idA = ([a.lastMessageId isKindOfClass:[NSString class]]) ? a.lastMessageId : @"0";
                         NSString *idB = ([b.lastMessageId isKindOfClass:[NSString class]]) ? b.lastMessageId : @"0";
@@ -437,27 +520,16 @@
     });
 }
 
-// idk what to do with this ngl
+// Keep the menu's visible chrome derived from the selected guild model.
+// This matters on direct cold-chat restoration because the menu view is not
+// loaded until the user taps Back; its storyboard labels may still contain
+// their default Direct Messages text at that point.
 - (void)viewWillAppear:(BOOL)animated {
-    NSLog(@"[MenuVC] viewWillAppear selectedGuild:%@ guilds[0]:%@", 
-            self.selectedGuild.name,
-            ((DCGuild *)DCServerCommunicator.sharedInstance.guilds.firstObject).name);
-    if (self.selectedGuild) {
-        // NSLog(@"clear selected channel!");
-        // [DCServerCommunicator.sharedInstance setSelectedChannel:nil];
-        if ([self.navigationItem.title isEqualToString:@"Direct Messages"]) {
-            [self.selectedGuild.channels sortUsingComparator:^NSComparisonResult(DCChannel *a, DCChannel *b) {
-                NSString *idA = ([a.lastMessageId isKindOfClass:[NSString class]]) ? a.lastMessageId : @"0";
-                NSString *idB = ([b.lastMessageId isKindOfClass:[NSString class]]) ? b.lastMessageId : @"0";
-                return [idB localizedStandardCompare:idA];
-            }];
-        }
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [self.channelTableView reloadData];
-        });
-    } else {
-        [self.navigationItem setTitle:@"Discord"];
-    }
+    [super viewWillAppear:animated];
+
+    [self synchronizeSelectedGuildUI];
+    [self.guildTableView reloadData];
+    [self.channelTableView reloadData];
 }
 
 // misc end
@@ -578,7 +650,7 @@
             [self.navigationItem setTitle:self.selectedGuild.name];
             self.guildLabel.text = self.selectedGuild.name;
             // Refresh pointer and sort if DM guild
-            if ([self.selectedGuild.name isEqualToString:@"Direct Messages"]) {
+            if ([self isDirectMessagesGuild:self.selectedGuild]) {
                 self.selectedGuild = DCServerCommunicator.sharedInstance.guilds.firstObject;
                 [self.selectedGuild.channels sortUsingComparator:^NSComparisonResult(DCChannel *a, DCChannel *b) {
                     NSString *idA = ([a.lastMessageId isKindOfClass:[NSString class]]) ? a.lastMessageId : @"0";
@@ -590,8 +662,7 @@
             @autoreleasepool {
                 [self.channelTableView reloadData];
             }
-            if (self.guildLabel &&
-                [self.guildLabel.text isEqualToString:@"Direct Messages"]) {
+            if ([self isDirectMessagesGuild:self.selectedGuild]) {
                 self.totalView.hidden = NO;
                 self.userName.text =
                     DCServerCommunicator.sharedInstance.currentUserInfo.globalName;
@@ -850,8 +921,7 @@
         }
         return cell;
     } else if (tableView == self.channelTableView) {
-        if (self.guildLabel &&
-            [self.guildLabel.text isEqualToString:@"Direct Messages"]) {
+        if ([self isDirectMessagesGuild:self.selectedGuild]) {
             DCPrivateChannelTableCell *cell =
                 [tableView dequeueReusableCellWithIdentifier:@"private"];
             if (cell == nil) {

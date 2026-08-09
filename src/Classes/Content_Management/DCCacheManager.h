@@ -9,6 +9,7 @@
 #import <UIKit/UIKit.h>
 
 @class DCMessage;
+@class DCChannelWindow;
 @class DCMessageLayout;
 @class DCUser;
 @class DCUserInfo;
@@ -78,6 +79,20 @@
 
 // --- Memory management ---
 - (void)handleMemoryWarning;
+
+
+// --- Message window cache (disk-backed) ---
+// Bounded per-channel snapshots used for immediate cold-start rendering.
+- (void)saveMessageWindow:(DCChannelWindow *)window;
+- (DCChannelWindow *)loadMessageWindowForChannel:(NSString *)channelSnowflake;
+- (void)invalidateMessageWindowForChannel:(NSString *)channelSnowflake;
+- (void)invalidateAllMessageWindows;
+
+// --- Last active screen ---
+// nil last-active chat means the app should cold-launch to the main menu.
+- (void)saveLastActiveChatChannelID:(NSString *)channelSnowflake;
+- (NSString *)loadLastActiveChatChannelID;
+- (void)clearLastActiveChatChannel;
 
 // --- Guild/structure cache (disk-backed) ---
 - (void)saveGuilds:(NSArray *)guilds;

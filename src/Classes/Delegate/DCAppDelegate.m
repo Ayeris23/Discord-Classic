@@ -17,6 +17,10 @@
 #import "DCGuild.h"
 #import "DCChannel.h"
 #import "DCContentManager.h"
+#import "DCMessageStore.h"
+#import "DCMenuViewController.h"
+#import "DCChatViewController.h"
+#import "DCTools.h"
 
 @interface DCAppDelegate ()
 @property (assign, nonatomic) BOOL shouldReload;
@@ -82,6 +86,178 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
 }
 
 @implementation DCAppDelegate
+
+// Build the initial navigation stack before UIKit presents the storyboard.
+// This is the normal cold-restore path once a cached guild/channel graph exists:
+// menu stays underneath for Back, while chat is the first visible controller.
+- (BOOL)restoreCachedChatNavigationStackIfPossible {
+    if (self.experimental || self.hackyMode) {
+        return NO;
+    }
+
+    NSString *channelID =
+        [[DCCacheManager sharedInstance] loadLastActiveChatChannelID];
+    if (channelID.length == 0) {
+        return NO;
+    }
+
+    UIViewController *root = self.window.rootViewController;
+    if (![root isKindOfClass:[UINavigationController class]]) {
+        return NO;
+    }
+
+    UINavigationController *navigationController =
+        (UINavigationController *)root;
+    if (navigationController.viewControllers.count == 0) {
+        return NO;
+    }
+
+    UIViewController *rootContent =
+        [navigationController.viewControllers objectAtIndex:0];
+    if (![rootContent isKindOfClass:[DCMenuViewController class]]) {
+        return NO;
+    }
+
+    DCGuild *restoredGuild = nil;
+    DCChannel *restoredChannel = nil;
+    for (DCGuild *guild in DCServerCommunicator.sharedInstance.guilds) {
+        for (DCChannel *channel in guild.channels) {
+            if ([channel.snowflake isEqualToString:channelID]) {
+                restoredGuild = guild;
+                restoredChannel = channel;
+                break;
+            }
+        }
+        if (restoredChannel) break;
+    }
+
+    if (!restoredChannel) {
+        // Keep the saved ID. DCMenuViewController will retry after live READY.
+        return NO;
+    }
+
+    DCMenuViewController *menu = (DCMenuViewController *)rootContent;
+    UIStoryboard *storyboard = menu.storyboard;
+    if (!storyboard) {
+        return NO;
+    }
+
+    DCChatViewController *chat = nil;
+    @try {
+        UIViewController *candidate =
+            [storyboard instantiateViewControllerWithIdentifier:
+                @"DiscordChatViewController"];
+        if ([candidate isKindOfClass:[DCChatViewController class]]) {
+            chat = (DCChatViewController *)candidate;
+        }
+    }
+    @catch (NSException *exception) {
+        DBGLOG(@"[ColdStart] Could not instantiate chat storyboard identifier: %@",
+               exception);
+        return NO;
+    }
+
+    if (!chat) {
+        return NO;
+    }
+
+    menu.selectedGuild = restoredGuild;
+    menu.selectedChannel = restoredChannel;
+    DCServerCommunicator.sharedInstance.selectedGuild = restoredGuild;
+    DCServerCommunicator.sharedInstance.selectedChannel = restoredChannel;
+
+    // Do not force-load the menu view hierarchy. It stays underneath the chat
+    // and will initialize normally if/when the user taps Back.
+    [menu markColdChatRestoreHandled];
+
+    chat.navigationItem.title = restoredChannel.name;
+
+    [navigationController setViewControllers:
+        [NSArray arrayWithObjects:menu, chat, nil]
+                                     animated:NO];
+
+    DBGLOG(@"[ColdStart] Preloaded navigation stack for chat %@", channelID);
+    return YES;
+}
+
+- (void)relinkCachedPrivateChannelsAfterUserHydration {
+    DCServerCommunicator *communicator = DCServerCommunicator.sharedInstance;
+    NSUInteger relinked = 0;
+    NSUInteger hydratedIcons = 0;
+    const NSUInteger DCColdStartDMIconHydrationLimit = 12;
+
+    for (DCGuild *guild in communicator.guilds) {
+        BOOL isPrivateGuild =
+            (guild.snowflake == nil && [guild.name isEqualToString:@"Direct Messages"]);
+        if (!isPrivateGuild) continue;
+
+        for (DCChannel *channel in guild.channels) {
+            if (channel.recipientIDs.count == 0) continue;
+
+            NSMutableArray *recipients = [NSMutableArray array];
+            for (NSString *recipientID in channel.recipientIDs) {
+                DCUser *recipient = [communicator userForSnowflake:recipientID];
+                if (recipient) [recipients addObject:recipient];
+            }
+            channel.recipients = recipients;
+
+            NSMutableArray *users = [recipients mutableCopy];
+            DCUser *currentUser = [communicator userForSnowflake:communicator.snowflake];
+            if (currentUser) [users addObject:currentUser];
+            channel.users = users;
+
+            if (channel.type == DCChannelTypeDM && recipients.count == 1) {
+                DCUser *recipient = [recipients objectAtIndex:0];
+                NSString *displayName = [recipient displayName];
+                if (displayName.length) channel.name = displayName;
+            }
+
+            if (recipients.count > 0 && hydratedIcons < DCColdStartDMIconHydrationLimit) {
+                DCHydrateCachedPrivateChannelIcon(channel);
+                hydratedIcons++;
+            } else if (!channel.icon) {
+                channel.icon = DCDefaultPrivateChannelIcon(channel);
+            }
+            relinked++;
+        }
+    }
+
+    if (relinked > 0) {
+        DBGLOG(@"[ColdStart] Late-relinked %lu private channels after user hydration",
+               (unsigned long)relinked);
+        [NSNotificationCenter.defaultCenter
+            postNotificationName:@"RELOAD CHANNEL LIST" object:nil];
+    }
+
+    // Restored message snapshots already carry their authors' basic display
+    // metadata, so avoid an expensive whole-chat reload here. Live Gateway user
+    // events will continue to update visible cells through the existing path.
+}
+
+- (void)hydrateCachedUsersAfterFirstPaint {
+    DCCacheManager *cache = [DCCacheManager sharedInstance];
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
+        NSDictionary *cachedUsers = [cache loadCachedUsers];
+        if (cachedUsers.count == 0) return;
+
+        // Give UIKit a small head start even when the archive is tiny enough to
+        // decode before didFinishLaunching returns.  On old hardware the actual
+        // decode usually dominates this delay anyway.
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.10 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            DCServerCommunicator *communicator = DCServerCommunicator.sharedInstance;
+            [communicator mergeCachedUsers:cachedUsers];
+            DBGLOG(@"[ColdStart] Hydrated %lu cached users after first paint",
+                   (unsigned long)cachedUsers.count);
+            [self relinkCachedPrivateChannelsAfterUserHydration];
+
+            // Ensure a READY that raced the late hydration cannot accidentally
+            // shrink the durable user cache. saveUsers: performs the archive on
+            // DCCacheManager's serial queue.
+            [cache saveUsers:[communicator loadedUsersSnapshot]];
+        });
+    });
+}
 
 - (BOOL)application:(UIApplication *)application
     didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
@@ -170,6 +346,11 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
         NSString *channelId        = aps[@"channelId"]; // Adjusted to reflect your payload structure
         // NSLog(@"Channel id: %@", channelId);
         if (channelId) {
+            // A notification tap is an explicit navigation request and should
+            // override whichever chat happened to be active before termination.
+            [[DCCacheManager sharedInstance]
+                saveLastActiveChatChannelID:channelId];
+
             // NSLog(@"App launched with notification, channelId: %@",
             // channelId);
             dispatch_after(
@@ -188,39 +369,24 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
     if (DCServerCommunicator.sharedInstance.token.length) {
         DCCacheManager *cache = [DCCacheManager sharedInstance];
 
-        // Restore canonical users before guild/channel UI state. READY will
-        // merge fresh payloads into these same objects instead of rebuilding
-        // the user registry from scratch.
-        NSDictionary *cachedUsers = [cache loadCachedUsers];
-        if (cachedUsers.count > 0) {
-            DCServerCommunicator.sharedInstance.loadedUsers = [cachedUsers mutableCopy];
-            NSLog(@"[ColdStart] Restored %lu cached users",
-                  (unsigned long)cachedUsers.count);
-        } else if (!DCServerCommunicator.sharedInstance.loadedUsers) {
+        // Keep first paint independent of the potentially large user archive.
+        // Guild/channel records and message snapshots contain enough identity to
+        // render immediately; the canonical user database hydrates just after
+        // presentation and merges in place.
+        if (!DCServerCommunicator.sharedInstance.loadedUsers)
             DCServerCommunicator.sharedInstance.loadedUsers = NSMutableDictionary.new;
-        }
 
+        CFAbsoluteTime guildCacheStart = CFAbsoluteTimeGetCurrent();
         NSArray *cachedGuilds = [cache loadCachedGuilds];
+        DBGLOG(@"[ColdStartPerf] Guild/channel cache restore: %.3fs",
+               CFAbsoluteTimeGetCurrent() - guildCacheStart);
         if (cachedGuilds.count) {
             DCServerCommunicator.sharedInstance.guilds = [cachedGuilds mutableCopy];
-            NSArray *cachedLayout = [[DCCacheManager sharedInstance] loadDisplayLayout];
-            if (cachedLayout.count) {
-                NSMutableArray *relinked = [NSMutableArray arrayWithCapacity:cachedLayout.count];
-                for (id item in cachedLayout) {
-                    if ([item isKindOfClass:[DCGuild class]]) {
-                        DCGuild *archived = (DCGuild *)item;
-                        DCGuild *live = nil;
-                        for (DCGuild *g in DCServerCommunicator.sharedInstance.guilds) {
-                            if (archived.snowflake == nil && g.snowflake == nil) { live = g; break; }
-                            if ([g.snowflake isEqualToString:archived.snowflake]) { live = g; break; }
-                        }
-                        [relinked addObject:live ?: archived];
-                    } else {
-                        [relinked addObject:item]; // DCGuildFolder passes through as-is
-                    }
-                }
-                DCServerCommunicator.sharedInstance.cachedDisplayLayout = relinked;
-            }
+            // Phase 4.5 persists guild_positions/guild_folders in DCUserInfo.
+            // Rebuild displayGuilds from those IDs instead of unarchiving a second
+            // complete guild/channel object graph from dc_layout_cache.archive.
+            DCServerCommunicator.sharedInstance.cachedDisplayLayout = nil;
+            DCServerCommunicator.sharedInstance.guildsIsSorted = NO;
 
             DCUserInfo *cachedUserInfo = [[DCCacheManager sharedInstance] loadCachedUserInfo];
             if (cachedUserInfo) {
@@ -229,6 +395,22 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
                 // cached DM channel.users can be reconstructed before networking.
                 if (cachedUserInfo.id.length > 0) {
                     DCServerCommunicator.sharedInstance.snowflake = cachedUserInfo.id;
+
+                    /*
+                     * Keep the signed-in user on the synchronous startup path.
+                     * The rest of dc_users_cache.archive can hydrate later, but
+                     * the current user's identity/avatar hash is tiny and is
+                     * required immediately by restored chats and profile UI.
+                     */
+                    DCUser *cachedSelf = [DCUser new];
+                    cachedSelf.snowflake = cachedUserInfo.id;
+                    cachedSelf.username = cachedUserInfo.username;
+                    cachedSelf.globalName = cachedUserInfo.globalName;
+                    cachedSelf.avatarID = cachedUserInfo.avatar;
+                    cachedSelf.guildNicknames = [NSMutableDictionary dictionary];
+                    cachedSelf.status = DCUserStatusOffline;
+                    [DCServerCommunicator.sharedInstance
+                        mergeCachedUsers:@{ cachedSelf.snowflake : cachedSelf }];
                 }
             } else {
                 DCUserInfo *stub = [DCUserInfo new];
@@ -238,12 +420,6 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
             }
 
             NSMutableDictionary *channels = [NSMutableDictionary dictionary];
-            NSUInteger relinkedDMCount = 0;
-            NSUInteger hydratedDMIconCount = 0;
-            // Only hydrate the first screen-ish worth of DM icons during cold
-            // launch. The relationship graph is restored for every DM, but we
-            // avoid creating a network/cache thundering herd for offscreen rows.
-            const NSUInteger DCColdStartDMIconHydrationLimit = 12;
             for (DCGuild *guild in cachedGuilds) {
                 BOOL isPrivateGuild = (guild.snowflake == nil &&
                     [guild.name isEqualToString:@"Direct Messages"]);
@@ -251,41 +427,14 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
                     channel.parentGuild = guild;
 
                     if (isPrivateGuild && channel.recipientIDs.count > 0) {
-                        // Migrate caches produced before private-channel type was
-                        // parsed correctly. More than one recipient implies Group DM.
-                        if (channel.type == DCChannelTypeDM && channel.recipientIDs.count > 1) {
+                        // User records are intentionally hydrated after first paint.
+                        // Keep the persisted channel name immediately available and
+                        // defer recipient-object relinking/avatar work until then.
+                        if (channel.type == DCChannelTypeDM && channel.recipientIDs.count > 1)
                             channel.type = DCChannelTypeGroupDM;
-                        }
-
-                        NSMutableArray *recipients = [NSMutableArray array];
-                        for (NSString *recipientID in channel.recipientIDs) {
-                            DCUser *recipient = [DCServerCommunicator.sharedInstance
-                                userForSnowflake:recipientID];
-                            if (recipient) [recipients addObject:recipient];
-                        }
-                        channel.recipients = recipients;
-
-                        NSMutableArray *users = [recipients mutableCopy];
-                        DCUser *currentUser = [DCServerCommunicator.sharedInstance
-                            userForSnowflake:DCServerCommunicator.sharedInstance.snowflake];
-                        if (currentUser) [users addObject:currentUser];
-                        channel.users = users;
-
-                        if (channel.type == DCChannelTypeDM && recipients.count == 1) {
-                            DCUser *recipient = [recipients objectAtIndex:0];
-                            NSString *displayName = [recipient displayName];
-                            if (displayName.length > 0) channel.name = displayName;
-                        }
-
-                        if (recipients.count > 0) {
-                            if (hydratedDMIconCount < DCColdStartDMIconHydrationLimit) {
-                                DCHydrateCachedPrivateChannelIcon(channel);
-                                hydratedDMIconCount++;
-                            } else {
-                                channel.icon = DCDefaultPrivateChannelIcon(channel);
-                            }
-                            relinkedDMCount++;
-                        }
+                        channel.recipients = [NSMutableArray array];
+                        channel.users = [NSMutableArray array];
+                        channel.icon = DCDefaultPrivateChannelIcon(channel);
                     }
 
                     if (channel.snowflake) {
@@ -294,10 +443,10 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
                 }
             }
             DCServerCommunicator.sharedInstance.channels = channels;
-            if (relinkedDMCount > 0) {
-                NSLog(@"[ColdStart] Relinked %lu cached private channels to canonical users",
-                      (unsigned long)relinkedDMCount);
-            }
+            // Resolve and preload the saved chat before the storyboard's first
+            // visible presentation. The chat's viewWillAppear then restores its
+            // DCChannelWindow normally, so there is no menu frame or push animation.
+            [self restoreCachedChatNavigationStackIfPossible];
 
             [NSNotificationCenter.defaultCenter
                 postNotificationName:@"READY"
@@ -336,6 +485,7 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
             });
         }
 
+        [self hydrateCachedUsersAfterFirstPaint];
         [DCServerCommunicator.sharedInstance startCommunicator];
     }
     
@@ -357,7 +507,7 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
      UIRemoteNotificationTypeBadge |
      UIRemoteNotificationTypeSound |
      UIRemoteNotificationTypeAlert];
-    
+
     return YES;
 }
 
@@ -416,6 +566,8 @@ didFailToRegisterForRemoteNotificationsWithError:(NSError *)error {
 }
 
 - (void)handleLogOut {
+    [[DCMessageStore sharedInstance] removeAllWindows];
+    [[DCCacheManager sharedInstance] clearLastActiveChatChannel];
     UIStoryboard *storyboard = [UIStoryboard storyboardWithName:self.experimental ? @"Experimental" : @"Storyboard" bundle:nil];
     UIViewController *freshRoot = [storyboard instantiateInitialViewController];
 
@@ -448,10 +600,7 @@ didFailToRegisterForRemoteNotificationsWithError:(NSError *)error {
         [cache saveGuilds:DCServerCommunicator.sharedInstance.guilds];
         [cache saveUserInfo:DCServerCommunicator.sharedInstance.currentUserInfo];
         [cache saveUsers:[DCServerCommunicator.sharedInstance loadedUsersSnapshot]];
-        NSArray *layout = DCServerCommunicator.sharedInstance.cachedDisplayLayout;
-        if (layout.count > 0) {
-            [cache saveDisplayLayout:layout];
-        }
+        [[DCMessageStore sharedInstance] checkpointAllWindows];
     }
 }
 

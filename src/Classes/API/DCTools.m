@@ -301,7 +301,7 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
 
 // Converts an NSDictionary created from json representing a role into a DCRole
 // object Also keeps the role in DCServerCommunicator.loadedUsers if cache:YES
-+ (DCRole *)convertJsonRole:(NSDictionary *)jsonRole cache:(bool)cache {
++ (DCRole *)convertJsonRole:(NSDictionary *)jsonRole cache:(BOOL)cache {
     // NSLog(@"%@", jsonUser);
     DCRole *newRole      = DCRole.new;
     newRole.snowflake    = [jsonRole objectForKey:@"id"];
@@ -409,6 +409,12 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
 // message object
 + (DCMessage *)convertJsonMessage:(NSDictionary *)jsonMessage {
     DCMessage *newMessage = DCMessage.new;
+    // The message-window cache persists this server payload verbatim and replays
+    // it through this same converter on cold restore. Keep rendering logic here
+    // as the single source of truth.
+    if ([jsonMessage isKindOfClass:[NSDictionary class]]) {
+        newMessage.sourceJSON = [NSDictionary dictionaryWithDictionary:jsonMessage];
+    }
     @autoreleasepool {
         NSDictionary *author = [jsonMessage objectForKey:@"author"];
         NSString *authorId   = author ? [author objectForKey:@"id"] : nil;
@@ -1352,34 +1358,6 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
                                                      withString:@"™"];
         content = [content stringByReplacingOccurrencesOfString:@"\u00AE\uFE0F"
                                                      withString:@"®"];
-
-        {
-            // Register custom emoji metadata and kick off image prefetch.
-            // Tokens are left intact in `content` — DCMarkdownParser owns
-            // the <a:name:id> / <:name:id> → attachment run conversion.
-            NSRegularExpression *regex = [NSRegularExpression
-                regularExpressionWithPattern:@"\\<(a?):(.*?):(\\d+)\\>"
-                                     options:NSRegularExpressionCaseInsensitive
-                                       error:NULL];
-            NSArray *matches = [regex matchesInString:content
-                                              options:0
-                                                range:NSMakeRange(0, content.length)];
-            for (NSTextCheckingResult *match in matches) {
-                BOOL isAnimated     = [[content substringWithRange:[match rangeAtIndex:1]] isEqualToString:@"a"];
-                NSString *emojiName = [content substringWithRange:[match rangeAtIndex:2]];
-                NSString *emojiID   = [content substringWithRange:[match rangeAtIndex:3]];
-
-                DCEmoji *emoji = [DCServerCommunicator.sharedInstance emojiForSnowflake:emojiID];
-                if (!emoji) {
-                    emoji           = [DCEmoji new];
-                    emoji.name      = emojiName;
-                    emoji.snowflake = emojiID;
-                    emoji.animated  = isAnimated;
-                    [DCServerCommunicator.sharedInstance setEmoji:emoji forSnowflake:emoji.snowflake];
-                }
-                [DCContentManager fetchEmojiImage:emoji];
-            }
-        }
 
         newMessage.content = content;
 

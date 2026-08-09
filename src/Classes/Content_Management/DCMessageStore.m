@@ -9,9 +9,11 @@
 #import "DCMessageStore.h"
 #import "DCChannel.h"
 #import "DCMessage.h"
+#import "DCCacheManager.h"
 
 @interface DCMessageStore ()
 @property (nonatomic, strong) NSMutableDictionary *channelWindows; // channelID -> DCChannelWindow
+@property (nonatomic, strong) NSMutableDictionary *checkpointGenerations; // channelID -> NSNumber
 @end
 
 @implementation DCMessageDelta
@@ -32,6 +34,7 @@
     self = [super init];
     if (self) {
         _channelWindows = [NSMutableDictionary dictionary];
+        _checkpointGenerations = [NSMutableDictionary dictionary];
     }
     return self;
 }
@@ -91,19 +94,75 @@
     if (!channelSnowflake) return nil;
     DCChannelWindow *window = self.channelWindows[channelSnowflake];
     if (!window) {
-        window = [[DCChannelWindow alloc] initWithChannelSnowflake:channelSnowflake];
+        CFAbsoluteTime windowLoadStart = CFAbsoluteTimeGetCurrent();
+        window = [[DCCacheManager sharedInstance]
+            loadMessageWindowForChannel:channelSnowflake];
+        if (window) {
+            NSLog(@"[ColdStartPerf] Message window %@ restore: %.3fs",
+                   channelSnowflake,
+                   CFAbsoluteTimeGetCurrent() - windowLoadStart);
+        }
+        if (window) {
+            NSLog(@"[ColdStart] Restored %lu cached messages for channel %@",
+                  (unsigned long)window.messages.count, channelSnowflake);
+        } else {
+            window = [[DCChannelWindow alloc] initWithChannelSnowflake:channelSnowflake];
+        }
         self.channelWindows[channelSnowflake] = window;
     }
     return window;
 }
 
+- (void)scheduleCheckpointForWindow:(DCChannelWindow *)window {
+    if (!window.channelSnowflake.length) return;
+    if (window.messages.count == 0) {
+        [[DCCacheManager sharedInstance]
+            invalidateMessageWindowForChannel:window.channelSnowflake];
+        return;
+    }
+
+    NSString *channelID = [window.channelSnowflake copy];
+    NSUInteger generation = [[self.checkpointGenerations objectForKey:channelID]
+        unsignedIntegerValue] + 1;
+    [self.checkpointGenerations setObject:[NSNumber numberWithUnsignedInteger:generation]
+                                   forKey:channelID];
+
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                 (int64_t)(1.5 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        NSUInteger current = [[self.checkpointGenerations objectForKey:channelID]
+            unsignedIntegerValue];
+        if (current != generation) return;
+
+        DCChannelWindow *currentWindow = [self.channelWindows objectForKey:channelID];
+        if (currentWindow) [self checkpointWindow:currentWindow];
+    });
+}
+
+- (void)checkpointWindow:(DCChannelWindow *)window {
+    if (!window.channelSnowflake.length) return;
+    [[DCCacheManager sharedInstance] saveMessageWindow:window];
+}
+
+- (void)checkpointAllWindows {
+    NSArray *windows = [[self.channelWindows allValues] copy];
+    for (DCChannelWindow *window in windows) {
+        [self checkpointWindow:window];
+    }
+}
+
 - (void)removeWindowForChannel:(NSString *)channelSnowflake {
     if (!channelSnowflake) return;
     [self.channelWindows removeObjectForKey:channelSnowflake];
+    [self.checkpointGenerations removeObjectForKey:channelSnowflake];
+    [[DCCacheManager sharedInstance]
+        invalidateMessageWindowForChannel:channelSnowflake];
 }
 
 - (void)removeAllWindows {
     [self.channelWindows removeAllObjects];
+    [self.checkpointGenerations removeAllObjects];
+    [[DCCacheManager sharedInstance] invalidateAllMessageWindows];
 }
 
 @end

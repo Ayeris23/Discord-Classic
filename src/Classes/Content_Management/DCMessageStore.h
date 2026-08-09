@@ -30,12 +30,17 @@
 // the store is keyed entirely by channel ID.
 - (DCChannelWindow *)windowForChannel:(NSString *)channelSnowflake;
 
-// Drop a single channel's window.
+// Drop a single channel's window from RAM and disk.
 - (void)removeWindowForChannel:(NSString *)channelSnowflake;
 
-// Drop everything (e.g. logout). Does not touch disk — disk lifecycle comes
-// with the session snapshot later.
+// Drop everything (e.g. logout), including persistent window snapshots.
 - (void)removeAllWindows;
+
+// Debounced persistence for live mutations; immediate persistence is used when
+// switching channels/backgrounding so the last visible state is durable.
+- (void)scheduleCheckpointForWindow:(DCChannelWindow *)window;
+- (void)checkpointWindow:(DCChannelWindow *)window;
+- (void)checkpointAllWindows;
 
 // Fetch what's newer than `anchor` in `channel`. Synchronous network — call
 // from a background queue. Does NOT mutate the window or touch the array the

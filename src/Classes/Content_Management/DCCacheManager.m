@@ -9,6 +9,10 @@
 #import "DCCacheManager.h"
 #import "DCMessageLayout.h"
 #import "DCUser.h"
+#import "DCMessage.h"
+#import "DCChannelWindow.h"
+#import "DCServerCommunicator.h"
+#import "DCTools.h"
 
 @implementation DCMessageCacheEntry
 @end
@@ -209,6 +213,271 @@
     [self.emojiCache removeAllObjects];
     [self.layoutCache removeAllObjects];
     // SDWebImage memory cache is handled separately by the app delegate
+}
+
+
+// --- Message window cache (disk-backed) ---
+
+static const NSInteger DCMessageWindowCacheVersion = 5;
+static const NSUInteger DCMessageWindowDiskLimit = 10;
+static const NSUInteger DCMessageWindowMessageLimit = 80;
+
+- (NSString *)messageWindowCacheDirectory {
+    NSArray *paths = NSSearchPathForDirectoriesInDomains(
+        NSDocumentDirectory, NSUserDomainMask, YES);
+    return [[paths objectAtIndex:0]
+        stringByAppendingPathComponent:@"dc_message_windows"];
+}
+
+- (NSString *)messageWindowCachePathForChannel:(NSString *)channelSnowflake {
+    if (![channelSnowflake isKindOfClass:[NSString class]] ||
+        channelSnowflake.length == 0) return nil;
+    return [[self messageWindowCacheDirectory]
+        stringByAppendingPathComponent:
+            [NSString stringWithFormat:@"%@.archive", channelSnowflake]];
+}
+
+- (NSDictionary *)persistentRecordForMessage:(DCMessage *)message {
+    if (!message.snowflake.length ||
+        ![message.sourceJSON isKindOfClass:[NSDictionary class]]) {
+        return nil;
+    }
+
+    /*
+     * Persist the original Discord message dictionary, not a second rendering
+     * model. Cold restore replays it through DCTools convertJsonMessage:, exactly
+     * like REST/Gateway data. That means Markdown, custom emoji, embeds, media
+     * XIBs, stickers, replies, and future renderer changes stay in one code path.
+     *
+     * Preserve pingingUser as a tiny derived override because cached guilds do
+     * not yet persist userRoles; role-mention detection may otherwise differ
+     * briefly before READY repopulates that list.
+     */
+    return [NSDictionary dictionaryWithObjectsAndKeys:
+        message.sourceJSON, @"json",
+        [NSNumber numberWithBool:message.pingingUser], @"pingingUser",
+        nil];
+}
+
+- (DCMessage *)messageFromPersistentRecord:(NSDictionary *)record {
+    if (![record isKindOfClass:[NSDictionary class]]) return nil;
+
+    NSDictionary *json = [record objectForKey:@"json"];
+    if (![json isKindOfClass:[NSDictionary class]]) return nil;
+
+    __block DCMessage *message = nil;
+    void (^convert)(void) = ^{
+        message = [DCTools convertJsonMessage:json];
+    };
+
+    // convertJsonMessage builds UIKit/DTCoreText state and attachment XIBs. Use
+    // the same main-thread environment as the normal downloaded-message path.
+    if ([NSThread isMainThread]) {
+        convert();
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), convert);
+    }
+
+    if (!message) return nil;
+
+    id ping = [record objectForKey:@"pingingUser"];
+    if ([ping respondsToSelector:@selector(boolValue)]) {
+        message.pingingUser = [ping boolValue];
+    }
+
+    return message;
+}
+
+- (NSDictionary *)persistentRecordForMessageWindow:(DCChannelWindow *)window {
+    if (!window.channelSnowflake.length) return nil;
+
+    NSArray *messages = window.messages;
+    if (messages.count > DCMessageWindowMessageLimit) {
+        messages = [messages subarrayWithRange:
+            NSMakeRange(messages.count - DCMessageWindowMessageLimit,
+                        DCMessageWindowMessageLimit)];
+    }
+
+    NSMutableArray *records = [NSMutableArray arrayWithCapacity:messages.count];
+    for (DCMessage *message in messages) {
+        NSDictionary *record = [self persistentRecordForMessage:message];
+        if (record) [records addObject:record];
+    }
+
+    return @{
+        @"version" : [NSNumber numberWithInteger:DCMessageWindowCacheVersion],
+        @"channelID" : window.channelSnowflake,
+        @"messages" : records,
+        @"atPresentTime" : [NSNumber numberWithBool:window.atPresentTime],
+        @"hasMoreBefore" : [NSNumber numberWithBool:window.hasMoreBefore],
+        @"hasMoreAfter" : [NSNumber numberWithBool:window.hasMoreAfter],
+        @"savedContentOffsetY" : [NSNumber numberWithDouble:window.savedContentOffsetY],
+        @"hasSavedContentOffset" : [NSNumber numberWithBool:window.hasSavedContentOffset]
+    };
+}
+
+- (void)pruneMessageWindowCacheDirectory {
+    NSString *directory = [self messageWindowCacheDirectory];
+    NSArray *files = [[NSFileManager defaultManager]
+        contentsOfDirectoryAtPath:directory error:nil];
+    if (files.count <= DCMessageWindowDiskLimit) return;
+
+    NSMutableArray *entries = [NSMutableArray arrayWithCapacity:files.count];
+    for (NSString *filename in files) {
+        NSString *path = [directory stringByAppendingPathComponent:filename];
+        NSDictionary *attributes = [[NSFileManager defaultManager]
+            attributesOfItemAtPath:path error:nil];
+        NSDate *date = [attributes objectForKey:NSFileModificationDate] ?: [NSDate distantPast];
+        [entries addObject:@{ @"path": path, @"date": date }];
+    }
+    [entries sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        return [[a objectForKey:@"date"] compare:[b objectForKey:@"date"]];
+    }];
+
+    NSUInteger removeCount = entries.count - DCMessageWindowDiskLimit;
+    for (NSUInteger i = 0; i < removeCount; i++) {
+        [[NSFileManager defaultManager]
+            removeItemAtPath:[[entries objectAtIndex:i] objectForKey:@"path"]
+                       error:nil];
+    }
+}
+
+- (void)saveMessageWindow:(DCChannelWindow *)window {
+    if (!window.channelSnowflake.length) return;
+    if (window.messages.count == 0) {
+        [self invalidateMessageWindowForChannel:window.channelSnowflake];
+        return;
+    }
+
+    // Materialize immutable primitive records before hopping queues; live
+    // DCMessage objects continue mutating on the UI thread.
+    NSDictionary *root = [self persistentRecordForMessageWindow:window];
+    NSString *path = [self messageWindowCachePathForChannel:window.channelSnowflake];
+    if (!root || !path) return;
+
+    dispatch_async(self.cacheQueue, ^{
+        @autoreleasepool {
+            @try {
+                NSString *directory = [self messageWindowCacheDirectory];
+                [[NSFileManager defaultManager]
+                    createDirectoryAtPath:directory
+                    withIntermediateDirectories:YES
+                    attributes:nil
+                    error:nil];
+                NSData *data = [NSKeyedArchiver archivedDataWithRootObject:root];
+                if (![data writeToFile:path atomically:YES]) {
+                    NSLog(@"[DCCacheManager] Message window save failed for %@", path);
+                    return;
+                }
+                [self pruneMessageWindowCacheDirectory];
+            }
+            @catch (NSException *e) {
+                NSLog(@"[DCCacheManager] Message window save failed: %@", e);
+                [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+            }
+        }
+    });
+}
+
+- (DCChannelWindow *)loadMessageWindowForChannel:(NSString *)channelSnowflake {
+    NSString *path = [self messageWindowCachePathForChannel:channelSnowflake];
+    if (!path || ![[NSFileManager defaultManager] fileExistsAtPath:path]) return nil;
+
+    @try {
+        NSDictionary *root = [NSKeyedUnarchiver unarchiveObjectWithFile:path];
+        if (![root isKindOfClass:[NSDictionary class]]) {
+            [self invalidateMessageWindowForChannel:channelSnowflake];
+            return nil;
+        }
+        NSNumber *version = [root objectForKey:@"version"];
+        if (![version respondsToSelector:@selector(integerValue)] ||
+            [version integerValue] != DCMessageWindowCacheVersion) {
+            [self invalidateMessageWindowForChannel:channelSnowflake];
+            return nil;
+        }
+
+        DCChannelWindow *window = [[DCChannelWindow alloc]
+            initWithChannelSnowflake:channelSnowflake];
+        NSArray *records = [root objectForKey:@"messages"];
+        if ([records isKindOfClass:[NSArray class]]) {
+            for (NSDictionary *record in records) {
+                DCMessage *message = [self messageFromPersistentRecord:record];
+                if (message) [window.messages addObject:message];
+            }
+        }
+        if (window.messages.count == 0) return nil;
+
+        id value = [root objectForKey:@"atPresentTime"];
+        if ([value respondsToSelector:@selector(boolValue)])
+            window.atPresentTime = [value boolValue];
+        value = [root objectForKey:@"hasMoreBefore"];
+        if ([value respondsToSelector:@selector(boolValue)])
+            window.hasMoreBefore = [value boolValue];
+        value = [root objectForKey:@"hasMoreAfter"];
+        if ([value respondsToSelector:@selector(boolValue)])
+            window.hasMoreAfter = [value boolValue];
+        value = [root objectForKey:@"savedContentOffsetY"];
+        if ([value respondsToSelector:@selector(doubleValue)])
+            window.savedContentOffsetY = [value doubleValue];
+        value = [root objectForKey:@"hasSavedContentOffset"];
+        if ([value respondsToSelector:@selector(boolValue)])
+            window.hasSavedContentOffset = [value boolValue];
+
+        return window;
+    }
+    @catch (NSException *e) {
+        NSLog(@"[DCCacheManager] Message window %@ corrupt, discarding: %@",
+              channelSnowflake, e);
+        [self invalidateMessageWindowForChannel:channelSnowflake];
+        return nil;
+    }
+}
+
+- (void)invalidateMessageWindowForChannel:(NSString *)channelSnowflake {
+    NSString *path = [self messageWindowCachePathForChannel:channelSnowflake];
+    if (!path) return;
+    dispatch_async(self.cacheQueue, ^{
+        [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+    });
+}
+
+- (void)invalidateAllMessageWindows {
+    NSString *directory = [self messageWindowCacheDirectory];
+    dispatch_async(self.cacheQueue, ^{
+        [[NSFileManager defaultManager] removeItemAtPath:directory error:nil];
+    });
+}
+
+// --- Last active screen ---
+
+static NSString * const DCLastActiveChatChannelIDKey =
+    @"DCLastActiveChatChannelID";
+
+- (void)saveLastActiveChatChannelID:(NSString *)channelSnowflake {
+    if (![channelSnowflake isKindOfClass:[NSString class]] ||
+        channelSnowflake.length == 0) {
+        [self clearLastActiveChatChannel];
+        return;
+    }
+
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    [defaults setObject:channelSnowflake forKey:DCLastActiveChatChannelIDKey];
+
+    // Navigation changes are infrequent, so make this crash-safe rather than
+    // waiting for the next background transition to flush NSUserDefaults.
+    [defaults synchronize];
+}
+
+- (NSString *)loadLastActiveChatChannelID {
+    id value = [[NSUserDefaults standardUserDefaults]
+        objectForKey:DCLastActiveChatChannelIDKey];
+    return [value isKindOfClass:[NSString class]] ? value : nil;
+}
+
+- (void)clearLastActiveChatChannel {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    [defaults removeObjectForKey:DCLastActiveChatChannelIDKey];
+    [defaults synchronize];
 }
 
 // --- Guild/structure cache (disk-backed) ---
