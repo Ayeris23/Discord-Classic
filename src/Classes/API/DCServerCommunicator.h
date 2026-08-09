@@ -264,11 +264,18 @@ typedef NS_ENUM(uint64_t, DCGatewayCapabilities) {
 - (void)description;
 - (void)startCommunicator;
 - (void)reconnect;
+// Cold-launch RESUME support. restore... is intentionally a no-op unless a
+// complete cached guild/user baseline exists for the saved sequence.
+- (BOOL)restorePersistedGatewaySessionIfPossible;
+- (void)persistDurableGatewayStateWithCompletion:(void (^)(BOOL success))completion;
 - (void)prepareForLogout;
 - (void)performLogout;
 - (void)sendHeartbeat:(NSTimer*)timer;
 - (void)sendJSON:(NSDictionary*)dictionary;
 - (void)sendGuildSubscriptionWithGuildId:(NSString*)guildId channelId:(NSString*)channelId;
+// Existing Phase 4 banner loader. Cold RESUME reuses this exact path so cached
+// banner bytes are materialized from SDWebImage without introducing a second API.
+- (void)loadGuildBannerHash:(NSString *)bannerHash forGuild:(DCGuild *)guild;
 
 - (DCUser *)userForSnowflake:(NSString *)snowflake;
 - (void)setUser:(DCUser *)user forSnowflake:(NSString *)snowflake;

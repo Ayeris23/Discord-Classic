@@ -19,6 +19,7 @@
 @property (assign, nonatomic) BOOL canIdentify;
 
 @property (assign, nonatomic) NSInteger sequenceNumber;
+@property (assign, nonatomic) NSInteger persistedSequenceNumber;
 @property (strong, nonatomic) NSString *sessionId;
 @property (strong, nonatomic) NSString *resumeGatewayURL;
 

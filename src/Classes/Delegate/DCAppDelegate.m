@@ -420,11 +420,38 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
             }
 
             NSMutableDictionary *channels = [NSMutableDictionary dictionary];
+            NSMutableDictionary *roles = [NSMutableDictionary dictionary];
+            NSMutableDictionary *emojis = [NSMutableDictionary dictionary];
             for (DCGuild *guild in cachedGuilds) {
+                for (NSString *roleID in guild.roles) {
+                    id role = [guild.roles objectForKey:roleID];
+                    if (roleID && role) [roles setObject:role forKey:roleID];
+                }
+                for (NSString *emojiID in guild.emojis) {
+                    id emoji = [guild.emojis objectForKey:emojiID];
+                    if (emojiID && emoji) [emojis setObject:emoji forKey:emojiID];
+                }
                 BOOL isPrivateGuild = (guild.snowflake == nil &&
                     [guild.name isEqualToString:@"Direct Messages"]);
                 for (DCChannel *channel in guild.channels) {
                     channel.parentGuild = guild;
+
+                    // lastMessageId, lastReadMessageId and mentionCount are already
+                    // persisted by DCChannel. channel.unread is derived UI state and
+                    // READY normally recomputes it; a successful cold RESUME has no
+                    // READY, so rebuild it now from the durable values. Do this only
+                    // after parentGuild is restored because checkIfRead propagates to
+                    // the guild.
+                    BOOL hasLastMessage =
+                        [channel.lastMessageId isKindOfClass:[NSString class]] &&
+                        channel.lastMessageId.length > 0;
+                    BOOL hasReadMessage =
+                        [channel.lastReadMessageId isKindOfClass:[NSString class]] &&
+                        channel.lastReadMessageId.length > 0;
+                    channel.unread = (channel.mentionCount > 0) ||
+                        (hasLastMessage &&
+                         (!hasReadMessage ||
+                          ![channel.lastMessageId isEqualToString:channel.lastReadMessageId]));
 
                     if (isPrivateGuild && channel.recipientIDs.count > 0) {
                         // User records are intentionally hydrated after first paint.
@@ -441,12 +468,33 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
                         [channels setObject:channel forKey:channel.snowflake];
                     }
                 }
+
+                // Guild unread is also derived from its child channels and is not
+                // itself part of the durable archive. Recompute once after every
+                // child channel has been relinked/rebuilt.
+                [guild checkIfRead];
             }
             DCServerCommunicator.sharedInstance.channels = channels;
+            DCServerCommunicator.sharedInstance.loadedRoles = roles;
+            DCServerCommunicator.sharedInstance.loadedEmojis = emojis;
             // Resolve and preload the saved chat before the storyboard's first
             // visible presentation. The chat's viewWillAppear then restores its
             // DCChannelWindow normally, so there is no menu frame or push animation.
             [self restoreCachedChatNavigationStackIfPossible];
+
+            // If cold launch restored directly into a server chat, start rehydrating
+            // that server's persisted banner hash immediately. SDWebImage will use
+            // its disk cache when available, so this does not require READY and does
+            // not serialize UIImage objects into the guild archive.
+            DCGuild *selectedGuild = DCServerCommunicator.sharedInstance.selectedGuild;
+            if (selectedGuild && !selectedGuild.banner &&
+                [selectedGuild.bannerID isKindOfClass:[NSString class]] &&
+                selectedGuild.bannerID.length > 0 &&
+                [selectedGuild.snowflake isKindOfClass:[NSString class]] &&
+                selectedGuild.snowflake.length > 0) {
+                [DCServerCommunicator.sharedInstance
+                    loadGuildBannerHash:selectedGuild.bannerID forGuild:selectedGuild];
+            }
 
             [NSNotificationCenter.defaultCenter
                 postNotificationName:@"READY"
@@ -486,6 +534,11 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
         }
 
         [self hydrateCachedUsersAfterFirstPaint];
+
+        // If the previous process durably checkpointed the matching local state,
+        // preload its Gateway cursor before opening the socket. handleHello will
+        // then send RESUME instead of IDENTIFY.
+        [DCServerCommunicator.sharedInstance restorePersistedGatewaySessionIfPossible];
         [DCServerCommunicator.sharedInstance startCommunicator];
     }
     
@@ -593,14 +646,33 @@ didFailToRegisterForRemoteNotificationsWithError:(NSError *)error {
 - (void)applicationDidEnterBackground:(UIApplication *)application {
     [[NSUserDefaults standardUserDefaults] synchronize];
     self.shouldReload = DCServerCommunicator.sharedInstance.didAuthenticate;
-    // Flush cold-start cache so it reflects current state if the app is killed.
+    // Flush cold-start state and publish the Gateway sequence only after those
+    // writes are durable. A short background task prevents iOS from suspending
+    // the process halfway through the checkpoint. Message windows remain an
+    // opportunistic UI cache; their queued writes naturally run before the
+    // Gateway checkpoint because DCCacheManager uses one serial disk queue.
     if (DCServerCommunicator.sharedInstance.didAuthenticate
         && DCServerCommunicator.sharedInstance.guilds.count > 0) {
-        DCCacheManager *cache = [DCCacheManager sharedInstance];
-        [cache saveGuilds:DCServerCommunicator.sharedInstance.guilds];
-        [cache saveUserInfo:DCServerCommunicator.sharedInstance.currentUserInfo];
-        [cache saveUsers:[DCServerCommunicator.sharedInstance loadedUsersSnapshot]];
         [[DCMessageStore sharedInstance] checkpointAllWindows];
+
+        __block UIBackgroundTaskIdentifier checkpointTask = UIBackgroundTaskInvalid;
+        checkpointTask = [application beginBackgroundTaskWithExpirationHandler:^{
+            if (checkpointTask != UIBackgroundTaskInvalid) {
+                [application endBackgroundTask:checkpointTask];
+                checkpointTask = UIBackgroundTaskInvalid;
+            }
+        }];
+
+        [DCServerCommunicator.sharedInstance
+            persistDurableGatewayStateWithCompletion:^(BOOL success) {
+                if (!success) {
+                    DBGLOG(@"[GatewayCheckpoint] Background checkpoint was not saved");
+                }
+                if (checkpointTask != UIBackgroundTaskInvalid) {
+                    [application endBackgroundTask:checkpointTask];
+                    checkpointTask = UIBackgroundTaskInvalid;
+                }
+            }];
     }
 }
 

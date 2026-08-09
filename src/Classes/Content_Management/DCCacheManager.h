@@ -94,6 +94,18 @@
 - (NSString *)loadLastActiveChatChannelID;
 - (void)clearLastActiveChatChannel;
 
+// --- Gateway resume checkpoint (disk-backed) ---
+// This record is deliberately written only after the state represented by
+// sequence has been queued/durably flushed. It is tiny and is not a second
+// copy of application state; it is only the cursor Discord needs for RESUME.
+- (void)saveGatewayCheckpointWithSessionID:(NSString *)sessionID
+                                 resumeURL:(NSString *)resumeURL
+                                  sequence:(NSInteger)sequence
+                                    userID:(NSString *)userID
+                                completion:(void (^)(BOOL success))completion;
+- (NSDictionary *)loadGatewayCheckpoint;
+- (void)invalidateGatewayCheckpoint;
+
 // --- Guild/structure cache (disk-backed) ---
 - (void)saveGuilds:(NSArray *)guilds;
 - (NSArray *)loadCachedGuilds;

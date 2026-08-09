@@ -62,6 +62,9 @@ refreshMarker:
     [aCoder encodeInteger:self.memberCount forKey:@"memberCount"];
     [aCoder encodeBool:self.muted         forKey:@"muted"];
     [aCoder encodeObject:self.channels    forKey:@"channels"];
+    [aCoder encodeObject:self.roles       forKey:@"roles"];
+    [aCoder encodeObject:self.userRoles   forKey:@"userRoles"];
+    [aCoder encodeObject:self.emojis      forKey:@"emojis"];
     [aCoder encodeObject:self.iconID      forKey:@"iconID"];
     [aCoder encodeObject:self.iconURL     forKey:@"iconURL"];
     [aCoder encodeObject:self.bannerID    forKey:@"bannerID"];
@@ -76,6 +79,9 @@ refreshMarker:
         self.memberCount = [aDecoder decodeIntegerForKey:@"memberCount"];
         self.muted       = [aDecoder decodeBoolForKey:@"muted"];
         self.channels    = [aDecoder decodeObjectForKey:@"channels"];
+        self.roles       = [[aDecoder decodeObjectForKey:@"roles"] mutableCopy];
+        self.userRoles   = [[aDecoder decodeObjectForKey:@"userRoles"] mutableCopy];
+        self.emojis      = [[aDecoder decodeObjectForKey:@"emojis"] mutableCopy];
         self.iconID    = [aDecoder decodeObjectForKey:@"iconID"];
         self.iconURL   = [aDecoder decodeObjectForKey:@"iconURL"];
         self.bannerID  = [aDecoder decodeObjectForKey:@"bannerID"];
@@ -91,11 +97,13 @@ refreshMarker:
             if (hash.length) self.iconID = hash;
         }
 
-        // These get populated by the live READY — initialize empty so nothing crashes
-        self.members   = [NSMutableArray array];
-        self.roles     = [NSMutableDictionary dictionary];
-        self.userRoles = [NSMutableArray array];
-        self.emojis    = [NSMutableDictionary dictionary];
+        // Full member lists remain live/lazy state. Roles, the signed-in user's
+        // role set, and emoji metadata are durable because a successful cold
+        // Gateway RESUME does not send another READY to repopulate them.
+        self.members = [NSMutableArray array];
+        if (!self.roles) self.roles = [NSMutableDictionary dictionary];
+        if (!self.userRoles) self.userRoles = [NSMutableArray array];
+        if (!self.emojis) self.emojis = [NSMutableDictionary dictionary];
     }
     return self;
 }

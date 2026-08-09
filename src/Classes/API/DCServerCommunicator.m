@@ -32,6 +32,10 @@
 @implementation DCServerCommunicator
 UIActivityIndicatorView *spinner;
 NSTimer *heartbeatTimer = nil;
+// Discord dispatch sequence numbers describe an ordered state stream. Keep
+// state mutation on one serial queue so a durable sequence can never outrun an
+// earlier event that is still being applied on another worker thread.
+static dispatch_queue_t gatewayEventQueue = NULL;
 
 /*
  * READY gives us a resume_gateway_url without any guarantee that it carries
@@ -454,6 +458,10 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
         sharedInstance = [[self alloc] init];
         sharedInstance.accessQueue = dispatch_queue_create(
             "Discord::Data::Access", DISPATCH_QUEUE_CONCURRENT);
+        if (!gatewayEventQueue) {
+            gatewayEventQueue = dispatch_queue_create(
+                "Discord::Gateway::State", DISPATCH_QUEUE_SERIAL);
+        }
 
         // Initialize if a sharedInstance does not yet exist
 
@@ -1174,10 +1182,10 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
             DBGLOG(@"[READY] Re-subscribed to channel %@ after reconnect", channelSnowflake);
         }
     }
-    // Persist guild/channel structure for cold-start cache
-        [[DCCacheManager sharedInstance] saveGuilds:self.guilds];
-        [[DCCacheManager sharedInstance] saveUserInfo:self.currentUserInfo];
-        [[DCCacheManager sharedInstance] saveUsers:[self loadedUsersSnapshot]];
+    // Persist the freshly established baseline and, only after those writes
+    // complete, publish a sequence/session cursor that a future process may
+    // safely use for RESUME.
+        [self persistDurableGatewayStateWithCompletion:nil];
 
         dispatch_async(dispatch_get_main_queue(), ^{
             [NSNotificationCenter.defaultCenter postNotificationName:@"READY" object:self];
@@ -1757,6 +1765,78 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
                                                           object:guild];
         [NSNotificationCenter.defaultCenter postNotificationName:@"RELOAD CHANNEL LIST"
                                                           object:nil];
+    });
+}
+
+- (void)handleGuildRoleUpsertWithData:(NSDictionary *)d {
+    NSString *guildID = [d objectForKey:@"guild_id"];
+    NSDictionary *roleData = [d objectForKey:@"role"];
+    if (![guildID isKindOfClass:[NSString class]] ||
+        ![roleData isKindOfClass:[NSDictionary class]]) return;
+
+    NSString *roleID = [roleData objectForKey:@"id"];
+    DCGuild *guild = [self guildWithSnowflake:guildID];
+    if (!guild || ![roleID isKindOfClass:[NSString class]]) return;
+
+    DCRole *role = [DCTools convertJsonRole:roleData cache:YES];
+    if (!role) return;
+    if (!guild.roles) guild.roles = [NSMutableDictionary dictionary];
+    [guild.roles setObject:role forKey:roleID];
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [NSNotificationCenter.defaultCenter
+            postNotificationName:@"RELOAD MESSAGE DATA" object:nil];
+    });
+}
+
+- (void)handleGuildRoleDeleteWithData:(NSDictionary *)d {
+    NSString *guildID = [d objectForKey:@"guild_id"];
+    NSString *roleID = [d objectForKey:@"role_id"];
+    if (![guildID isKindOfClass:[NSString class]] ||
+        ![roleID isKindOfClass:[NSString class]]) return;
+
+    DCGuild *guild = [self guildWithSnowflake:guildID];
+    if (!guild) return;
+
+    [guild.roles removeObjectForKey:roleID];
+    [guild.userRoles removeObject:roleID];
+    [self.loadedRoles removeObjectForKey:roleID];
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [NSNotificationCenter.defaultCenter
+            postNotificationName:@"RELOAD MESSAGE DATA" object:nil];
+    });
+}
+
+- (void)handleGuildEmojisUpdateWithData:(NSDictionary *)d {
+    NSString *guildID = [d objectForKey:@"guild_id"];
+    NSArray *emojiData = [d objectForKey:@"emojis"];
+    if (![guildID isKindOfClass:[NSString class]] ||
+        ![emojiData isKindOfClass:[NSArray class]]) return;
+
+    DCGuild *guild = [self guildWithSnowflake:guildID];
+    if (!guild) return;
+
+    // Remove only this guild's previous IDs from the global registry. External
+    // emojis synthesized by message tokens and emojis from other guilds stay.
+    NSArray *oldIDs = [[guild.emojis allKeys] copy];
+    for (NSString *emojiID in oldIDs) {
+        [self.loadedEmojis removeObjectForKey:emojiID];
+    }
+
+    NSMutableDictionary *emojis = [NSMutableDictionary dictionary];
+    for (NSDictionary *jsonEmoji in emojiData) {
+        if (![jsonEmoji isKindOfClass:[NSDictionary class]]) continue;
+        NSString *emojiID = [jsonEmoji objectForKey:@"id"];
+        if (![emojiID isKindOfClass:[NSString class]]) continue;
+        DCEmoji *emoji = [DCTools convertJsonEmoji:jsonEmoji cache:YES];
+        if (emoji) [emojis setObject:emoji forKey:emojiID];
+    }
+    guild.emojis = emojis;
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [NSNotificationCenter.defaultCenter
+            postNotificationName:@"RELOAD MESSAGE DATA" object:nil];
     });
 }
 
@@ -2393,7 +2473,6 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
 }
 
 - (void)handleDispatchWithResponse:(NSDictionary *)parsedJsonResponse {
-    __weak typeof(self) weakSelf = self;
     // get data
     NSDictionary *d = [parsedJsonResponse objectForKey:@"d"];
 
@@ -2407,9 +2486,9 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
     }
 
     if ([t isEqualToString:@"READY"]) {
-        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-            [weakSelf handleReadyWithData:d];
-        });
+        // dataCallback already runs Gateway state work off-main. Keep READY on
+        // that same ordered queue so later dispatches cannot overtake it.
+        [self handleReadyWithData:d];
         return;
     } else if ([t isEqualToString:PRESENCE_UPDATE_EVENT]) {
         [self handlePresenceUpdateEventWithData:d];
@@ -2437,6 +2516,22 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
                 [user.guildNicknames setObject:nick forKey:guildId];
             else if (nick == [NSNull null] || nick != nil)
                 [user.guildNicknames removeObjectForKey:guildId];
+
+            // A cold RESUME has no READY to rebuild the signed-in user's role
+            // IDs, so keep this durable guild field current from member updates.
+            if ([user.snowflake isEqualToString:self.snowflake]) {
+                NSArray *roleIDs = [d objectForKey:@"roles"];
+                DCGuild *guild = [self guildWithSnowflake:guildId];
+                if (guild && [roleIDs isKindOfClass:[NSArray class]]) {
+                    NSMutableArray *currentRoles = [roleIDs mutableCopy];
+                    // Discord's @everyone role has the guild snowflake.
+                    if (guild.snowflake.length > 0 &&
+                        ![currentRoles containsObject:guild.snowflake]) {
+                        [currentRoles insertObject:guild.snowflake atIndex:0];
+                    }
+                    guild.userRoles = currentRoles;
+                }
+            }
 
             dispatch_async(dispatch_get_main_queue(), ^{
                 [NSNotificationCenter.defaultCenter
@@ -2512,6 +2607,16 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
     } else if ([t isEqualToString:GUILD_DELETE]) {
         [self handleGuildDeleteWithData:d];
         return;
+    } else if ([t isEqualToString:GUILD_ROLE_CREATE] ||
+               [t isEqualToString:GUILD_ROLE_UPDATE]) {
+        [self handleGuildRoleUpsertWithData:d];
+        return;
+    } else if ([t isEqualToString:GUILD_ROLE_DELETE]) {
+        [self handleGuildRoleDeleteWithData:d];
+        return;
+    } else if ([t isEqualToString:GUILD_EMOJIS_UPDATE]) {
+        [self handleGuildEmojisUpdateWithData:d];
+        return;
     } else if ([t isEqualToString:THREAD_CREATE] || [t isEqualToString:CHANNEL_CREATE]) {
         [self handleChannelCreateWithData:d];
         return;
@@ -2526,19 +2631,34 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
             return;
         }
         NSArray *unreads = [d objectForKey:@"channel_unread_updates"];
+        NSMutableArray *changedChannelIDs = [NSMutableArray array];
         for (NSDictionary *unread in unreads) {
             NSString *channelId = [unread objectForKey:@"id"];
             DCChannel *channel  = [self.channels objectForKey:channelId];
             if (channel) {
-                channel.lastMessageId = [unread objectForKey:@"last_message_id"];
-                // #ifdef DEBUG
-                //                 BOOL oldUnread        = channel.unread;
+                id lastMessageID = [unread objectForKey:@"last_message_id"];
+                channel.lastMessageId = [lastMessageID isKindOfClass:[NSString class]]
+                    ? lastMessageID : nil;
                 [channel checkIfRead];
-                //                 if (oldUnread != channel.unread) {
-                //                     NSLog(@"Channel %@ (%@) unread state changed to %d", channel.name, channel.snowflake, channel.unread);
-                //                 }
-                // #endif
+                if (channelId.length) [changedChannelIDs addObject:channelId];
             }
+        }
+
+        // CHANNEL_UNREAD_UPDATE used to mutate the model silently. During a cold
+        // RESUME that meant replay could be correct internally while the already-
+        // visible menu continued showing stale channel/read formatting. Reuse the
+        // lightweight MESSAGE ACK notification path so only affected rows refresh.
+        if (changedChannelIDs.count) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                for (NSString *channelId in changedChannelIDs) {
+                    [NSNotificationCenter.defaultCenter
+                        postNotificationName:@"MESSAGE ACK"
+                                      object:self
+                                    userInfo:@{ @"channelId" : channelId }];
+                }
+                [NSNotificationCenter.defaultCenter
+                    postNotificationName:@"MENTION_COUNT_UPDATED" object:self];
+            });
         }
     } else if ([t isEqualToString:GUILD_MEMBER_LIST_UPDATE]) {
         [self handleGuildMemberListUpdateWithData:d];
@@ -2658,6 +2778,105 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
         });
 }
 
+#pragma mark - Persistent Gateway checkpoint
+
+- (BOOL)restorePersistedGatewaySessionIfPossible {
+    // A RESUME only sends events after the saved sequence. Without the matching
+    // local baseline, restoring a session would leave Classic with an incomplete
+    // object graph and no READY to rebuild it.
+    if (self.guilds.count == 0 || self.currentUserInfo.id.length == 0) {
+        DBGLOG(@"[GatewayCheckpoint] No complete local baseline; using IDENTIFY");
+        return NO;
+    }
+
+    NSDictionary *checkpoint =
+        [[DCCacheManager sharedInstance] loadGatewayCheckpoint];
+    if (!checkpoint) return NO;
+
+    NSString *userID = [checkpoint objectForKey:@"userID"];
+    if (![userID isEqualToString:self.currentUserInfo.id]) {
+        DBGLOG(@"[GatewayCheckpoint] Cached session belongs to another user; discarding");
+        [[DCCacheManager sharedInstance] invalidateGatewayCheckpoint];
+        return NO;
+    }
+
+    NSString *sessionID = [checkpoint objectForKey:@"sessionID"];
+    NSString *resumeURL = [checkpoint objectForKey:@"resumeURL"];
+    NSInteger sequence = [[checkpoint objectForKey:@"sequence"] integerValue];
+    if (sessionID.length == 0 || resumeURL.length == 0 || sequence <= 0) {
+        [[DCCacheManager sharedInstance] invalidateGatewayCheckpoint];
+        return NO;
+    }
+
+    self.sessionId = sessionID;
+    self.resumeGatewayURL = resumeURL;
+    self.sequenceNumber = sequence;
+    self.persistedSequenceNumber = sequence;
+
+    NSDate *savedAt = [checkpoint objectForKey:@"savedAt"];
+    NSTimeInterval age = [savedAt isKindOfClass:[NSDate class]]
+        ? -[savedAt timeIntervalSinceNow] : -1.0;
+    DBGLOG(@"[GatewayCheckpoint] Restored sequence %li (age %.1fs); attempting cold RESUME",
+           (long)sequence, age);
+    return YES;
+}
+
+- (void)persistDurableGatewayStateWithCompletion:(void (^)(BOOL success))completion {
+    void (^finish)(BOOL) = ^(BOOL success) {
+        if (completion) {
+            dispatch_async(dispatch_get_main_queue(), ^{ completion(success); });
+        }
+    };
+
+    if (!gatewayEventQueue) {
+        finish(NO);
+        return;
+    }
+
+    /*
+     * Enqueue behind every Gateway dispatch already received. New events that
+     * arrive after this block are intentionally excluded and will have sequence
+     * numbers greater than the checkpoint. That is exactly the boundary RESUME
+     * needs after a crash or process kill.
+     */
+    dispatch_async(gatewayEventQueue, ^{
+        if (!self.didAuthenticate || self.guilds.count == 0 ||
+            self.currentUserInfo.id.length == 0 ||
+            self.sequenceNumber <= 0 || self.sessionId.length == 0 ||
+            self.resumeGatewayURL.length == 0) {
+            finish(NO);
+            return;
+        }
+
+        NSInteger sequence = self.sequenceNumber;
+        NSString *sessionID = [self.sessionId copy];
+        NSString *resumeURL = [self.resumeGatewayURL copy];
+        NSString *userID = [self.currentUserInfo.id copy];
+
+        DCCacheManager *cache = [DCCacheManager sharedInstance];
+
+        // Guild/channel and user-info archives are synchronous. saveUsers: is
+        // intentionally asynchronous, but it uses cacheQueue; the Gateway
+        // checkpoint write below is queued behind it on that same serial queue.
+        [cache saveGuilds:[self.guilds copy]];
+        [cache saveUserInfo:self.currentUserInfo];
+        [cache saveUsers:[self loadedUsersSnapshot]];
+
+        [cache saveGatewayCheckpointWithSessionID:sessionID
+                                        resumeURL:resumeURL
+                                         sequence:sequence
+                                           userID:userID
+                                       completion:^(BOOL success) {
+            if (success) {
+                self.persistedSequenceNumber = sequence;
+                DBGLOG(@"[GatewayCheckpoint] Durable through sequence %li",
+                       (long)sequence);
+            }
+            if (completion) completion(success);
+        }];
+    });
+}
+
 #pragma mark - WebSocket Handlers
 
 - (void)startCommunicator {
@@ -2751,7 +2970,15 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
         int op          = [[parsedJsonResponse objectForKey:@"op"] integerValue];
         NSDictionary *d = [parsedJsonResponse objectForKey:@"d"];
 
-        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        BOOL mutatesGatewayState =
+            (op == DCGatewayOpCodeDispatch ||
+             op == DCGatewayOpCodeReconnect ||
+             op == DCGatewayOpCodeInvalidSession);
+        dispatch_queue_t eventQueue =
+            (mutatesGatewayState && gatewayEventQueue)
+                ? gatewayEventQueue
+                : dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0);
+        dispatch_async(eventQueue, ^{
             switch (op) {
                 case DCGatewayOpCodeHello: {
                     [weakSelf handleHelloWithData:d];
@@ -2815,8 +3042,10 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
                         // Hard invalidation — drop session state and do a clean identify
                         DBGLOG(@"INVALID_SESSION: invalidated, clearing session and reconnecting...");
                         weakSelf.sequenceNumber  = 0;
+                        weakSelf.persistedSequenceNumber = 0;
                         weakSelf.sessionId       = nil;
                         weakSelf.resumeGatewayURL = nil;
+                        [[DCCacheManager sharedInstance] invalidateGatewayCheckpoint];
                         dispatch_async(dispatch_get_main_queue(), ^{
                             [weakSelf reconnect];
                         });
@@ -3103,6 +3332,8 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
     self.sessionId        = nil;
     self.resumeGatewayURL = nil;
     self.sequenceNumber   = 0;
+    self.persistedSequenceNumber = 0;
+    [[DCCacheManager sharedInstance] invalidateGatewayCheckpoint];
     [self.websocket close];
     self.websocket = nil;
     [self resetInflateStream];

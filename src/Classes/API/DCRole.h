@@ -2,7 +2,7 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 
-@interface DCRole : NSObject
+@interface DCRole : NSObject<NSCoding>
 
 @property (strong, nonatomic) DCSnowflake* snowflake;
 @property (strong, nonatomic) NSString* name;

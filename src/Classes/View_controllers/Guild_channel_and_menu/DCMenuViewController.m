@@ -67,6 +67,17 @@
     } else {
         self.totalView.hidden = YES;
         self.guildTotalView.hidden = NO;
+        // image bytes on disk. A cold RESUME never runs READY, so explicitly ask
+        // the normal banner loader to materialize that cached asset when the guild
+        // becomes visible. This is lazy: offscreen guild banners do no work.
+        if (!guild.banner &&
+            [guild.bannerID isKindOfClass:[NSString class]] &&
+            guild.bannerID.length > 0 &&
+            [guild.snowflake isKindOfClass:[NSString class]] &&
+            guild.snowflake.length > 0) {
+            [DCServerCommunicator.sharedInstance
+                loadGuildBannerHash:guild.bannerID forGuild:guild];
+        }
         self.guildBanner.image = guild.banner ?: [UIImage imageNamed:@"No-Header"];
     }
 }
@@ -276,6 +287,7 @@
             }
             self.selectedGuild                                  = guild;
             self.selectedChannel                                = channel;
+            DCServerCommunicator.sharedInstance.selectedGuild   = guild;
             DCServerCommunicator.sharedInstance.selectedChannel = channel;
 
             dispatch_async(dispatch_get_main_queue(), ^{
@@ -349,8 +361,7 @@
             DCServerCommunicator.sharedInstance.selectedGuild = guild;
             
             dispatch_async(dispatch_get_main_queue(), ^{
-                [self.navigationItem setTitle:guild.name];
-                self.guildLabel.text = guild.name;
+                [self synchronizeSelectedGuildUI];
                 [self.channelTableView reloadData];
             });
             return;
@@ -367,14 +378,7 @@
         
         dispatch_async(dispatch_get_main_queue(), ^{
             self.selectedGuild = guild;
-            DCServerCommunicator.sharedInstance.selectedGuild = guild;
-            [self.navigationItem setTitle:guild.name];
-            self.guildLabel.text = guild.name;
-            if (self.selectedGuild.banner) {
-                self.guildBanner.image = self.selectedGuild.banner;
-            } else {
-                self.guildBanner.image = [UIImage imageNamed:@"No-Header"];
-            }
+            [self synchronizeSelectedGuildUI];
             [self.channelTableView reloadData];
         });
         return;
@@ -400,6 +404,15 @@
     if (self.displayGuilds == nil) {
         return;
     }
+
+    if (self.selectedGuild == guild ||
+        (self.selectedGuild.snowflake.length &&
+         [self.selectedGuild.snowflake isEqualToString:guild.snowflake])) {
+        if (![self isDirectMessagesGuild:guild]) {
+            self.guildBanner.image = guild.banner ?: [UIImage imageNamed:@"No-Header"];
+        }
+    }
+
     if (!DCServerCommunicator.sharedInstance.guildsIsSorted) {
         return;
     }
@@ -642,37 +655,14 @@
                 return;
             }
             self.selectedGuild = selectedGuild;
-            if (self.selectedGuild.banner == nil) {
-                self.guildBanner.image = [UIImage imageNamed:@"No-Header"];
-            } else {
-                self.guildBanner.image = self.selectedGuild.banner;
-            }
-            [self.navigationItem setTitle:self.selectedGuild.name];
-            self.guildLabel.text = self.selectedGuild.name;
-            // Refresh pointer and sort if DM guild
-            if ([self isDirectMessagesGuild:self.selectedGuild]) {
-                self.selectedGuild = DCServerCommunicator.sharedInstance.guilds.firstObject;
-                [self.selectedGuild.channels sortUsingComparator:^NSComparisonResult(DCChannel *a, DCChannel *b) {
-                    NSString *idA = ([a.lastMessageId isKindOfClass:[NSString class]]) ? a.lastMessageId : @"0";
-                    NSString *idB = ([b.lastMessageId isKindOfClass:[NSString class]]) ? b.lastMessageId : @"0";
-                    return [idB localizedStandardCompare:idA];
-                }];
-            }
+            // Keep the model and visible guild chrome in sync through one path.
+            // This also lazily rehydrates the selected guild's persisted banner
+            // hash from SDWebImage's disk cache. A guild-table tap happens while
+            // this controller is already visible, so viewWillAppear: will not run.
+            [self synchronizeSelectedGuildUI];
             
             @autoreleasepool {
                 [self.channelTableView reloadData];
-            }
-            if ([self isDirectMessagesGuild:self.selectedGuild]) {
-                self.totalView.hidden = NO;
-                self.userName.text =
-                    DCServerCommunicator.sharedInstance.currentUserInfo.globalName;
-                self.globalName.text       = [NSString
-                    stringWithFormat:@"@%@",
-                                     DCServerCommunicator.sharedInstance.currentUserInfo.username];
-                self.guildTotalView.hidden = YES;
-            } else {
-                self.totalView.hidden      = YES;
-                self.guildTotalView.hidden = NO;
             }
         } else if (tableView == self.channelTableView) {
             if (!self.selectedGuild || !self.selectedGuild.channels || self.selectedGuild.channels.count <= indexPath.row) {

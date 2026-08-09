@@ -480,6 +480,120 @@ static NSString * const DCLastActiveChatChannelIDKey =
     [defaults synchronize];
 }
 
+// --- Gateway resume checkpoint (disk-backed) ---
+
+static const NSInteger DCGatewayCheckpointVersion = 1;
+
+- (NSString *)gatewayCheckpointPath {
+    NSArray *paths = NSSearchPathForDirectoriesInDomains(
+        NSDocumentDirectory, NSUserDomainMask, YES);
+    return [[paths objectAtIndex:0]
+        stringByAppendingPathComponent:@"dc_gateway_checkpoint.archive"];
+}
+
+- (void)saveGatewayCheckpointWithSessionID:(NSString *)sessionID
+                                 resumeURL:(NSString *)resumeURL
+                                  sequence:(NSInteger)sequence
+                                    userID:(NSString *)userID
+                                completion:(void (^)(BOOL success))completion {
+    if (![sessionID isKindOfClass:[NSString class]] || sessionID.length == 0 ||
+        ![resumeURL isKindOfClass:[NSString class]] || resumeURL.length == 0 ||
+        sequence <= 0 ||
+        ![userID isKindOfClass:[NSString class]] || userID.length == 0) {
+        if (completion) {
+            dispatch_async(dispatch_get_main_queue(), ^{ completion(NO); });
+        }
+        return;
+    }
+
+    NSString *sessionCopy = [sessionID copy];
+    NSString *resumeCopy = [resumeURL copy];
+    NSString *userCopy = [userID copy];
+    NSString *path = [self gatewayCheckpointPath];
+
+    /*
+     * cacheQueue is also used by the asynchronous user/message-window writers.
+     * Callers enqueue this method only after those writes, so reaching this
+     * block is the durability barrier for the sequence number being saved.
+     */
+    dispatch_async(self.cacheQueue, ^{
+        BOOL success = NO;
+        @autoreleasepool {
+            @try {
+                NSDictionary *root = @{
+                    @"version" : [NSNumber numberWithInteger:DCGatewayCheckpointVersion],
+                    @"sessionID" : sessionCopy,
+                    @"resumeURL" : resumeCopy,
+                    @"sequence" : [NSNumber numberWithInteger:sequence],
+                    @"userID" : userCopy,
+                    @"savedAt" : [NSDate date]
+                };
+                NSData *data = [NSKeyedArchiver archivedDataWithRootObject:root];
+                success = [data writeToFile:path atomically:YES];
+                if (!success) {
+                    NSLog(@"[DCCacheManager] Gateway checkpoint save failed writing %@", path);
+                }
+            }
+            @catch (NSException *e) {
+                NSLog(@"[DCCacheManager] Gateway checkpoint save failed: %@", e);
+                [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+            }
+        }
+
+        if (completion) {
+            dispatch_async(dispatch_get_main_queue(), ^{ completion(success); });
+        }
+    });
+}
+
+- (NSDictionary *)loadGatewayCheckpoint {
+    NSString *path = [self gatewayCheckpointPath];
+    if (![[NSFileManager defaultManager] fileExistsAtPath:path]) return nil;
+
+    @try {
+        NSDictionary *root = [NSKeyedUnarchiver unarchiveObjectWithFile:path];
+        if (![root isKindOfClass:[NSDictionary class]]) {
+            [self invalidateGatewayCheckpoint];
+            return nil;
+        }
+
+        id version = [root objectForKey:@"version"];
+        if (![version respondsToSelector:@selector(integerValue)] ||
+            [version integerValue] != DCGatewayCheckpointVersion) {
+            [self invalidateGatewayCheckpoint];
+            return nil;
+        }
+
+        NSString *sessionID = [root objectForKey:@"sessionID"];
+        NSString *resumeURL = [root objectForKey:@"resumeURL"];
+        id sequence = [root objectForKey:@"sequence"];
+        NSString *userID = [root objectForKey:@"userID"];
+        if (![sessionID isKindOfClass:[NSString class]] || sessionID.length == 0 ||
+            ![resumeURL isKindOfClass:[NSString class]] || resumeURL.length == 0 ||
+            ![sequence respondsToSelector:@selector(integerValue)] ||
+            [sequence integerValue] <= 0 ||
+            ![userID isKindOfClass:[NSString class]] || userID.length == 0) {
+            [self invalidateGatewayCheckpoint];
+            return nil;
+        }
+        return root;
+    }
+    @catch (NSException *e) {
+        NSLog(@"[DCCacheManager] Gateway checkpoint corrupt, discarding: %@", e);
+        [self invalidateGatewayCheckpoint];
+        return nil;
+    }
+}
+
+- (void)invalidateGatewayCheckpoint {
+    NSString *path = [self gatewayCheckpointPath];
+    // Serialize removal behind any already-queued save so an invalid session or
+    // logout cannot be resurrected by an older asynchronous checkpoint.
+    dispatch_sync(self.cacheQueue, ^{
+        [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+    });
+}
+
 // --- Guild/structure cache (disk-backed) ---
 
 - (NSString *)guildCachePath {

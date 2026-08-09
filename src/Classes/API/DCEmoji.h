@@ -2,7 +2,7 @@
 #include <UIKit/UIKit.h>
 #import "DCTools.h"
 
-@interface DCEmoji : NSObject
+@interface DCEmoji : NSObject<NSCoding>
 
 @property (strong, nonatomic) NSString *name;
 @property (strong, nonatomic) DCSnowflake *snowflake;
