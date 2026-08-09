@@ -61,16 +61,21 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
 // Returns a parsed NSDictionary from a json string or nil if something goes
 // wrong
 + (NSDictionary *)parseJSON:(NSString *)json {
-    __block id parsedResponse;
-    dispatch_sync(dispatch_get_main_queue(), ^{
-        NSError *error = nil;
-        NSData *encodedResponseString =
-            [json dataUsingEncoding:NSUTF8StringEncoding];
-        parsedResponse =
-            [NSJSONSerialization JSONObjectWithData:encodedResponseString
-                                            options:0
-                                              error:&error];
-    });
+    if (![json isKindOfClass:[NSString class]] || json.length == 0) return nil;
+
+    // Gateway JSON arrives on WSWebSocket's callback queue. NSJSONSerialization
+    // does not require the main thread, and forcing large READY payloads there
+    // creates a complete UI stall before Gateway reconciliation even begins.
+    NSError *error = nil;
+    NSData *encodedResponseString = [json dataUsingEncoding:NSUTF8StringEncoding];
+    id parsedResponse =
+        [NSJSONSerialization JSONObjectWithData:encodedResponseString
+                                        options:0
+                                          error:&error];
+    if (error) {
+        DBGLOG(@"[GatewayJSON] Parse failed: %@", error);
+        return nil;
+    }
     if ([parsedResponse isKindOfClass:NSDictionary.class]) {
         return parsedResponse;
     }
