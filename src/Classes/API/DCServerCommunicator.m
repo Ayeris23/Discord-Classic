@@ -29,6 +29,21 @@
 #import "Base64.h"
 #include <stdint.h>
 
+typedef struct {
+    CFTimeInterval metadata;
+    CFTimeInterval channelMerge;
+    CFTimeInterval channelSort;
+    NSUInteger channelsProcessed;
+    NSUInteger staleChannelsRemoved;
+} DCReadyGuildReconcilePerf;
+
+@interface DCServerCommunicator (ReadyReconcilePrivate)
+- (void)mergeGuildCreateSnapshot:(NSDictionary *)d
+                       intoGuild:(DCGuild *)guild
+                        forReady:(BOOL)forReady
+                            perf:(DCReadyGuildReconcilePerf *)perf;
+@end
+
 @implementation DCServerCommunicator
 UIActivityIndicatorView *spinner;
 NSTimer *heartbeatTimer = nil;
@@ -1485,11 +1500,23 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
     if (privateGuild) [result addObject:privateGuild];
 
     NSMutableSet *incomingGuildIDs = [NSMutableSet set];
+    NSMutableSet *authoritativeChannelGuildIDs = [NSMutableSet set];
+    NSMutableSet *incomingChannelIDs = [NSMutableSet set];
     NSUInteger reusedGuilds = 0;
     NSUInteger newGuilds = 0;
+    DCReadyGuildReconcilePerf perf = {0};
 
     if (![guildJsons isKindOfClass:[NSArray class]]) guildJsons = [NSArray array];
     if (![mergedMembers isKindOfClass:[NSArray class]]) mergedMembers = [NSArray array];
+
+    // READY repeatedly needs to resolve guilds by snowflake. Build the lookup
+    // once instead of linearly walking self.guilds for every snapshot.
+    NSMutableDictionary *existingGuildsByID =
+        [NSMutableDictionary dictionaryWithCapacity:self.guilds.count];
+    for (DCGuild *existingGuild in self.guilds) {
+        if (existingGuild.snowflake.length)
+            [existingGuildsByID setObject:existingGuild forKey:existingGuild.snowflake];
+    }
 
     for (NSUInteger i = 0; i < guildJsons.count; i++) {
         NSDictionary *guildData = [guildJsons objectAtIndex:i];
@@ -1499,15 +1526,42 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
             continue;
 
         [incomingGuildIDs addObject:guildID];
+
+        // A READY guild with a channels array is authoritative for channel
+        // membership. Accumulate one global set now, then retire stale server
+        // channels with a single registry sweep after all guilds are merged.
+        NSArray *readyChannels = [guildData objectForKey:@"channels"];
+        if ([readyChannels isKindOfClass:[NSArray class]]) {
+            [authoritativeChannelGuildIDs addObject:guildID];
+            for (NSDictionary *channelData in readyChannels) {
+                if (![channelData isKindOfClass:[NSDictionary class]]) continue;
+                NSString *channelID = [channelData objectForKey:@"id"];
+                if ([channelID isKindOfClass:[NSString class]])
+                    [incomingChannelIDs addObject:channelID];
+            }
+            NSArray *readyThreads = [guildData objectForKey:@"threads"];
+            if ([readyThreads isKindOfClass:[NSArray class]]) {
+                for (NSDictionary *threadData in readyThreads) {
+                    if (![threadData isKindOfClass:[NSDictionary class]]) continue;
+                    NSString *threadID = [threadData objectForKey:@"id"];
+                    if ([threadID isKindOfClass:[NSString class]])
+                        [incomingChannelIDs addObject:threadID];
+                }
+            }
+        }
+
         NSArray *members = (i < mergedMembers.count &&
                             [[mergedMembers objectAtIndex:i] isKindOfClass:[NSArray class]])
             ? [mergedMembers objectAtIndex:i] : nil;
 
-        DCGuild *guild = [self guildWithSnowflake:guildID];
+        DCGuild *guild = [existingGuildsByID objectForKey:guildID];
         if (guild) {
             NSMutableDictionary *snapshot = [guildData mutableCopy];
             if (members) [snapshot setObject:members forKey:@"members"];
-            [self mergeGuildCreateSnapshot:snapshot intoGuild:guild];
+            [self mergeGuildCreateSnapshot:snapshot
+                                  intoGuild:guild
+                                   forReady:YES
+                                       perf:&perf];
             reusedGuilds++;
         } else {
             guild = [DCTools convertJsonGuild:guildData withMembers:members];
@@ -1522,26 +1576,54 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
         }
     }
 
+    // The old code scanned the complete global channel dictionary once for
+    // every guild. READY can make the same authoritative decision in one pass.
+    CFAbsoluteTime staleSweepStarted = CFAbsoluteTimeGetCurrent();
+    NSArray *allKnownChannelIDs = [[self.channels allKeys] copy];
+    for (NSString *channelID in allKnownChannelIDs) {
+        DCChannel *channel = [self.channels objectForKey:channelID];
+        NSString *parentGuildID = channel.parentGuild.snowflake;
+        if (![parentGuildID isKindOfClass:[NSString class]]) continue;
+        if (![authoritativeChannelGuildIDs containsObject:parentGuildID]) continue;
+        if ([incomingChannelIDs containsObject:channelID]) continue;
+
+        [self.channels removeObjectForKey:channelID];
+        [[DCMessageStore sharedInstance] removeWindowForChannel:channelID];
+        perf.staleChannelsRemoved++;
+    }
+    CFTimeInterval staleSweep = CFAbsoluteTimeGetCurrent() - staleSweepStarted;
+
     // A full READY is authoritative membership state. Quietly retire guilds
     // that are no longer present without running per-guild checkpoint/UI work.
+    NSMutableArray *retiredGuildIDs = [NSMutableArray array];
     NSArray *previousGuilds = [self.guilds copy];
     for (DCGuild *oldGuild in previousGuilds) {
         NSString *oldGuildID = oldGuild.snowflake;
         if (!oldGuildID || [incomingGuildIDs containsObject:oldGuildID]) continue;
 
+        [retiredGuildIDs addObject:oldGuildID];
         for (DCChannel *channel in [oldGuild.channels copy]) {
             if (channel.snowflake) {
                 [self.channels removeObjectForKey:channel.snowflake];
                 [[DCMessageStore sharedInstance] removeWindowForChannel:channel.snowflake];
             }
         }
-        for (DCUser *user in [[self loadedUsersSnapshot] allValues])
-            [user.guildNicknames removeObjectForKey:oldGuildID];
+    }
+    if (retiredGuildIDs.count) {
+        NSDictionary *users = [self loadedUsersSnapshot];
+        for (DCUser *user in [users allValues]) {
+            for (NSString *retiredGuildID in retiredGuildIDs)
+                [user.guildNicknames removeObjectForKey:retiredGuildID];
+        }
     }
 
     DBGLOG(@"[READY-Reconcile] Reused %lu guilds, inserted %lu, authoritative total %lu",
            (unsigned long)reusedGuilds, (unsigned long)newGuilds,
            (unsigned long)(result.count > 0 ? result.count - 1 : 0));
+    DBGLOG(@"[GatewayPerf] READY guild detail metadata %.3fs, channel merge %.3fs, channel sort %.3fs, stale sweep %.3fs (%lu channels, %lu stale)",
+           perf.metadata, perf.channelMerge, perf.channelSort, staleSweep,
+           (unsigned long)perf.channelsProcessed,
+           (unsigned long)perf.staleChannelsRemoved);
     return result;
 }
 
@@ -1672,6 +1754,14 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
 }
 
 - (void)mergeGuildCreateSnapshot:(NSDictionary *)d intoGuild:(DCGuild *)guild {
+    [self mergeGuildCreateSnapshot:d intoGuild:guild forReady:NO perf:NULL];
+}
+
+- (void)mergeGuildCreateSnapshot:(NSDictionary *)d
+                       intoGuild:(DCGuild *)guild
+                        forReady:(BOOL)forReady
+                            perf:(DCReadyGuildReconcilePerf *)perf {
+    CFAbsoluteTime metadataStarted = CFAbsoluteTimeGetCurrent();
     [self mergeGuild:guild fromData:d];
 
     // GUILD_CREATE is also the authoritative rehydration event after a guild
@@ -1738,28 +1828,48 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
         }
     }
 
+    if (perf)
+        perf->metadata += CFAbsoluteTimeGetCurrent() - metadataStarted;
+
     NSArray *rawChannels = [d objectForKey:@"channels"];
     NSArray *rawThreads = [d objectForKey:@"threads"];
     BOOL hasChannelSnapshot = [rawChannels isKindOfClass:[NSArray class]];
     if (!hasChannelSnapshot && ![rawThreads isKindOfClass:[NSArray class]]) return;
 
+    CFAbsoluteTime channelMergeStarted = CFAbsoluteTimeGetCurrent();
     NSMutableArray *combined = [NSMutableArray array];
     if ([rawChannels isKindOfClass:[NSArray class]]) [combined addObjectsFromArray:rawChannels];
     if ([rawThreads isKindOfClass:[NSArray class]]) [combined addObjectsFromArray:rawThreads];
-    NSMutableSet *incomingIDs = [NSMutableSet set];
-    NSMutableSet *listedIDs = [NSMutableSet set];
 
     if (!guild.channels) guild.channels = [NSMutableArray array];
     if (!self.channels) self.channels = [NSMutableDictionary dictionary];
+
+    // READY formerly called channelInGuild: for every channel. Build one local
+    // fallback index instead so a cached channel missing from self.channels can
+    // still retain identity without an O(n) guild scan for each incoming row.
+    NSMutableDictionary *listedByID =
+        [NSMutableDictionary dictionaryWithCapacity:guild.channels.count];
+    for (DCChannel *listedChannel in guild.channels) {
+        if (listedChannel.snowflake.length)
+            [listedByID setObject:listedChannel forKey:listedChannel.snowflake];
+    }
+
+    NSMutableArray *authoritativeVisibleChannels = hasChannelSnapshot
+        ? [NSMutableArray arrayWithCapacity:combined.count] : nil;
+    NSMutableSet *authoritativeVisibleIDs = hasChannelSnapshot
+        ? [NSMutableSet setWithCapacity:combined.count] : nil;
+    NSMutableSet *liveIncomingIDs = (!forReady && hasChannelSnapshot)
+        ? [NSMutableSet setWithCapacity:combined.count] : nil;
 
     for (NSDictionary *rawChannel in combined) {
         if (![rawChannel isKindOfClass:[NSDictionary class]]) continue;
         NSString *channelID = [rawChannel objectForKey:@"id"];
         if (![channelID isKindOfClass:[NSString class]]) continue;
-        [incomingIDs addObject:channelID];
+        if (perf) perf->channelsProcessed++;
+        if (liveIncomingIDs) [liveIncomingIDs addObject:channelID];
 
         DCChannel *channel = [self.channels objectForKey:channelID];
-        if (!channel) channel = [self channelInGuild:guild withSnowflake:channelID];
+        if (!channel) channel = [listedByID objectForKey:channelID];
         if (!channel) channel = [DCChannel new];
 
         NSMutableDictionary *payload = [rawChannel mutableCopy];
@@ -1768,31 +1878,63 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
         [self.channels setObject:channel forKey:channelID];
 
         BOOL shouldAppear = DCChannelTypeAppearsInGuildList(channel.type);
-        [self ensureChannel:channel membershipInGuild:guild shouldAppear:shouldAppear];
-        if (shouldAppear) [listedIDs addObject:channelID];
-    }
-
-    if (hasChannelSnapshot) {
-        // A GUILD_CREATE channel list is a snapshot. Remove visible channels
-        // that were in our stale outage cache but no longer exist in it.
-        NSArray *oldListed = [guild.channels copy];
-        for (DCChannel *channel in oldListed) {
-            if (![listedIDs containsObject:channel.snowflake])
-                [guild.channels removeObject:channel];
-        }
-
-        NSArray *allKnownIDs = [self.channels allKeys];
-        for (NSString *channelID in allKnownIDs) {
-            DCChannel *channel = [self.channels objectForKey:channelID];
-            if (channel.parentGuild == guild && ![incomingIDs containsObject:channelID]) {
-                [self.channels removeObjectForKey:channelID];
-                [[DCMessageStore sharedInstance] removeWindowForChannel:channelID];
+        if (hasChannelSnapshot) {
+            if (shouldAppear && ![authoritativeVisibleIDs containsObject:channelID]) {
+                [authoritativeVisibleIDs addObject:channelID];
+                [authoritativeVisibleChannels addObject:channel];
+            }
+        } else {
+            // Threads-only GUILD_CREATE updates are not authoritative for the
+            // whole guild list. Preserve the old incremental membership rules.
+            DCChannel *listed = [listedByID objectForKey:channelID];
+            if (!shouldAppear) {
+                if (listed) {
+                    [guild.channels removeObjectIdenticalTo:listed];
+                    [listedByID removeObjectForKey:channelID];
+                }
+            } else if (!listed) {
+                [guild.channels addObject:channel];
+                [listedByID setObject:channel forKey:channelID];
+            } else if (listed != channel) {
+                NSUInteger index = [guild.channels indexOfObjectIdenticalTo:listed];
+                if (index != NSNotFound)
+                    [guild.channels replaceObjectAtIndex:index withObject:channel];
+                [listedByID setObject:channel forKey:channelID];
             }
         }
     }
 
+    if (hasChannelSnapshot) {
+        // Rebuild the visible membership array directly. This replaces a
+        // per-channel linear membership scan plus a second stale-list pass.
+        [guild.channels setArray:authoritativeVisibleChannels];
+
+        if (!forReady) {
+            // Live GUILD_CREATE still needs immediate stale retirement. READY
+            // defers this to one global sweep in reconcileReadyGuilds:.
+            NSArray *allKnownIDs = [[self.channels allKeys] copy];
+            for (NSString *channelID in allKnownIDs) {
+                DCChannel *channel = [self.channels objectForKey:channelID];
+                if (channel.parentGuild == guild && ![liveIncomingIDs containsObject:channelID]) {
+                    [self.channels removeObjectForKey:channelID];
+                    [[DCMessageStore sharedInstance] removeWindowForChannel:channelID];
+                }
+            }
+        }
+    }
+
+    if (perf)
+        perf->channelMerge += CFAbsoluteTimeGetCurrent() - channelMergeStarted;
+
+    CFAbsoluteTime sortStarted = CFAbsoluteTimeGetCurrent();
     [self resortChannelsForGuild:guild];
-    [guild checkIfRead];
+    if (perf)
+        perf->channelSort += CFAbsoluteTimeGetCurrent() - sortStarted;
+
+    // READY imports authoritative read_state after all guilds are reconciled
+    // and performs one aggregate check per guild there. Live GUILD_CREATE still
+    // needs its immediate read-state refresh.
+    if (!forReady) [guild checkIfRead];
 }
 
 - (void)invalidateGuildDisplayLayout {
@@ -2306,21 +2448,35 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
         return [channel1.snowflake compare:channel2.snowflake];
     }];
 
-    NSMutableArray *ordered = [channels mutableCopy];
+    // Insert each category immediately before its first child in one pass.
+    // The old code searched the growing ordered array once per category.
+    NSMutableDictionary *categoriesByID =
+        [NSMutableDictionary dictionaryWithCapacity:categories.count];
     for (DCChannel *category in categories) {
-        if (![category.snowflake isKindOfClass:[NSString class]])
-            continue;
+        if ([category.snowflake isKindOfClass:[NSString class]])
+            [categoriesByID setObject:category forKey:category.snowflake];
+    }
 
-        NSUInteger firstChild = [ordered indexOfObjectPassingTest:
-            ^BOOL(DCChannel *candidate, NSUInteger idx, BOOL *stop) {
-                if (![candidate.parentID isKindOfClass:[NSString class]])
-                    return NO;
-                return [(NSString *)candidate.parentID isEqualToString:category.snowflake];
-            }];
-        if (firstChild == NSNotFound)
+    NSMutableSet *insertedCategoryIDs =
+        [NSMutableSet setWithCapacity:categories.count];
+    NSMutableArray *ordered =
+        [NSMutableArray arrayWithCapacity:channels.count + categories.count];
+    for (DCChannel *channel in channels) {
+        NSString *parentID = [channel.parentID isKindOfClass:[NSString class]]
+            ? channel.parentID : nil;
+        DCChannel *category = parentID ? [categoriesByID objectForKey:parentID] : nil;
+        if (category && ![insertedCategoryIDs containsObject:parentID]) {
             [ordered addObject:category];
-        else
-            [ordered insertObject:category atIndex:firstChild];
+            [insertedCategoryIDs addObject:parentID];
+        }
+        [ordered addObject:channel];
+    }
+    for (DCChannel *category in categories) {
+        NSString *categoryID = [category.snowflake isKindOfClass:[NSString class]]
+            ? category.snowflake : nil;
+        if (!categoryID) continue;
+        if (![insertedCategoryIDs containsObject:categoryID])
+            [ordered addObject:category];
     }
     guild.channels = ordered;
 }
