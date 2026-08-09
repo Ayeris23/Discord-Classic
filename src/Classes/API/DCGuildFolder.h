@@ -18,5 +18,8 @@
 @property (strong, nonatomic) NSArray *guildIds;
 @property (assign, nonatomic) BOOL opened;
 @property (strong, nonatomic) UIImage *icon;
+// Runtime-only signature for the derived composite image. Not archived; the
+// actual composite is stored separately in DCCacheManager's small disk cache.
+@property (strong, nonatomic) NSString *iconCacheKey;
 
 @end

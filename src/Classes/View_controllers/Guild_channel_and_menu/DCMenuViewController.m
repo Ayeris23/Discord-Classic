@@ -26,6 +26,7 @@
 @property DCChannel *optionChannel;
 @property (assign, nonatomic) BOOL shouldAttemptColdChatRestore;
 @property (assign, nonatomic) BOOL coldChatRestoreAlreadyHandled;
+@property (strong, nonatomic) NSMutableSet *folderIconHydrationRequests;
 @end
 
 @implementation DCMenuViewController
@@ -287,7 +288,6 @@
             }
             self.selectedGuild                                  = guild;
             self.selectedChannel                                = channel;
-            DCServerCommunicator.sharedInstance.selectedGuild   = guild;
             DCServerCommunicator.sharedInstance.selectedChannel = channel;
 
             dispatch_async(dispatch_get_main_queue(), ^{
@@ -361,7 +361,8 @@
             DCServerCommunicator.sharedInstance.selectedGuild = guild;
             
             dispatch_async(dispatch_get_main_queue(), ^{
-                [self synchronizeSelectedGuildUI];
+                [self.navigationItem setTitle:guild.name];
+                self.guildLabel.text = guild.name;
                 [self.channelTableView reloadData];
             });
             return;
@@ -378,7 +379,14 @@
         
         dispatch_async(dispatch_get_main_queue(), ^{
             self.selectedGuild = guild;
-            [self synchronizeSelectedGuildUI];
+            DCServerCommunicator.sharedInstance.selectedGuild = guild;
+            [self.navigationItem setTitle:guild.name];
+            self.guildLabel.text = guild.name;
+            if (self.selectedGuild.banner) {
+                self.guildBanner.image = self.selectedGuild.banner;
+            } else {
+                self.guildBanner.image = [UIImage imageNamed:@"No-Header"];
+            }
             [self.channelTableView reloadData];
         });
         return;
@@ -389,6 +397,12 @@
     assertMainThread();
     DCGuild *guild = notification.object;
     if (guild == nil) return;
+
+    // A folder-cache miss may have lazily requested this guild icon. A normal
+    // RELOAD GUILD means the runtime asset/state changed, so allow future
+    // recovery attempts and let the folder row reevaluate its composite key.
+    if (guild.snowflake.length)
+        [self.folderIconHydrationRequests removeObject:guild.snowflake];
 
     // Keep the selected-guild chrome synchronized with surgical GUILD_UPDATE
     // events without needing a full READY-style table rebuild.
@@ -451,30 +465,40 @@
     [self.guildTableView endUpdates];
 }
 
-- (void)updateStatusForUser:(DCUser *)user {
+- (void)updateStatusForUser:(DCUser *)updatedUser {
     assertMainThread();
-    if (!user || ![user isKindOfClass:[DCUser class]]) {
+    if (!updatedUser || ![updatedUser isKindOfClass:[DCUser class]] ||
+        !updatedUser.snowflake.length) {
         return;
     }
-    NSUInteger idx = [DCServerCommunicator.sharedInstance.guilds[0] indexOfObjectPassingTest:^BOOL(DCChannel *chan, NSUInteger idx, BOOL *stop) {
-        if (chan.type != 1 || chan.users.count != 2) {
-            return NO;
+
+    DCGuild *privateGuild = nil;
+    for (DCGuild *guild in DCServerCommunicator.sharedInstance.guilds) {
+        if ([self isDirectMessagesGuild:guild]) {
+            privateGuild = guild;
+            break;
         }
-        for (DCUser *user in chan.users) {
-            if ([user.snowflake isEqualToString:user.snowflake]) {
-                return YES;
-            }
-        }
-        return NO;
-    }];
-    if (idx == NSNotFound) {
-        return;
     }
-    [self.channelTableView beginUpdates];
+    if (!privateGuild) return;
+
+    NSUInteger idx = [privateGuild.channels
+        indexOfObjectPassingTest:^BOOL(DCChannel *chan, NSUInteger row, BOOL *stop) {
+            if (chan.type != DCChannelTypeDM || chan.recipients.count != 1)
+                return NO;
+            DCUser *buddy = [chan.recipients objectAtIndex:0];
+            return [buddy.snowflake isEqualToString:updatedUser.snowflake];
+        }];
+    if (idx == NSNotFound) return;
+
+    // If the DM list is not currently visible there is nothing to redraw now;
+    // cellForRowAtIndexPath: will read the canonical user's status later.
+    if (![self isDirectMessagesGuild:self.selectedGuild] ||
+        idx >= (NSUInteger)[self.channelTableView numberOfRowsInSection:0])
+        return;
+
     NSIndexPath *indexPath = [NSIndexPath indexPathForRow:idx inSection:0];
     [self.channelTableView reloadRowsAtIndexPaths:@[ indexPath ]
-                                 withRowAnimation:UITableViewRowAnimationAutomatic];
-    [self.channelTableView endUpdates];
+                                 withRowAnimation:UITableViewRowAnimationNone];
 }
 
 - (void)reloadTable {
@@ -655,12 +679,15 @@
                 return;
             }
             self.selectedGuild = selectedGuild;
-            // Keep the model and visible guild chrome in sync through one path.
-            // This also lazily rehydrates the selected guild's persisted banner
-            // hash from SDWebImage's disk cache. A guild-table tap happens while
-            // this controller is already visible, so viewWillAppear: will not run.
+
+            // Always route a guild-table selection through the same model-driven
+            // synchronization path used by cold restore/viewWillAppear. Besides
+            // updating the chrome and communicator selection, this is the
+            // tap-time banner failsafe: if the guild has a persisted banner hash
+            // but no runtime UIImage yet, synchronizeSelectedGuildUI asks the
+            // normal SDWebImage-backed banner loader to materialize it.
             [self synchronizeSelectedGuildUI];
-            
+
             @autoreleasepool {
                 [self.channelTableView reloadData];
             }
@@ -739,6 +766,25 @@
         }
     }
     return tableView.rowHeight;
+}
+
+- (NSString *)compositeCacheKeyForFolder:(DCGuildFolder *)folder {
+    if (!folder) return nil;
+    NSMutableArray *parts = [NSMutableArray arrayWithObject:
+        [NSString stringWithFormat:@"v1:%ld", (long)folder.id]];
+    NSUInteger count = MIN((NSUInteger)4, folder.guildIds.count);
+    for (NSUInteger i = 0; i < count; i++) {
+        NSString *guildID = [folder.guildIds objectAtIndex:i];
+        NSString *iconHash = @"-";
+        for (DCGuild *guild in DCServerCommunicator.sharedInstance.guilds) {
+            if (![guild.snowflake isEqualToString:guildID]) continue;
+            if ([guild.iconID isKindOfClass:[NSString class]] && guild.iconID.length)
+                iconHash = guild.iconID;
+            break;
+        }
+        [parts addObject:[NSString stringWithFormat:@"%@:%@", guildID ?: @"-", iconHash]];
+    }
+    return [parts componentsJoinedByString:@"|"];
 }
 
 - (UIImage *)compositeImageWithBaseImage:(UIImage *)baseImage icons:(NSArray *)icons {
@@ -883,30 +929,95 @@
                     );
                 }
                 
-                if (folderAtRowIndex.icon != nil) {
+                NSString *folderCacheKey = [self compositeCacheKeyForFolder:folderAtRowIndex];
+                if (folderAtRowIndex.icon != nil &&
+                    [folderAtRowIndex.iconCacheKey isEqualToString:folderCacheKey]) {
                     cell.guildAvatar.image = folderAtRowIndex.icon;
                     return cell;
                 }
+
+                // A successful cold RESUME never re-sends READY, so the source
+                // guild UIImages may not exist yet. Prefer the last composite
+                // produced from the same folder membership/icon hashes.
+                UIImage *diskComposite = [[DCCacheManager sharedInstance]
+                    cachedFolderCompositeForFolderID:folderAtRowIndex.id
+                                             cacheKey:folderCacheKey];
+                if (diskComposite) {
+                    folderAtRowIndex.icon = diskComposite;
+                    folderAtRowIndex.iconCacheKey = folderCacheKey;
+                    cell.guildAvatar.image = diskComposite;
+                    return cell;
+                }
+
                 UIImage *folderIcon   = [UIImage imageNamed:@"folder"];
                 NSMutableArray *icons = [NSMutableArray array];
-                for (int i = 0; i < MIN(folderAtRowIndex.guildIds.count, 4); i++) {
-                    NSUInteger idx = [DCServerCommunicator.sharedInstance.guilds indexOfObjectPassingTest:^BOOL(DCGuild *obj, NSUInteger idx, BOOL *stop) {
-                        return [obj isKindOfClass:[DCGuild class]] && [obj.snowflake isEqualToString:folderAtRowIndex.guildIds[i]];
+                BOOL allSourcesReady = YES;
+                NSUInteger expectedSources = MIN((NSUInteger)4, folderAtRowIndex.guildIds.count);
+                for (NSUInteger i = 0; i < expectedSources; i++) {
+                    NSString *guildID = [folderAtRowIndex.guildIds objectAtIndex:i];
+                    NSUInteger idx = [DCServerCommunicator.sharedInstance.guilds indexOfObjectPassingTest:^BOOL(DCGuild *obj, NSUInteger row, BOOL *stop) {
+                        return [obj isKindOfClass:[DCGuild class]] && [obj.snowflake isEqualToString:guildID];
                     }];
                     if (idx == NSNotFound) {
+                        allSourcesReady = NO;
                         continue;
                     }
                     DCGuild *guild = [DCServerCommunicator.sharedInstance.guilds objectAtIndex:idx];
-                    if (!guild || ![guild isKindOfClass:[DCGuild class]] || !guild.icon) {
+                    if (!guild || ![guild isKindOfClass:[DCGuild class]]) {
+                        allSourcesReady = NO;
+                        continue;
+                    }
+
+                    // Guilds with no custom icon can derive their default locally.
+                    if (!guild.iconID.length && !guild.icon) {
+                        unsigned long long value = [guild.snowflake longLongValue];
+                        NSUInteger selector = (NSUInteger)((value >> 22) % 6);
+                        NSArray *defaults = [DCUser defaultAvatars];
+                        if (selector < defaults.count)
+                            guild.icon = [defaults objectAtIndex:selector];
+                    }
+
+                    BOOL waitingForHashBackedIcon =
+                        guild.iconID.length &&
+                        (!guild.icon || [[DCUser defaultAvatars] containsObject:guild.icon]);
+                    if (waitingForHashBackedIcon) {
+                        allSourcesReady = NO;
+                        if (!self.folderIconHydrationRequests)
+                            self.folderIconHydrationRequests = [NSMutableSet set];
+                        if (![self.folderIconHydrationRequests containsObject:guild.snowflake]) {
+                            [self.folderIconHydrationRequests addObject:guild.snowflake];
+                            [DCServerCommunicator.sharedInstance
+                                loadGuildIconHash:guild.iconID forGuild:guild];
+                        }
+                        continue;
+                    }
+
+                    if (!guild.icon) {
+                        allSourcesReady = NO;
                         continue;
                     }
                     [icons addObject:guild.icon];
                 }
+
+                // A cache miss after a folder/icon change waits for the actual
+                // first-four source icons instead of saving a placeholder composite.
+                if (!allSourcesReady || icons.count != expectedSources) {
+                    folderAtRowIndex.icon = nil;
+                    folderAtRowIndex.iconCacheKey = nil;
+                    cell.guildAvatar.image = folderIcon;
+                    return cell;
+                }
+
                 UIImage *compositeImage = [self
                     compositeImageWithBaseImage:folderIcon
                                           icons:icons];
                 cell.guildAvatar.image = compositeImage;
                 folderAtRowIndex.icon = compositeImage;
+                folderAtRowIndex.iconCacheKey = folderCacheKey;
+                [[DCCacheManager sharedInstance]
+                    saveFolderComposite:compositeImage
+                            forFolderID:folderAtRowIndex.id
+                               cacheKey:folderCacheKey];
             }
         }
         return cell;

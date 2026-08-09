@@ -28,6 +28,9 @@
 @property (strong, nonatomic) NSTimer *cooldownTimer;
 @property (strong, nonatomic) UIAlertView *alertView;
 @property (assign, nonatomic) BOOL oldMode;
+// Users whose presence was supplied by the live Gateway in this process.
+// Late disk hydration must never overwrite these with an older cached status.
+@property (strong, nonatomic) NSMutableSet *livePresenceUserIDs;
 
 - (void)showNonIntrusiveNotificationWithTitle:(NSString *)title;
 - (void)dismissNotification;
@@ -37,6 +40,11 @@
 // one private helper calls another defined later in the implementation file.
 - (DCGuild *)guildWithSnowflake:(NSString *)guildID;
 - (DCGuild *)privateGuild;
+- (DCGuild *)reconcilePrivateChannelsFromReady:(NSArray *)privateChannels;
+- (NSMutableArray *)reconcileReadyGuilds:(NSArray *)guildJsons
+                           mergedMembers:(NSArray *)mergedMembers
+                            privateGuild:(DCGuild *)privateGuild;
+- (void)mergeGuildCreateSnapshot:(NSDictionary *)d intoGuild:(DCGuild *)guild;
 - (DCChannel *)channelInGuild:(DCGuild *)guild withSnowflake:(NSString *)channelID;
 - (void)ensureChannel:(DCChannel *)channel
       membershipInGuild:(DCGuild *)guild

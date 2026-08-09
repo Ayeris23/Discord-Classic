@@ -387,22 +387,29 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
 }
 
 + (DCEmoji *)convertJsonEmoji:(NSDictionary *)jsonEmoji cache:(BOOL)cache {
-    if (cache && [DCServerCommunicator.sharedInstance emojiForSnowflake:[jsonEmoji objectForKey:@"id"]]) {
-        // return pre-cached
-        return [DCServerCommunicator.sharedInstance emojiForSnowflake:[jsonEmoji objectForKey:@"id"]];
-    }
+    NSString *snowflake = [jsonEmoji objectForKey:@"id"];
+    if (![snowflake isKindOfClass:[NSString class]] || snowflake.length == 0)
+        return nil;
 
-    DCEmoji *newEmoji  = DCEmoji.new;
-    newEmoji.snowflake = [jsonEmoji objectForKey:@"id"];
-    newEmoji.name      = [jsonEmoji objectForKey:@"name"];
-    newEmoji.animated  = [[jsonEmoji objectForKey:@"animated"] boolValue];
+    // READY and GUILD_EMOJIS_UPDATE are authoritative metadata snapshots.
+    // Cached/custom-message parsing may already have created the canonical
+    // emoji object, so patch that object instead of returning stale metadata.
+    DCEmoji *emoji = cache
+        ? [DCServerCommunicator.sharedInstance emojiForSnowflake:snowflake]
+        : nil;
+    if (!emoji) emoji = [DCEmoji new];
 
-    // Save to DCServerCommunicator.loadedEmojis
-    if (cache) {
-        [DCServerCommunicator.sharedInstance setEmoji:newEmoji forSnowflake:newEmoji.snowflake];
-    }
+    emoji.snowflake = snowflake;
+    id name = [jsonEmoji objectForKey:@"name"];
+    if ([name isKindOfClass:[NSString class]]) emoji.name = name;
+    id animated = [jsonEmoji objectForKey:@"animated"];
+    if ([animated respondsToSelector:@selector(boolValue)])
+        emoji.animated = [animated boolValue];
 
-    return newEmoji;
+    if (cache)
+        [DCServerCommunicator.sharedInstance setEmoji:emoji forSnowflake:snowflake];
+
+    return emoji;
 }
 
 // Converts an NSDictionary created from json representing a message into a

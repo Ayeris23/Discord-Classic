@@ -620,6 +620,7 @@ didFailToRegisterForRemoteNotificationsWithError:(NSError *)error {
 
 - (void)handleLogOut {
     [[DCMessageStore sharedInstance] removeAllWindows];
+    [[DCCacheManager sharedInstance] invalidateFolderCompositeCache];
     [[DCCacheManager sharedInstance] clearLastActiveChatChannel];
     UIStoryboard *storyboard = [UIStoryboard storyboardWithName:self.experimental ? @"Experimental" : @"Storyboard" bundle:nil];
     UIViewController *freshRoot = [storyboard instantiateInitialViewController];

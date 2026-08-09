@@ -672,6 +672,87 @@ static const NSInteger DCGatewayCheckpointVersion = 1;
 }
 
 
+// --- Folder composite cache (disk-backed derived UI asset) ---
+
+- (NSString *)folderCompositeCacheDirectory {
+    NSArray *paths = NSSearchPathForDirectoriesInDomains(
+        NSCachesDirectory, NSUserDomainMask, YES);
+    NSString *base = [paths objectAtIndex:0];
+    return [base stringByAppendingPathComponent:@"dc_folder_composites"];
+}
+
+- (NSString *)folderCompositePathForFolderID:(NSInteger)folderID {
+    NSString *directory = [self folderCompositeCacheDirectory];
+    return [directory stringByAppendingPathComponent:
+        [NSString stringWithFormat:@"folder_%ld.archive", (long)folderID]];
+}
+
+- (UIImage *)cachedFolderCompositeForFolderID:(NSInteger)folderID
+                                      cacheKey:(NSString *)cacheKey {
+    if (![cacheKey isKindOfClass:[NSString class]] || cacheKey.length == 0)
+        return nil;
+
+    NSString *path = [self folderCompositePathForFolderID:folderID];
+    if (![[NSFileManager defaultManager] fileExistsAtPath:path]) return nil;
+
+    @try {
+        NSDictionary *record = [NSKeyedUnarchiver unarchiveObjectWithFile:path];
+        if (![record isKindOfClass:[NSDictionary class]]) return nil;
+        NSString *storedKey = [record objectForKey:@"key"];
+        NSData *pngData = [record objectForKey:@"png"];
+        if (![storedKey isEqualToString:cacheKey] ||
+            ![pngData isKindOfClass:[NSData class]]) return nil;
+        return [UIImage imageWithData:pngData];
+    }
+    @catch (NSException *e) {
+        DBGLOG(@"[FolderCache] Corrupt composite for folder %ld: %@",
+               (long)folderID, e);
+        [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+        return nil;
+    }
+}
+
+- (void)saveFolderComposite:(UIImage *)image
+                forFolderID:(NSInteger)folderID
+                   cacheKey:(NSString *)cacheKey {
+    if (!image || !cacheKey.length) return;
+
+    // Materialize PNG bytes on the caller while the UIImage is known-valid,
+    // then serialize the tiny record behind the existing cache queue.
+    NSData *pngData = UIImagePNGRepresentation(image);
+    if (!pngData.length) return;
+    NSString *directory = [self folderCompositeCacheDirectory];
+    NSString *path = [self folderCompositePathForFolderID:folderID];
+    NSDictionary *record = @{
+        @"key" : cacheKey,
+        @"png" : pngData
+    };
+
+    dispatch_async(self.cacheQueue, ^{
+        @autoreleasepool {
+            [[NSFileManager defaultManager] createDirectoryAtPath:directory
+                                      withIntermediateDirectories:YES
+                                                       attributes:nil
+                                                            error:nil];
+            @try {
+                [NSKeyedArchiver archiveRootObject:record toFile:path];
+            }
+            @catch (NSException *e) {
+                DBGLOG(@"[FolderCache] Failed saving folder %ld: %@",
+                       (long)folderID, e);
+                [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+            }
+        }
+    });
+}
+
+- (void)invalidateFolderCompositeCache {
+    NSString *directory = [self folderCompositeCacheDirectory];
+    dispatch_async(self.cacheQueue, ^{
+        [[NSFileManager defaultManager] removeItemAtPath:directory error:nil];
+    });
+}
+
 // --- User cache (disk-backed) ---
 
 static const NSInteger DCUserCacheVersion = 1;
@@ -702,6 +783,8 @@ static const NSInteger DCUserCacheVersion = 1;
 
     [record setObject:[NSNumber numberWithInteger:user.discriminator]
                forKey:@"discriminator"];
+    [record setObject:[NSNumber numberWithInteger:user.status]
+               forKey:@"status"];
     return record;
 }
 
@@ -740,10 +823,13 @@ static const NSInteger DCUserCacheVersion = 1;
     if ([value respondsToSelector:@selector(integerValue)])
         user.discriminator = [value integerValue];
 
-    // Presence is intentionally ephemeral. A restored user starts offline until
-    // the Gateway tells us otherwise. Images are also restored lazily from the
-    // normal image cache using the persisted hashes.
-    user.status = DCUserStatusOffline;
+    // Preserve the last status that belonged to the durable Gateway baseline.
+    // Older cache records do not contain this key and safely default offline.
+    value = [record objectForKey:@"status"];
+    if ([value respondsToSelector:@selector(integerValue)])
+        user.status = (DCUserStatus)[value integerValue];
+    else
+        user.status = DCUserStatusOffline;
     return user;
 }
 

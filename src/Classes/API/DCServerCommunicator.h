@@ -275,6 +275,7 @@ typedef NS_ENUM(uint64_t, DCGatewayCapabilities) {
 - (void)sendGuildSubscriptionWithGuildId:(NSString*)guildId channelId:(NSString*)channelId;
 // Existing Phase 4 banner loader. Cold RESUME reuses this exact path so cached
 // banner bytes are materialized from SDWebImage without introducing a second API.
+- (void)loadGuildIconHash:(NSString *)iconHash forGuild:(DCGuild *)guild;
 - (void)loadGuildBannerHash:(NSString *)bannerHash forGuild:(DCGuild *)guild;
 
 - (DCUser *)userForSnowflake:(NSString *)snowflake;

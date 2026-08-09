@@ -553,6 +553,8 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
 
             DCUser *existing = [self.loadedUsers objectForKey:snowflake];
             if (!existing) {
+                // No live identity object exists yet, so the cached status is the
+                // best resumable baseline we have.
                 [self.loadedUsers setObject:cached forKey:snowflake];
                 continue;
             }
@@ -596,6 +598,15 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
             if (existing.discriminator == 0 && cached.discriminator != 0)
                 existing.discriminator = cached.discriminator;
 
+            // Presence is part of the durable resumable baseline now. A live
+            // PRESENCE_UPDATE/READY presence received by this process always wins
+            // over a status restored later from disk.
+            if (![self.livePresenceUserIDs containsObject:snowflake] &&
+                existing.status != cached.status) {
+                existing.status = cached.status;
+                changed = YES;
+            }
+
             if (!existing.guildNicknames)
                 existing.guildNicknames = [NSMutableDictionary dictionary];
             for (NSString *guildID in cached.guildNicknames) {
@@ -615,6 +626,9 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
             for (DCUser *user in changedPlaceholders) {
                 [NSNotificationCenter.defaultCenter
                     postNotificationName:@"RELOAD USER DATA"
+                                  object:user];
+                [NSNotificationCenter.defaultCenter
+                    postNotificationName:@"USER_PRESENCE_UPDATED"
                                   object:user];
             }
         });
@@ -843,148 +857,11 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
         }
     }
 
-    // Get user DMs and DM groups
-    // The user's DMs are treated like a guild, where the channels are different DM/groups
-    DCGuild *privateGuild = DCGuild.new;
-    privateGuild.name     = @"Direct Messages";
-    if (self.oldMode == NO) {
-        privateGuild.icon = [UIImage imageNamed:@"privateGuildLogo"];
-    }
-    privateGuild.channels  = NSMutableArray.new;
-    privateGuild.snowflake = nil;
-    for (NSDictionary *privateChannel in [d objectForKey:@"private_channels"]) {
-        @autoreleasepool {
-            // this may actually suck
-            // NSLog(@"%@", privateChannel);
-            DCChannel *newChannel    = DCChannel.new;
-            id privateParentID       = [privateChannel objectForKey:@"parent_id"];
-            newChannel.parentID      = [privateParentID isKindOfClass:[NSString class]] ? privateParentID : nil;
-            newChannel.snowflake     = [privateChannel objectForKey:@"id"];
-            newChannel.lastMessageId = [privateChannel objectForKey:@"last_message_id"];
-            newChannel.parentGuild   = privateGuild;
-            id privateChannelType = [privateChannel objectForKey:@"type"];
-            newChannel.type          = [privateChannelType respondsToSelector:@selector(integerValue)]
-                ? (DCChannelType)[privateChannelType integerValue]
-                : DCChannelTypeDM;
-            newChannel.writeable     = YES;             // DMs are always writeable
-            newChannel.recipients    = NSMutableArray.new;
-            { // default icon
-                NSNumber *longId = @([newChannel.snowflake longLongValue]);
-                int selector     = (int)(([longId longLongValue] >> 22) % 6);
-                newChannel.icon  = [DCContentManager processedIcon:[[DCUser defaultAvatars] objectAtIndex:selector] context:DCAssetContextList];
-            }
-            NSArray *recipientIds = [privateChannel objectForKey:@"recipient_ids"];
-            if ([recipientIds isKindOfClass:[NSArray class]]) {
-                newChannel.recipientIDs = [NSArray arrayWithArray:recipientIds];
-            }
-            id privateChannelIcon = [privateChannel objectForKey:@"icon"];
-            if ([privateChannelIcon isKindOfClass:[NSString class]] &&
-                [(NSString *)privateChannelIcon length] > 0) {
-                newChannel.iconID = privateChannelIcon;
-            }
-            if ([recipientIds isKindOfClass:[NSArray class]] && recipientIds.count > 0) {
-                for (NSString *userId in recipientIds) {
-                    DCUser *recipient = [self userForSnowflake:userId];
-                    if (!recipient) {
-                        NSLog(@"[READY] Missing recipient %@ for channel %@", userId, newChannel.snowflake);
-                        // DBGLOG(@"[READY] User ID %@ not found in loadedUsers", userId);
-                        continue;
-                    }
-                    [newChannel.recipients addObject:recipient];
-                }
-                NSMutableArray *mUsers = [newChannel.recipients mutableCopy];
-                [mUsers addObject:[self userForSnowflake:self.snowflake]];
-                newChannel.users = mUsers;
-            }
-            if (newChannel.iconID.length > 0) {
-                NSURL *iconURL = [NSURL URLWithString:[NSString stringWithFormat:@"https://cdn.discordapp.com/channel-icons/%@/%@.png?size=64",
-                    newChannel.snowflake, newChannel.iconID]];
-                SDWebImageManager *manager = [SDWebImageManager sharedManager];
-                [manager downloadImageWithURL:iconURL
-                                      options:0
-                                     progress:nil
-                                    completed:^(UIImage *icon, NSError *error, SDImageCacheType cacheType, BOOL finished, NSURL *imageURL) {
-                                        @autoreleasepool {
-                                            if (!icon || !finished) {
-                                                NSLog(@"Failed to load channel icon with URL %@: %@", iconURL, error);
-                                                return;
-                                            }
-                                            dispatch_async(dispatch_get_main_queue(), ^{
-                                                newChannel.icon = [DCContentManager processedIcon:icon context:DCAssetContextList];
-                                                [NSNotificationCenter.defaultCenter postNotificationName:@"RELOAD CHANNEL LIST" object:nil];
-                                            });
-                                        }
-                                    }];
-            } else {
-                if (newChannel.recipients.count > 0) {
-                    NSInteger channelType = newChannel.type;
-                    if (channelType == DCChannelTypeDM) {
-                        // 1-on-1 DM — use buddy's avatar via getUserAvatar:
-                        DCUser *user = [newChannel.recipients objectAtIndex:0];
-                        [DCTools getUserAvatar:user];
-                    } else {
-                        // Group DM — download and process first recipient's avatar as icon
-                        DCUser *user = [newChannel.recipients objectAtIndex:0];
-                        NSURL *avatarURL = [NSURL URLWithString:[NSString stringWithFormat:
-                            @"https://cdn.discordapp.com/avatars/%@/%@.png?size=64",
-                            user.snowflake, user.avatarID]];
-                        SDWebImageManager *manager = [SDWebImageManager sharedManager];
-                        [manager downloadImageWithURL:avatarURL
-                                              options:0
-                                             progress:nil
-                                            completed:^(UIImage *image, NSError *error, SDImageCacheType cacheType, BOOL finished, NSURL *imageURL) {
-                                                @autoreleasepool {
-                                                    if (image && finished) {
-                                                        dispatch_async(dispatch_get_main_queue(), ^{
-                                                            newChannel.icon = [DCContentManager processedIcon:image context:DCAssetContextList];
-                                                            [NSNotificationCenter.defaultCenter postNotificationName:@"RELOAD CHANNEL LIST" object:nil];
-                                                        });
-                                                    } else {
-                                                        int selector = 0;
-                                                        NSNumber *discriminator = @(user.discriminator);
-                                                        if ([discriminator integerValue] == 0) {
-                                                            NSNumber *longId = @([user.snowflake longLongValue]);
-                                                            selector = (int)(([longId longLongValue] >> 22) % 6);
-                                                        } else {
-                                                            selector = (int)([discriminator integerValue] % 5);
-                                                        }
-                                                        dispatch_async(dispatch_get_main_queue(), ^{
-                                                            newChannel.icon = [DCContentManager processedIcon:[[DCUser defaultAvatars] objectAtIndex:selector] context:DCAssetContextList];
-                                                            [NSNotificationCenter.defaultCenter postNotificationName:@"RELOAD CHANNEL LIST" object:nil];
-                                                        });
-                                                    }
-                                                }
-                                            }];
-                    }
-                }
-            }
-            NSString *privateChannelName = [privateChannel objectForKey:@"name"];
-            // Some private channels dont have names, check if nil
-            if (privateChannelName && (NSNull *)privateChannelName != [NSNull null]) {
-                newChannel.name = privateChannelName;
-            } else {
-                // If no name, create a name from channel members
-                NSMutableString *fullChannelName = [@"" mutableCopy];
-                for (DCUser *recipient in newChannel.recipients) {
-                    @autoreleasepool {
-                        // add comma between member names
-                        if ([newChannel.recipients indexOfObject:recipient] != 0) {
-                            [fullChannelName appendString:@", "];
-                        }
-                        NSString *memberName = [recipient displayName];
-                        if (recipient.globalName && [recipient.globalName isKindOfClass:[NSString class]]) {
-                            memberName = recipient.globalName;
-                        }
-                        if (memberName) {
-                            [fullChannelName appendString:memberName];
-                        }
-                        newChannel.name = fullChannelName;
-                    }
-                }
-            }
-            [privateGuild.channels addObject:newChannel];
-        }
-    }
+    // Reconcile READY's private-channel snapshot into the cached DM guild.
+    // Existing channel objects survive so a visible menu/chat never has its
+    // model swapped out underneath it after a failed RESUME.
+    DCGuild *privateGuild = [self reconcilePrivateChannelsFromReady:
+        [d objectForKey:@"private_channels"]];
 
     // Parse friend nicknames from relationships
     NSArray *relationships = [d objectForKey:@"relationships"];
@@ -1032,6 +909,9 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
             DBGLOG(@"[READY] User ID %@ not found in loadedUsers", userId);
             continue;
         }
+        if (!self.livePresenceUserIDs)
+            self.livePresenceUserIDs = [NSMutableSet set];
+        [self.livePresenceUserIDs addObject:userId];
         user.status = [DCUser statusFromString:status];
         // NSLog(@"[READY] User %@ (ID: %@) has status: %@ (%ld)", user.username, userId, status, (long)user.status);
     }
@@ -1068,23 +948,14 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
         NSString *idB = ([b.lastMessageId isKindOfClass:[NSString class]]) ? b.lastMessageId : @"0";
         return [idB localizedStandardCompare:idA]; // descending
     }];
-    NSMutableDictionary *channelsDict = NSMutableDictionary.new;
-    for (DCChannel *channel in privateGuild.channels) {
-        [channelsDict setObject:channel forKey:channel.snowflake];
-    }
-    self.channels          = channelsDict;
-    NSMutableArray *guilds = NSMutableArray.new;
-    [guilds addObject:privateGuild];
-    // Get servers (guilds) the user is a member of
+    // Reconcile server snapshots in place instead of replacing the complete
+    // cached entity graph. New/deleted guilds are still inserted/removed, but
+    // stable snowflakes keep stable Objective-C object identity.
     NSArray *mergedMembers = [d objectForKey:@"merged_members"];
     NSArray *guildJsons    = [d objectForKey:@"guilds"];
-    for (NSUInteger i = 0; i < guildJsons.count; i++) {
-        @autoreleasepool {
-            DCGuild *guild = [DCTools convertJsonGuild:[guildJsons objectAtIndex:i]
-                                           withMembers:[mergedMembers objectAtIndex:i]];
-            [guilds addObject:guild];
-        }
-    }
+    NSMutableArray *guilds = [self reconcileReadyGuilds:guildJsons
+                                           mergedMembers:mergedMembers
+                                            privateGuild:privateGuild];
     userInfo.guildPositions = NSMutableArray.new;
     if ([d valueForKeyPath:@"user_settings.guild_positions"]) {
         [userInfo.guildPositions addObjectsFromArray:[d valueForKeyPath:@"user_settings.guild_positions"]];
@@ -1133,7 +1004,12 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
             }
         }
     }
-    self.guilds         = guilds;
+    if (!self.guilds)
+        self.guilds = [NSMutableArray array];
+    [self.guilds setArray:guilds];
+    // The ordering payload may have changed even though entity instances were
+    // preserved. Rebuild only the lightweight display layout on demand.
+    self.cachedDisplayLayout = nil;
     self.guildsIsSorted = NO;
     // Read states are recieved in READY payload
     // they give a channel ID and the ID of the last read message in that channel
@@ -1171,15 +1047,37 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
     dispatch_async(dispatch_get_main_queue(), ^{
         [NSNotificationCenter.defaultCenter postNotificationName:@"MENTION_COUNT_UPDATED" object:nil];
     });
+    // Keep communicator selection canonical too. With reconciliation this is
+    // normally already the same object; the lookup only matters if READY
+    // authoritatively removed the previously selected guild.
+    if (self.selectedGuild) {
+        if (self.selectedGuild.snowflake.length > 0) {
+            DCGuild *canonicalSelectedGuild =
+                [self guildWithSnowflake:self.selectedGuild.snowflake];
+            self.selectedGuild = canonicalSelectedGuild ?: privateGuild;
+        } else {
+            self.selectedGuild = privateGuild;
+        }
+    }
+
     // Re-resolve selectedChannel from fresh READY data and re-subscribe
     if (self.selectedChannel) {
         NSString *channelSnowflake = self.selectedChannel.snowflake;
         DCChannel *freshChannel = [self.channels objectForKey:channelSnowflake];
         if (freshChannel && freshChannel.parentGuild) {
+            // Normally this is the exact same object after reconciliation.
             self.selectedChannel = freshChannel;
-            [self sendGuildSubscriptionWithGuildId:freshChannel.parentGuild.snowflake
-                                         channelId:freshChannel.snowflake];
-            DBGLOG(@"[READY] Re-subscribed to channel %@ after reconnect", channelSnowflake);
+            self.selectedGuild = freshChannel.parentGuild;
+            if (freshChannel.parentGuild.snowflake.length > 0) {
+                [self sendGuildSubscriptionWithGuildId:freshChannel.parentGuild.snowflake
+                                             channelId:freshChannel.snowflake];
+            }
+            DBGLOG(@"[READY-Reconcile] Kept selected channel %@ in place", channelSnowflake);
+        } else {
+            DBGLOG(@"[READY-Reconcile] Selected channel %@ no longer exists", channelSnowflake);
+            [[DCCacheManager sharedInstance] clearLastActiveChatChannel];
+            self.selectedChannel = nil;
+            self.selectedGuild = privateGuild;
         }
     }
     // Persist the freshly established baseline and, only after those writes
@@ -1214,6 +1112,9 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
         if (!user) user = [self userForSnowflake:userId];
         if (!user) return;
 
+        if (!self.livePresenceUserIDs)
+            self.livePresenceUserIDs = [NSMutableSet set];
+        [self.livePresenceUserIDs addObject:userId];
         user.status = [DCUser statusFromString:status];
 
         // Presence itself is ephemeral. Identity fields in this payload are
@@ -1325,6 +1226,226 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
             return guild;
     }
     return nil;
+}
+
+
+/*
+ * READY reconciliation helpers
+ * ----------------------------
+ * A fresh IDENTIFY/READY is authoritative, but it should not force the UI to
+ * abandon the cached objects it is already displaying. Reuse canonical guild
+ * and channel instances whenever their snowflakes still exist, patch them from
+ * READY, and only allocate/remove entities for actual structural differences.
+ */
+- (DCGuild *)reconcilePrivateChannelsFromReady:(NSArray *)privateChannels {
+    DCGuild *privateGuild = [self privateGuild];
+    if (!privateGuild) {
+        privateGuild = [DCGuild new];
+        privateGuild.name = @"Direct Messages";
+        privateGuild.snowflake = nil;
+        privateGuild.channels = [NSMutableArray array];
+        if (self.oldMode == NO)
+            privateGuild.icon = [UIImage imageNamed:@"privateGuildLogo"];
+    }
+
+    if (!self.channels)
+        self.channels = [NSMutableDictionary dictionary];
+    if (!privateGuild.channels)
+        privateGuild.channels = [NSMutableArray array];
+
+    NSMutableArray *orderedChannels = [NSMutableArray array];
+    NSMutableSet *incomingIDs = [NSMutableSet set];
+
+    if ([privateChannels isKindOfClass:[NSArray class]]) {
+        for (NSDictionary *payload in privateChannels) {
+            if (![payload isKindOfClass:[NSDictionary class]]) continue;
+            NSString *channelID = [payload objectForKey:@"id"];
+            if (![channelID isKindOfClass:[NSString class]] || channelID.length == 0)
+                continue;
+
+            [incomingIDs addObject:channelID];
+            DCChannel *channel = [self.channels objectForKey:channelID];
+            if (!channel || (channel.parentGuild && channel.parentGuild.snowflake))
+                channel = [self channelInGuild:privateGuild withSnowflake:channelID];
+
+            BOOL created = (channel == nil);
+            if (!channel) channel = [DCChannel new];
+
+            UIImage *existingIcon = channel.icon;
+            [self mergeChannel:channel fromData:payload guild:privateGuild];
+            channel.writeable = YES;
+
+            if (created && !channel.icon) {
+                unsigned long long value = [channelID longLongValue];
+                NSUInteger selector = (NSUInteger)((value >> 22) % 6);
+                NSArray *defaults = [DCUser defaultAvatars];
+                if (selector < defaults.count) {
+                    channel.icon = [DCContentManager
+                        processedIcon:[defaults objectAtIndex:selector]
+                              context:DCAssetContextList];
+                }
+            } else if (existingIcon && !channel.icon) {
+                channel.icon = existingIcon;
+            }
+
+            id rawName = [payload objectForKey:@"name"];
+            if (![rawName isKindOfClass:[NSString class]] || [(NSString *)rawName length] == 0) {
+                if (channel.type == DCChannelTypeDM && channel.recipients.count == 1) {
+                    NSString *name = [[channel.recipients objectAtIndex:0] displayName];
+                    if (name.length) channel.name = name;
+                } else if (channel.type == DCChannelTypeGroupDM && channel.recipients.count) {
+                    NSMutableArray *names = [NSMutableArray array];
+                    for (DCUser *recipient in channel.recipients) {
+                        NSString *name = [recipient displayName];
+                        if (name.length) [names addObject:name];
+                    }
+                    if (names.count) channel.name = [names componentsJoinedByString:@", "];
+                }
+            }
+
+            // Preserve the normal READY behavior for DM assets. Existing cached
+            // images are reused when present; missing/hash-versioned assets go
+            // through SDWebImage, which will normally resolve from disk.
+            if (channel.iconID.length > 0 && !channel.icon) {
+                NSURL *iconURL = [NSURL URLWithString:[NSString stringWithFormat:
+                    @"https://cdn.discordapp.com/channel-icons/%@/%@.png?size=64",
+                    channel.snowflake, channel.iconID]];
+                [[SDWebImageManager sharedManager]
+                    downloadImageWithURL:iconURL
+                                 options:0
+                                progress:nil
+                               completed:^(UIImage *icon, NSError *error,
+                                           SDImageCacheType cacheType, BOOL finished,
+                                           NSURL *imageURL) {
+                    if (!icon || !finished) return;
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        channel.icon = [DCContentManager processedIcon:icon
+                                                               context:DCAssetContextList];
+                        [NSNotificationCenter.defaultCenter
+                            postNotificationName:@"RELOAD CHANNEL LIST" object:channel];
+                    });
+                }];
+            } else if (channel.iconID.length == 0 && channel.recipients.count > 0) {
+                DCUser *recipient = [channel.recipients objectAtIndex:0];
+                if (channel.type == DCChannelTypeDM) {
+                    if (!recipient.profileImage) [DCTools getUserAvatar:recipient];
+                } else if (channel.type == DCChannelTypeGroupDM &&
+                           (!channel.icon || created)) {
+                    NSString *avatarID = [recipient.avatarID isKindOfClass:[NSString class]]
+                        ? recipient.avatarID : nil;
+                    if (avatarID.length > 0) {
+                        NSURL *avatarURL = [NSURL URLWithString:[NSString stringWithFormat:
+                            @"https://cdn.discordapp.com/avatars/%@/%@.png?size=64",
+                            recipient.snowflake, avatarID]];
+                        [[SDWebImageManager sharedManager]
+                            downloadImageWithURL:avatarURL
+                                         options:0
+                                        progress:nil
+                                       completed:^(UIImage *image, NSError *error,
+                                                   SDImageCacheType cacheType, BOOL finished,
+                                                   NSURL *imageURL) {
+                            if (!image || !finished) return;
+                            dispatch_async(dispatch_get_main_queue(), ^{
+                                channel.icon = [DCContentManager processedIcon:image
+                                                                       context:DCAssetContextList];
+                                [NSNotificationCenter.defaultCenter
+                                    postNotificationName:@"RELOAD CHANNEL LIST" object:channel];
+                            });
+                        }];
+                    }
+                }
+            }
+
+            [self.channels setObject:channel forKey:channelID];
+            [orderedChannels addObject:channel];
+        }
+    }
+
+    // READY's private_channels array is a complete snapshot. Remove only DMs
+    // that genuinely disappeared; server channels are untouched here.
+    NSArray *oldPrivate = [privateGuild.channels copy];
+    for (DCChannel *oldChannel in oldPrivate) {
+        if (![incomingIDs containsObject:oldChannel.snowflake]) {
+            [self.channels removeObjectForKey:oldChannel.snowflake];
+            [[DCMessageStore sharedInstance] removeWindowForChannel:oldChannel.snowflake];
+        }
+    }
+
+    [orderedChannels sortUsingComparator:^NSComparisonResult(DCChannel *a, DCChannel *b) {
+        NSString *idA = [a.lastMessageId isKindOfClass:[NSString class]] ? a.lastMessageId : @"0";
+        NSString *idB = [b.lastMessageId isKindOfClass:[NSString class]] ? b.lastMessageId : @"0";
+        return [idB localizedStandardCompare:idA];
+    }];
+    [privateGuild.channels setArray:orderedChannels];
+    [privateGuild checkIfRead];
+    return privateGuild;
+}
+
+- (NSMutableArray *)reconcileReadyGuilds:(NSArray *)guildJsons
+                           mergedMembers:(NSArray *)mergedMembers
+                            privateGuild:(DCGuild *)privateGuild {
+    NSMutableArray *result = [NSMutableArray array];
+    if (privateGuild) [result addObject:privateGuild];
+
+    NSMutableSet *incomingGuildIDs = [NSMutableSet set];
+    NSUInteger reusedGuilds = 0;
+    NSUInteger newGuilds = 0;
+
+    if (![guildJsons isKindOfClass:[NSArray class]]) guildJsons = [NSArray array];
+    if (![mergedMembers isKindOfClass:[NSArray class]]) mergedMembers = [NSArray array];
+
+    for (NSUInteger i = 0; i < guildJsons.count; i++) {
+        NSDictionary *guildData = [guildJsons objectAtIndex:i];
+        if (![guildData isKindOfClass:[NSDictionary class]]) continue;
+        NSString *guildID = [guildData objectForKey:@"id"];
+        if (![guildID isKindOfClass:[NSString class]] || guildID.length == 0)
+            continue;
+
+        [incomingGuildIDs addObject:guildID];
+        NSArray *members = (i < mergedMembers.count &&
+                            [[mergedMembers objectAtIndex:i] isKindOfClass:[NSArray class]])
+            ? [mergedMembers objectAtIndex:i] : nil;
+
+        DCGuild *guild = [self guildWithSnowflake:guildID];
+        if (guild) {
+            NSMutableDictionary *snapshot = [guildData mutableCopy];
+            if (members) [snapshot setObject:members forKey:@"members"];
+            [self mergeGuildCreateSnapshot:snapshot intoGuild:guild];
+            reusedGuilds++;
+        } else {
+            guild = [DCTools convertJsonGuild:guildData withMembers:members];
+            if (!guild) continue;
+            newGuilds++;
+        }
+
+        [result addObject:guild];
+        for (DCChannel *channel in guild.channels) {
+            if (channel.snowflake)
+                [self.channels setObject:channel forKey:channel.snowflake];
+        }
+    }
+
+    // A full READY is authoritative membership state. Quietly retire guilds
+    // that are no longer present without running per-guild checkpoint/UI work.
+    NSArray *previousGuilds = [self.guilds copy];
+    for (DCGuild *oldGuild in previousGuilds) {
+        NSString *oldGuildID = oldGuild.snowflake;
+        if (!oldGuildID || [incomingGuildIDs containsObject:oldGuildID]) continue;
+
+        for (DCChannel *channel in [oldGuild.channels copy]) {
+            if (channel.snowflake) {
+                [self.channels removeObjectForKey:channel.snowflake];
+                [[DCMessageStore sharedInstance] removeWindowForChannel:channel.snowflake];
+            }
+        }
+        for (DCUser *user in [[self loadedUsersSnapshot] allValues])
+            [user.guildNicknames removeObjectForKey:oldGuildID];
+    }
+
+    DBGLOG(@"[READY-Reconcile] Reused %lu guilds, inserted %lu, authoritative total %lu",
+           (unsigned long)reusedGuilds, (unsigned long)newGuilds,
+           (unsigned long)(result.count > 0 ? result.count - 1 : 0));
+    return result;
 }
 
 - (void)loadGuildIconHash:(NSString *)iconHash forGuild:(DCGuild *)guild {
@@ -1497,6 +1618,13 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
             DCUser *user = [userData isKindOfClass:[NSDictionary class]]
                 ? [DCTools convertJsonUser:userData cache:YES] : nil;
             NSString *userID = user.snowflake;
+            if (!userID.length) {
+                id mergedUserID = [member objectForKey:@"user_id"];
+                if ([mergedUserID isKindOfClass:[NSString class]]) {
+                    userID = mergedUserID;
+                    user = [self userForSnowflake:userID];
+                }
+            }
             NSString *nick = [member objectForKey:@"nick"];
             if (user && [nick isKindOfClass:[NSString class]] && nick.length) {
                 if (!user.guildNicknames) user.guildNicknames = [NSMutableDictionary dictionary];
@@ -1559,8 +1687,10 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
         NSArray *allKnownIDs = [self.channels allKeys];
         for (NSString *channelID in allKnownIDs) {
             DCChannel *channel = [self.channels objectForKey:channelID];
-            if (channel.parentGuild == guild && ![incomingIDs containsObject:channelID])
+            if (channel.parentGuild == guild && ![incomingIDs containsObject:channelID]) {
                 [self.channels removeObjectForKey:channelID];
+                [[DCMessageStore sharedInstance] removeWindowForChannel:channelID];
+            }
         }
     }
 
@@ -2405,6 +2535,11 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
         }];
     } else {
         DBGLOG(@"Sending Identify");
+        // A new session has a new authoritative presence baseline. Cached
+        // statuses may be shown while READY is in flight, but only presence
+        // dispatches received after this point count as live for merge ordering.
+        self.livePresenceUserIDs = [NSMutableSet set];
+
         [self sendJSON:@{
             @"op" : @(DCGatewayOpCodeIdentify),
             @"d" : @{

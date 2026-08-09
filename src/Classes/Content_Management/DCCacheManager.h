@@ -116,9 +116,20 @@
 - (NSArray *)loadDisplayLayout;
 - (void)invalidateDisplayLayout;
 
+// --- Folder composite cache (disk-backed derived UI asset) ---
+// Folder composites are tiny, slow-changing PNGs keyed by folder membership
+// and the first four guild icon hashes. They are safe to discard/rebuild.
+- (UIImage *)cachedFolderCompositeForFolderID:(NSInteger)folderID
+                                      cacheKey:(NSString *)cacheKey;
+- (void)saveFolderComposite:(UIImage *)image
+                forFolderID:(NSInteger)folderID
+                   cacheKey:(NSString *)cacheKey;
+- (void)invalidateFolderCompositeCache;
+
 // --- User cache (disk-backed) ---
 // Users are persisted as small durable records rather than archiving runtime
-// DCUser state (UIImages, presence, processed assets, etc.).
+// UIImages/processed assets. Last-known presence is retained as part of the
+// resumable state baseline and is overwritten by live Gateway presence data.
 - (void)saveUsers:(NSDictionary *)users;
 - (NSDictionary *)loadCachedUsers;
 - (void)invalidateUserCache;
