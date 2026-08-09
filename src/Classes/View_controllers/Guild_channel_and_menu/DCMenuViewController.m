@@ -48,6 +48,14 @@
 
     DCServerCommunicator.sharedInstance.selectedGuild = guild;
 
+    // Keep only the server snowflake. Direct Messages is represented by no
+    // saved value because its synthetic guild deliberately has no snowflake.
+    if ([self isDirectMessagesGuild:guild]) {
+        [[DCCacheManager sharedInstance] clearLastSelectedGuild];
+    } else if (guild.snowflake.length > 0) {
+        [[DCCacheManager sharedInstance] saveLastSelectedGuildID:guild.snowflake];
+    }
+
     NSString *guildName = guild.name ?: @"Discord";
     [self.navigationItem setTitle:guildName];
     self.guildLabel.text = guildName;
@@ -288,7 +296,14 @@
             }
             self.selectedGuild                                  = guild;
             self.selectedChannel                                = channel;
+            DCServerCommunicator.sharedInstance.selectedGuild   = guild;
             DCServerCommunicator.sharedInstance.selectedChannel = channel;
+
+            if ([self isDirectMessagesGuild:guild]) {
+                [[DCCacheManager sharedInstance] clearLastSelectedGuild];
+            } else if (guild.snowflake.length > 0) {
+                [[DCCacheManager sharedInstance] saveLastSelectedGuildID:guild.snowflake];
+            }
 
             dispatch_async(dispatch_get_main_queue(), ^{
                 [self performSegueWithIdentifier:@"guilds to chat"
@@ -317,16 +332,22 @@
             }
         }
         if (!selectedGuildStillExists && DCServerCommunicator.sharedInstance.guilds.count) {
-            self.selectedGuild = [DCServerCommunicator.sharedInstance.guilds objectAtIndex:0];
+            NSString *savedGuildID = [[DCCacheManager sharedInstance] loadLastSelectedGuildID];
+            DCGuild *restoredGuild = nil;
+            if (savedGuildID.length > 0) {
+                for (DCGuild *guild in DCServerCommunicator.sharedInstance.guilds) {
+                    if ([guild.snowflake isEqualToString:savedGuildID]) {
+                        restoredGuild = guild;
+                        break;
+                    }
+                }
+            }
+
+            self.selectedGuild = restoredGuild ?: [DCServerCommunicator.sharedInstance.guilds objectAtIndex:0];
             self.selectedChannel = nil;
-            DCServerCommunicator.sharedInstance.selectedGuild = self.selectedGuild;
         }
 
-        if (self.selectedGuild) {
-            [self.navigationItem setTitle:self.selectedGuild.name];
-            self.guildLabel.text = self.selectedGuild.name;
-            self.guildBanner.image = self.selectedGuild.banner ?: [UIImage imageNamed:@"No-Header"];
-        }
+        [self synchronizeSelectedGuildUI];
 
         [self.guildTableView reloadData];
         [self.channelTableView reloadData];
@@ -361,8 +382,7 @@
             DCServerCommunicator.sharedInstance.selectedGuild = guild;
             
             dispatch_async(dispatch_get_main_queue(), ^{
-                [self.navigationItem setTitle:guild.name];
-                self.guildLabel.text = guild.name;
+                [self synchronizeSelectedGuildUI];
                 [self.channelTableView reloadData];
             });
             return;
@@ -380,13 +400,7 @@
         dispatch_async(dispatch_get_main_queue(), ^{
             self.selectedGuild = guild;
             DCServerCommunicator.sharedInstance.selectedGuild = guild;
-            [self.navigationItem setTitle:guild.name];
-            self.guildLabel.text = guild.name;
-            if (self.selectedGuild.banner) {
-                self.guildBanner.image = self.selectedGuild.banner;
-            } else {
-                self.guildBanner.image = [UIImage imageNamed:@"No-Header"];
-            }
+            [self synchronizeSelectedGuildUI];
             [self.channelTableView reloadData];
         });
         return;

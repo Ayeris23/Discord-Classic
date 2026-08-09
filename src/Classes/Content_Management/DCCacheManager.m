@@ -480,6 +480,38 @@ static NSString * const DCLastActiveChatChannelIDKey =
     [defaults synchronize];
 }
 
+static NSString * const DCLastSelectedGuildIDKey = @"DCLastSelectedGuildID";
+
+- (void)saveLastSelectedGuildID:(NSString *)guildSnowflake {
+    if (![guildSnowflake isKindOfClass:[NSString class]] || guildSnowflake.length == 0) {
+        [self clearLastSelectedGuild];
+        return;
+    }
+
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    id existing = [defaults objectForKey:DCLastSelectedGuildIDKey];
+    if ([existing isKindOfClass:[NSString class]] &&
+        [(NSString *)existing isEqualToString:guildSnowflake]) {
+        return;
+    }
+
+    [defaults setObject:guildSnowflake forKey:DCLastSelectedGuildIDKey];
+    [defaults synchronize];
+}
+
+- (NSString *)loadLastSelectedGuildID {
+    id value = [[NSUserDefaults standardUserDefaults]
+        objectForKey:DCLastSelectedGuildIDKey];
+    return [value isKindOfClass:[NSString class]] ? value : nil;
+}
+
+- (void)clearLastSelectedGuild {
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    if (![defaults objectForKey:DCLastSelectedGuildIDKey]) return;
+    [defaults removeObjectForKey:DCLastSelectedGuildIDKey];
+    [defaults synchronize];
+}
+
 // --- Gateway resume checkpoint (disk-backed) ---
 
 static const NSInteger DCGatewayCheckpointVersion = 1;

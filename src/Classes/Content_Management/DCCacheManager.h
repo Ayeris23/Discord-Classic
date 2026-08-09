@@ -94,6 +94,12 @@
 - (NSString *)loadLastActiveChatChannelID;
 - (void)clearLastActiveChatChannel;
 
+// Main-menu guild selection. A missing saved guild intentionally means the
+// synthetic Direct Messages guild, which has no Discord snowflake.
+- (void)saveLastSelectedGuildID:(NSString *)guildSnowflake;
+- (NSString *)loadLastSelectedGuildID;
+- (void)clearLastSelectedGuild;
+
 // --- Gateway resume checkpoint (disk-backed) ---
 // This record is deliberately written only after the state represented by
 // sequence has been queued/durably flushed. It is tiny and is not a second

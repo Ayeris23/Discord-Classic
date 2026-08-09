@@ -3120,7 +3120,44 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
                     break;
                 }
                 case DCGatewayOpCodeDispatch: {
-                    [weakSelf handleDispatchWithResponse:parsedJsonResponse];
+                    NSString *eventType = [parsedJsonResponse objectForKey:@"t"];
+
+                    /*
+                     * Structural Gateway events mutate the same live guild/channel
+                     * collections that UIKit reads on the main thread.  Keep their
+                     * sequence ordering on Discord::Gateway::State, but commit the
+                     * actual model mutation on main so UITableView can never fast-
+                     * enumerate a collection while READY/CHANNEL/GUILD reconciliation
+                     * changes it.  Message/presence traffic stays on the Gateway queue
+                     * so the hot path does not inherit READY's main-thread cost.
+                     */
+                    BOOL requiresMainModelCommit =
+                        [eventType isEqualToString:@"READY"] ||
+                        [eventType isEqualToString:@"USER_SETTINGS_PROTO_UPDATE"] ||
+                        [eventType isEqualToString:GUILD_MEMBER_UPDATE] ||
+                        [eventType isEqualToString:GUILD_CREATE] ||
+                        [eventType isEqualToString:GUILD_UPDATE] ||
+                        [eventType isEqualToString:GUILD_DELETE] ||
+                        [eventType isEqualToString:GUILD_ROLE_CREATE] ||
+                        [eventType isEqualToString:GUILD_ROLE_UPDATE] ||
+                        [eventType isEqualToString:GUILD_ROLE_DELETE] ||
+                        [eventType isEqualToString:GUILD_EMOJIS_UPDATE] ||
+                        [eventType isEqualToString:THREAD_CREATE] ||
+                        [eventType isEqualToString:THREAD_UPDATE] ||
+                        [eventType isEqualToString:THREAD_DELETE] ||
+                        [eventType isEqualToString:CHANNEL_CREATE] ||
+                        [eventType isEqualToString:CHANNEL_UPDATE] ||
+                        [eventType isEqualToString:CHANNEL_DELETE] ||
+                        [eventType isEqualToString:GUILD_MEMBER_LIST_UPDATE] ||
+                        [eventType isEqualToString:@"GUILD_MEMBERS_CHUNK"];
+
+                    if (requiresMainModelCommit) {
+                        dispatch_sync(dispatch_get_main_queue(), ^{
+                            [weakSelf handleDispatchWithResponse:parsedJsonResponse];
+                        });
+                    } else {
+                        [weakSelf handleDispatchWithResponse:parsedJsonResponse];
+                    }
                     break;
                 }
                 case DCGatewayOpCodeHeartbeat: {

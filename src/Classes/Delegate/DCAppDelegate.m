@@ -87,6 +87,53 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
 
 @implementation DCAppDelegate
 
+// Restore the last server/DM list from the already-decoded cached guild graph
+// before the menu is ever presented. A missing saved snowflake means DMs.
+- (void)restoreCachedMenuGuildSelectionIfPossible {
+    UIViewController *root = self.window.rootViewController;
+    if (![root isKindOfClass:[UINavigationController class]]) return;
+
+    UINavigationController *navigationController = (UINavigationController *)root;
+    if (navigationController.viewControllers.count == 0) return;
+
+    UIViewController *rootContent = [navigationController.viewControllers objectAtIndex:0];
+    if (![rootContent isKindOfClass:[DCMenuViewController class]]) return;
+
+    NSString *savedGuildID = [[DCCacheManager sharedInstance] loadLastSelectedGuildID];
+    DCGuild *selectedGuild = nil;
+    DCGuild *privateGuild = nil;
+
+    for (DCGuild *guild in DCServerCommunicator.sharedInstance.guilds) {
+        BOOL isPrivateGuild = (guild.snowflake == nil &&
+            [guild.name isEqualToString:@"Direct Messages"]);
+        if (isPrivateGuild) privateGuild = guild;
+
+        if (savedGuildID.length > 0 &&
+            [guild.snowflake isEqualToString:savedGuildID]) {
+            selectedGuild = guild;
+            break;
+        }
+    }
+
+    if (!selectedGuild) {
+        selectedGuild = privateGuild;
+        if (savedGuildID.length > 0) {
+            DBGLOG(@"[ColdStart] Saved guild %@ is not in cache; using Direct Messages",
+                   savedGuildID);
+            [[DCCacheManager sharedInstance] clearLastSelectedGuild];
+        }
+    }
+
+    if (!selectedGuild) return;
+
+    DCMenuViewController *menu = (DCMenuViewController *)rootContent;
+    menu.selectedGuild = selectedGuild;
+    DCServerCommunicator.sharedInstance.selectedGuild = selectedGuild;
+
+    if (selectedGuild.snowflake.length > 0)
+        DBGLOG(@"[ColdStart] Restored last selected guild %@", selectedGuild.snowflake);
+}
+
 // Build the initial navigation stack before UIKit presents the storyboard.
 // This is the normal cold-restore path once a cached guild/channel graph exists:
 // menu stays underneath for Back, while chat is the first visible controller.
@@ -477,6 +524,12 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
             DCServerCommunicator.sharedInstance.channels = channels;
             DCServerCommunicator.sharedInstance.loadedRoles = roles;
             DCServerCommunicator.sharedInstance.loadedEmojis = emojis;
+
+            // Restore main-menu server selection first. If a saved chat exists,
+            // restoreCachedChatNavigationStackIfPossible intentionally overrides
+            // this with that chat's parent guild immediately afterward.
+            [self restoreCachedMenuGuildSelectionIfPossible];
+
             // Resolve and preload the saved chat before the storyboard's first
             // visible presentation. The chat's viewWillAppear then restores its
             // DCChannelWindow normally, so there is no menu frame or push animation.
@@ -622,6 +675,7 @@ didFailToRegisterForRemoteNotificationsWithError:(NSError *)error {
     [[DCMessageStore sharedInstance] removeAllWindows];
     [[DCCacheManager sharedInstance] invalidateFolderCompositeCache];
     [[DCCacheManager sharedInstance] clearLastActiveChatChannel];
+    [[DCCacheManager sharedInstance] clearLastSelectedGuild];
     UIStoryboard *storyboard = [UIStoryboard storyboardWithName:self.experimental ? @"Experimental" : @"Storyboard" bundle:nil];
     UIViewController *freshRoot = [storyboard instantiateInitialViewController];
 
