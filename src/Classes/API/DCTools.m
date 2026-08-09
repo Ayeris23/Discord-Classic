@@ -307,9 +307,20 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
 // Converts an NSDictionary created from json representing a role into a DCRole
 // object Also keeps the role in DCServerCommunicator.loadedUsers if cache:YES
 + (DCRole *)convertJsonRole:(NSDictionary *)jsonRole cache:(BOOL)cache {
-    // NSLog(@"%@", jsonUser);
-    DCRole *newRole      = DCRole.new;
-    newRole.snowflake    = [jsonRole objectForKey:@"id"];
+    NSString *snowflake = [jsonRole objectForKey:@"id"];
+    if (![snowflake isKindOfClass:[NSString class]] || snowflake.length == 0)
+        return nil;
+
+    // Preserve canonical role identity during READY/live guild refreshes just
+    // like convertJsonEmoji: does. Besides avoiding thousands of short-lived
+    // DCRole allocations, any object already holding a role reference observes
+    // the refreshed metadata in place.
+    DCRole *newRole = cache
+        ? [DCServerCommunicator.sharedInstance roleForSnowflake:snowflake]
+        : nil;
+    if (!newRole) newRole = DCRole.new;
+
+    newRole.snowflake    = snowflake;
     newRole.name         = [jsonRole objectForKey:@"name"];
     newRole.color        = [[jsonRole objectForKey:@"color"] intValue];
     newRole.hoist        = [[jsonRole objectForKey:@"hoist"] boolValue];
@@ -320,10 +331,8 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
     newRole.managed      = [[jsonRole objectForKey:@"managed"] boolValue];
     newRole.mentionable  = [[jsonRole objectForKey:@"mentionable"] boolValue];
 
-    // Save to DCServerCommunicator.loadedRoles
-    if (cache) {
-        [DCServerCommunicator.sharedInstance setRole:newRole forSnowflake:newRole.snowflake];
-    }
+    if (cache)
+        [DCServerCommunicator.sharedInstance setRole:newRole forSnowflake:snowflake];
 
     return newRole;
 }
