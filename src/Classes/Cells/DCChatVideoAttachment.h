@@ -13,10 +13,15 @@
 @property (weak, nonatomic) IBOutlet UIImageView *thumbnail;
 @property (strong, nonatomic) NSURL *videoURL;
 @property (strong, nonatomic) NSURL *thumbnailURL;
+@property (strong, nonatomic) UIImage *thumbnailImage;
+@property (copy, nonatomic) NSString *warningText;
 @property (assign, nonatomic) CGSize naturalSize;
 @property (assign, nonatomic) BOOL thumbnailLoading;
 @property (weak, nonatomic) IBOutlet UILabel *videoWarning;
 @property (nonatomic, strong) NSURL *linkURL;
 
-- (void) prepareForDisplay;
+- (id)initMetadataOnly;
+- (void)prepareForDisplay;
+- (void)prepareForDisplayAllowLoading:(BOOL)allowLoading;
+- (void)releaseThumbnailForResidency;
 @end

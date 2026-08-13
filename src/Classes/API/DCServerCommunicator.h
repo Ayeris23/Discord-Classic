@@ -264,8 +264,7 @@ typedef NS_ENUM(uint64_t, DCGatewayCapabilities) {
 - (void)description;
 - (void)startCommunicator;
 - (void)reconnect;
-// Cold-launch RESUME support. restore... is intentionally a no-op unless a
-// complete cached guild/user baseline exists for the saved sequence.
+// RESUME requires a complete cached guild/user baseline for the saved sequence.
 - (BOOL)restorePersistedGatewaySessionIfPossible;
 - (void)persistDurableGatewayStateWithCompletion:(void (^)(BOOL success))completion;
 - (void)prepareForLogout;
@@ -273,13 +272,13 @@ typedef NS_ENUM(uint64_t, DCGatewayCapabilities) {
 - (void)sendHeartbeat:(NSTimer*)timer;
 - (void)sendJSON:(NSDictionary*)dictionary;
 - (void)sendGuildSubscriptionWithGuildId:(NSString*)guildId channelId:(NSString*)channelId;
-// Existing Phase 4 banner loader. Cold RESUME reuses this exact path so cached
-// banner bytes are materialized from SDWebImage without introducing a second API.
+// Materialize a guild banner through the shared SDWebImage-backed loader.
 - (void)loadGuildIconHash:(NSString *)iconHash forGuild:(DCGuild *)guild;
 - (void)loadGuildBannerHash:(NSString *)bannerHash forGuild:(DCGuild *)guild;
 
 - (DCUser *)userForSnowflake:(NSString *)snowflake;
 - (void)setUser:(DCUser *)user forSnowflake:(NSString *)snowflake;
+- (void)ensureLoadedUsersRegistry;
 // Shallow, thread-safe snapshot used by the disk cache. The DCUser objects
 // themselves remain canonical live objects; DCCacheManager extracts only
 // durable scalar/string/dictionary fields from them.

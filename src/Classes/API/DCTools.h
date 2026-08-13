@@ -98,8 +98,10 @@ typedef NSString DCSnowflake;
 + (NSDictionary *)parseJSON:(NSString *)json;
 + (void)alert:(NSString *)title withMessage:(NSString *)message;
 + (NSData *)checkData:(NSData *)response withError:(NSError *)error;
++ (BOOL)isOriginalIPad;
 
 + (DCMessage *)convertJsonMessage:(NSDictionary *)jsonMessage;
++ (DCMessage *)convertJsonMessage:(NSDictionary *)jsonMessage deferLegacyLayout:(BOOL)deferLegacyLayout;
 + (DCGuild *)convertJsonGuild:(NSDictionary *)jsonGuild withMembers:(NSArray *)members;
 + (DCUser *)convertJsonUser:(NSDictionary *)jsonUser cache:(BOOL)cache;
 + (DCEmoji *)convertJsonEmoji:(NSDictionary *)jsonEmoji cache:(BOOL)cache;

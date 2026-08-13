@@ -11,6 +11,7 @@
 #include <Foundation/NSObjCRuntime.h>
 #include <dispatch/dispatch.h>
 #include <objc/NSObjCRuntime.h>
+#include <sys/utsname.h>
 #import "Base64.h"
 #import "DCChatVideoAttachment.h"
 #import "DCGifInfo.h"
@@ -24,39 +25,357 @@
 #import "SDWebImageManager.h"
 #include "TSMarkdownParser.h"
 #import "DCMarkdownParser.h"
-#import "ThumbHash.h"
 #import "UIImage+animatedGIF.h"
 #import "UILazyImage.h"
 #import "DCContentManager.h"
 #import "DTCoreTextLayouter.h"
 #import "DTCoreTextLayoutFrame.h"
+#import <CoreText/CoreText.h>
 
 // https://discord.gg/X4NSsMC
 
+/* Older CoreText builds can stall while resolving unsupported supplementary
+ * emoji. Route supported scalar glyphs explicitly and use a display-only
+ * placeholder for unsupported clusters without changing the message model. */
+static BOOL DCNeedsLegacyUnicodeCompatibility(void) {
+    return ([[[UIDevice currentDevice] systemVersion] compare:@"7.0"
+                                                       options:NSNumericSearch] == NSOrderedAscending);
+}
+
+static BOOL DCIsModernEmojiScalar(uint32_t scalar) {
+    /*
+     * Covers the supplementary emoji/symbol blocks that matter to the old
+     * CoreText fallback failure (including U+1F642). Restricting this
+     * range prevents rare non-emoji supplementary scripts from being rewritten.
+     */
+    return scalar >= 0x1F000 && scalar <= 0x1FAFF;
+}
+
+static uint32_t DCScalarFromSurrogatePair(unichar high, unichar low) {
+    return (((uint32_t)high - 0xD800U) << 10)
+         + ((uint32_t)low - 0xDC00U)
+         + 0x10000U;
+}
+
+static CFCharacterSetRef DCInstalledAppleColorEmojiCharacterSet(void);
+
+static uint16_t DCReadBigEndianUInt16(const UInt8 *bytes, NSUInteger length, NSUInteger offset) {
+    if (!bytes || offset > length || length - offset < 2) return 0;
+    return (uint16_t)(((uint16_t)bytes[offset] << 8) |
+                      (uint16_t)bytes[offset + 1]);
+}
+
+static uint32_t DCReadBigEndianUInt32(const UInt8 *bytes, NSUInteger length, NSUInteger offset) {
+    if (!bytes || offset > length || length - offset < 4) return 0;
+    return ((uint32_t)bytes[offset] << 24) |
+           ((uint32_t)bytes[offset + 1] << 16) |
+           ((uint32_t)bytes[offset + 2] << 8) |
+            (uint32_t)bytes[offset + 3];
+}
+
+/*
+ * CTFontCopyCharacterSet is normally the right coverage query, but on an old
+ * CoreText build it can under-report characters added by a much newer
+ * replacement AppleColorEmoji.  The font file itself still has the authority:
+ * supplementary Unicode mappings live in a format-12/13 'cmap' subtable.
+ * Read that table directly so upgraded devices are not artificially limited by
+ * iOS 5/6's cached/legacy coverage view.
+ */
+static CFDataRef DCInstalledAppleColorEmojiCmapTable(void) {
+    static CFDataRef cmapTable = NULL;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        if (!DCInstalledAppleColorEmojiCharacterSet()) return;
+        CTFontRef font = CTFontCreateWithName(CFSTR("AppleColorEmoji"), 14.0f, NULL);
+        if (!font) return;
+        cmapTable = CTFontCopyTable(font, kCTFontTableCmap, 0);
+        CFRelease(font);
+    });
+    return cmapTable;
+}
+
+static uint32_t DCGlyphFromCmapGroupSubtable(const UInt8 *bytes,
+                                              NSUInteger length,
+                                              NSUInteger subtableOffset,
+                                              uint16_t format,
+                                              uint32_t scalar) {
+    if (subtableOffset > length || length - subtableOffset < 16) return 0;
+
+    uint32_t subtableLength = DCReadBigEndianUInt32(bytes, length, subtableOffset + 4);
+    uint32_t groupCount = DCReadBigEndianUInt32(bytes, length, subtableOffset + 12);
+    if (subtableLength < 16 || subtableLength > length - subtableOffset) return 0;
+
+    NSUInteger groupBase = subtableOffset + 16;
+    NSUInteger availableGroupBytes = subtableLength - 16;
+    if ((uint64_t)groupCount * 12ULL > (uint64_t)availableGroupBytes) return 0;
+
+    /* Groups are sorted by starting character code; binary-search them. */
+    uint32_t low = 0;
+    uint32_t high = groupCount;
+    while (low < high) {
+        uint32_t mid = low + ((high - low) / 2);
+        NSUInteger groupOffset = groupBase + ((NSUInteger)mid * 12U);
+        uint32_t start = DCReadBigEndianUInt32(bytes, length, groupOffset);
+        uint32_t end = DCReadBigEndianUInt32(bytes, length, groupOffset + 4);
+
+        if (scalar < start) {
+            high = mid;
+        } else if (scalar > end) {
+            low = mid + 1;
+        } else {
+            uint32_t startGlyph = DCReadBigEndianUInt32(bytes, length, groupOffset + 8);
+            if (format == 12) {
+                return startGlyph + (scalar - start);
+            }
+            if (format == 13) {
+                return startGlyph;
+            }
+            return 0;
+        }
+    }
+    return 0;
+}
+
+static uint32_t DCInstalledAppleColorEmojiGlyphForScalar(uint32_t scalar) {
+    CFDataRef cmapTable = DCInstalledAppleColorEmojiCmapTable();
+    if (!cmapTable) return 0;
+
+    const UInt8 *bytes = CFDataGetBytePtr(cmapTable);
+    NSUInteger length = (NSUInteger)CFDataGetLength(cmapTable);
+    if (!bytes || length < 4) return 0;
+
+    uint16_t tableCount = DCReadBigEndianUInt16(bytes, length, 2);
+    if ((uint64_t)tableCount * 8ULL > (uint64_t)(length - 4)) return 0;
+
+    for (uint16_t i = 0; i < tableCount; i++) {
+        NSUInteger recordOffset = 4 + ((NSUInteger)i * 8U);
+        uint32_t subtableOffset32 = DCReadBigEndianUInt32(bytes, length, recordOffset + 4);
+        NSUInteger subtableOffset = (NSUInteger)subtableOffset32;
+        if (subtableOffset > length || length - subtableOffset < 2) continue;
+
+        uint16_t format = DCReadBigEndianUInt16(bytes, length, subtableOffset);
+        if (format != 12 && format != 13) continue;
+
+        uint32_t glyph = DCGlyphFromCmapGroupSubtable(bytes,
+                                                       length,
+                                                       subtableOffset,
+                                                       format,
+                                                       scalar);
+        if (glyph != 0) return glyph;
+    }
+    return 0;
+}
+
+static CFCharacterSetRef DCInstalledAppleColorEmojiCharacterSet(void) {
+    static CFCharacterSetRef characterSet = NULL;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        CTFontRef font = CTFontCreateWithName(CFSTR("AppleColorEmoji"), 14.0f, NULL);
+        if (!font) return;
+
+        NSString *postScriptName = CFBridgingRelease(CTFontCopyPostScriptName(font));
+        NSString *familyName = CFBridgingRelease(CTFontCopyFamilyName(font));
+        BOOL isEmojiFont = ([postScriptName rangeOfString:@"Emoji"
+                                                   options:NSCaseInsensitiveSearch].location != NSNotFound)
+                        || ([familyName rangeOfString:@"Emoji"
+                                               options:NSCaseInsensitiveSearch].location != NSNotFound);
+        if (isEmojiFont) {
+            characterSet = CTFontCopyCharacterSet(font);
+            DBGLOG(@"[UnicodeCompat] Installed emoji font %@ (%@)",
+                   postScriptName ?: @"?", familyName ?: @"?");
+        } else {
+            DBGLOG(@"[UnicodeCompat] AppleColorEmoji name resolved to unexpected font %@ (%@); disabled",
+                   postScriptName ?: @"?", familyName ?: @"?");
+        }
+        CFRelease(font);
+    });
+    return characterSet;
+}
+
+static CTFontRef DCCreateInstalledAppleColorEmojiFont(CGFloat pointSize) {
+    if (!DCInstalledAppleColorEmojiCharacterSet()) return NULL;
+    return CTFontCreateWithName(CFSTR("AppleColorEmoji"), pointSize, NULL);
+}
+
+static BOOL DCAttributedStringContainsModernEmojiCandidate(NSAttributedString *attributed) {
+    NSString *plain = attributed.string;
+    NSUInteger length = plain.length;
+    for (NSUInteger i = 0; i + 1 < length; i++) {
+        unichar high = [plain characterAtIndex:i];
+        if (high < 0xD800 || high > 0xDBFF) continue;
+        unichar low = [plain characterAtIndex:i + 1];
+        if (low < 0xDC00 || low > 0xDFFF) continue;
+        if (DCIsModernEmojiScalar(DCScalarFromSurrogatePair(high, low))) return YES;
+        i++;
+    }
+    return NO;
+}
+
+static void DCApplyLegacyUnicodeCompatibility(DCMessage *message) {
+    if (!DCNeedsLegacyUnicodeCompatibility() ||
+        !message.attributedContent.length ||
+        !DCAttributedStringContainsModernEmojiCandidate(message.attributedContent)) {
+        return;
+    }
+
+    NSMutableAttributedString *rendered = [message.attributedContent mutableCopy];
+    CFCharacterSetRef emojiCharacterSet = DCInstalledAppleColorEmojiCharacterSet();
+    NSUInteger index = 0;
+
+    while (index < rendered.length) {
+        NSString *plain = rendered.string;
+        NSRange cluster = [plain rangeOfComposedCharacterSequenceAtIndex:index];
+        if (cluster.location == NSNotFound || cluster.length == 0) {
+            index++;
+            continue;
+        }
+
+        NSUInteger cursor = cluster.location;
+        NSUInteger scalarCount = 0;
+        NSUInteger modernEmojiScalarCount = 0;
+        uint32_t firstModernEmojiScalar = 0;
+
+        while (cursor < NSMaxRange(cluster)) {
+            unichar ch = [plain characterAtIndex:cursor];
+            uint32_t scalar = ch;
+
+            if (ch >= 0xD800 && ch <= 0xDBFF && cursor + 1 < NSMaxRange(cluster)) {
+                unichar low = [plain characterAtIndex:cursor + 1];
+                if (low >= 0xDC00 && low <= 0xDFFF) {
+                    scalar = DCScalarFromSurrogatePair(ch, low);
+                    cursor += 2;
+                } else {
+                    cursor++;
+                }
+            } else {
+                cursor++;
+            }
+
+            scalarCount++;
+            if (DCIsModernEmojiScalar(scalar)) {
+                modernEmojiScalarCount++;
+                if (!firstModernEmojiScalar) firstModernEmojiScalar = scalar;
+            }
+        }
+
+        if (modernEmojiScalarCount == 0) {
+            index = NSMaxRange(cluster);
+            continue;
+        }
+
+        /*
+         * Only a single supplementary scalar is safe to hand directly to the
+         * old shaper.  Anything compositional gets a placeholder until the app
+         * has a sequence-aware emoji renderer.
+         */
+        BOOL simpleSingleScalar = (scalarCount == 1 &&
+                                   modernEmojiScalarCount == 1 &&
+                                   cluster.length == 2);
+        BOOL characterSetSupportsScalar = simpleSingleScalar &&
+            emojiCharacterSet &&
+            CFCharacterSetIsLongCharacterMember(emojiCharacterSet,
+                                                  (UTF32Char)firstModernEmojiScalar);
+
+        /* CTFontCopyCharacterSet can under-report upgraded emoji fonts. Fall
+         * back to the cmap table and attach CTGlyphInfo when a glyph exists. */
+        uint32_t cmapGlyph = 0;
+        if (simpleSingleScalar && !characterSetSupportsScalar) {
+            cmapGlyph = DCInstalledAppleColorEmojiGlyphForScalar(firstModernEmojiScalar);
+        }
+
+        BOOL canRouteScalar = characterSetSupportsScalar ||
+                              (cmapGlyph > 0 && cmapGlyph <= 0xFFFFU);
+
+        if (canRouteScalar) {
+            id currentFontObject = [rendered attribute:(NSString *)kCTFontAttributeName
+                                               atIndex:cluster.location
+                                        effectiveRange:NULL];
+            CGFloat pointSize = 14.0f;
+            if (currentFontObject) {
+                CTFontRef currentFont = (__bridge CTFontRef)currentFontObject;
+                CGFloat existingSize = CTFontGetSize(currentFont);
+                if (existingSize > 0.0f) pointSize = existingSize;
+            }
+
+            CTFontRef emojiFont = DCCreateInstalledAppleColorEmojiFont(pointSize);
+            if (emojiFont) {
+                if (!characterSetSupportsScalar && cmapGlyph != 0) {
+                    NSString *baseString = [plain substringWithRange:cluster];
+                    CTGlyphInfoRef glyphInfo = CTGlyphInfoCreateWithGlyph((CGGlyph)cmapGlyph,
+                                                                           emojiFont,
+                                                                           (__bridge CFStringRef)baseString);
+                    if (glyphInfo) {
+                        [rendered addAttribute:(NSString *)kCTFontAttributeName
+                                         value:(__bridge id)emojiFont
+                                         range:cluster];
+                        [rendered addAttribute:(NSString *)kCTGlyphInfoAttributeName
+                                         value:(__bridge id)glyphInfo
+                                         range:cluster];
+                        DBGLOG(@"[UnicodeCompat] %@ routed U+%04X via raw cmap glyph %u to AppleColorEmoji %.0fpt (charset miss)",
+                               message.snowflake ?: @"?",
+                               (unsigned int)firstModernEmojiScalar,
+                               (unsigned int)cmapGlyph,
+                               pointSize);
+                        CFRelease(glyphInfo);
+                        CFRelease(emojiFont);
+                        index = NSMaxRange(cluster);
+                        continue;
+                    }
+                    /* Do not risk the old fallback path without the override. */
+                } else {
+                    [rendered addAttribute:(NSString *)kCTFontAttributeName
+                                     value:(__bridge id)emojiFont
+                                     range:cluster];
+                    DBGLOG(@"[UnicodeCompat] %@ routed U+%04X to AppleColorEmoji %.0fpt",
+                           message.snowflake ?: @"?",
+                           (unsigned int)firstModernEmojiScalar,
+                           pointSize);
+                    CFRelease(emojiFont);
+                    index = NSMaxRange(cluster);
+                    continue;
+                }
+                CFRelease(emojiFont);
+            }
+        }
+
+        NSDictionary *attributes = [rendered attributesAtIndex:cluster.location
+                                                  effectiveRange:NULL];
+        NSAttributedString *placeholder = [[NSAttributedString alloc]
+            initWithString:@"\u25A1"
+                attributes:attributes];
+        [rendered replaceCharactersInRange:cluster
+                      withAttributedString:placeholder];
+
+        DBGLOG(@"[UnicodeCompat] %@ replaced %@ emoji cluster starting U+%04X for legacy rendering (charset %d cmapGlyph %u)",
+               message.snowflake ?: @"?",
+               simpleSingleScalar ? @"unsupported" : @"complex",
+               (unsigned int)firstModernEmojiScalar,
+               characterSetSupportsScalar ? 1 : 0,
+               (unsigned int)cmapGlyph);
+
+        /* Replacement is one BMP code unit. */
+        index = cluster.location + 1;
+    }
+
+    message.attributedContent = [rendered copy];
+}
+
 @implementation DCTools
 
-// Avatar image roundinator
-// static UIImage *roundedImage(UIImage *image) {
-//     CGFloat size = MIN(image.size.width, image.size.height);
-//     CGRect rect  = CGRectMake(0, 0, size, size);
-//     UIGraphicsBeginImageContextWithOptions(rect.size, NO, 0);
-//     [[UIBezierPath bezierPathWithOvalInRect:rect] addClip];
-//     [image drawInRect:rect];
-//     UIImage *result = UIGraphicsGetImageFromCurrentImageContext();
-//     UIGraphicsEndImageContext();
-//     return result;
-// }
-
-// Attachment image roundinator
-static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
-    CGRect rect = CGRectMake(0, 0, image.size.width, image.size.height);
-    UIGraphicsBeginImageContextWithOptions(rect.size, NO, 0);
-    [[UIBezierPath bezierPathWithRoundedRect:rect cornerRadius:radius] addClip];
-    [image drawInRect:rect];
-    UIImage *result = UIGraphicsGetImageFromCurrentImageContext();
-    UIGraphicsEndImageContext();
-    return result;
++ (BOOL)isOriginalIPad {
+    static BOOL isOriginalIPad = NO;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        struct utsname systemInfo;
+        if (uname(&systemInfo) == 0) {
+            NSString *machine = [NSString stringWithCString:systemInfo.machine
+                                                   encoding:NSUTF8StringEncoding];
+            isOriginalIPad = [machine isEqualToString:@"iPad1,1"];
+        }
+    });
+    return isOriginalIPad;
 }
+
 
 // Returns a parsed NSDictionary from a json string or nil if something goes
 // wrong
@@ -112,7 +431,7 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
 
     // Treat Discord user payloads as patches to one canonical DCUser object.
     // Gateway payloads such as PRESENCE_UPDATE may contain only a subset of
-    // user fields, so an absent key must never erase a value we already know.
+    // user fields, so an absent key must never erase an existing value.
     DCUser *user = cache
         ? [DCServerCommunicator.sharedInstance userForSnowflake:snowflake]
         : nil;
@@ -376,28 +695,12 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
 
 + (UILazyImage *)scaledImageFromImage:(UIImage *)image withURL:(NSURL *)url {
     if (!image) return nil;
-    if (image.images.count > 1) {
-        UILazyImage *lazyImage = [UILazyImage new];
-        lazyImage.image        = image;
-        lazyImage.imageURL     = url;
-        return lazyImage;
-    }
-    CGFloat screenWidth = [UIScreen mainScreen].bounds.size.width;
-    CGFloat maxWidth    = screenWidth - 66;
-    CGFloat aspectRatio = image.size.width / image.size.height;
-    int newWidth        = (int)(200 * aspectRatio);
-    int newHeight       = 200;
-    if (newWidth > maxWidth) {
-        newWidth  = (int)maxWidth;
-        newHeight = (int)(newWidth / aspectRatio);
-    }
-    UIGraphicsBeginImageContextWithOptions(CGSizeMake(newWidth, newHeight), NO, 0.0);
-    [image drawInRect:CGRectMake(0, 0, newWidth, newHeight)];
-    UILazyImage *newImage = [UILazyImage new];
-    newImage.image = roundedCornerImage(UIGraphicsGetImageFromCurrentImageContext(), 6);
-    UIGraphicsEndImageContext();
-    newImage.imageURL = url;
-    return newImage;
+
+    // Keep chat media at source resolution; visible attachment views own scaling and rounding.
+    UILazyImage *lazyImage = [UILazyImage new];
+    lazyImage.image = image;
+    lazyImage.imageURL = url;
+    return lazyImage;
 }
 
 + (DCEmoji *)convertJsonEmoji:(NSDictionary *)jsonEmoji cache:(BOOL)cache {
@@ -429,6 +732,22 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
 // Converts an NSDictionary created from json representing a message into a
 // message object
 + (DCMessage *)convertJsonMessage:(NSDictionary *)jsonMessage {
+    return [self convertJsonMessage:jsonMessage deferLegacyLayout:NO];
+}
+
++ (DCMessage *)convertJsonMessage:(NSDictionary *)jsonMessage
+                 deferLegacyLayout:(BOOL)deferLegacyLayout {
+    CFAbsoluteTime perfStart = CFAbsoluteTimeGetCurrent();
+    CFAbsoluteTime perfIdentityEnd = perfStart;
+    CFAbsoluteTime perfDatesEnd = perfStart;
+    CFAbsoluteTime perfMediaEnd = perfStart;
+    CFAbsoluteTime perfMentionsEnd = perfStart;
+    CFAbsoluteTime perfEmojizeEnd = perfStart;
+    CFAbsoluteTime perfMarkdownEnd = perfStart;
+    CFAbsoluteTime perfLayoutEnd = perfStart;
+    CFAbsoluteTime perfTailEnd = perfStart;
+    NSString *measurementMode = @"none";
+
     DCMessage *newMessage = DCMessage.new;
     // The message-window cache persists this server payload verbatim and replays
     // it through this same converter on cold restore. Keep rendering logic here
@@ -439,9 +758,6 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
     @autoreleasepool {
         NSDictionary *author = [jsonMessage objectForKey:@"author"];
         NSString *authorId   = author ? [author objectForKey:@"id"] : nil;
-        // NSLog(@"[Message] raw embeds: %@ raw attachments: %@", 
-        //     [jsonMessage objectForKey:@"embeds"],
-        //     [jsonMessage objectForKey:@"attachments"]);
 
         DCUser *authorUser = [DCServerCommunicator.sharedInstance userForSnowflake:authorId];
         if (!authorUser && authorId != nil && ![authorId isKindOfClass:[NSNull class]]) {
@@ -575,30 +891,55 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
         newMessage.snowflake       = [jsonMessage objectForKey:@"id"];
         newMessage.attachments     = NSMutableArray.new;
         newMessage.attachmentCount = 0;
+        perfIdentityEnd = CFAbsoluteTimeGetCurrent();
 
-        static dispatch_once_t dateFormatOnceToken;
-        static NSDateFormatter *dateFormatter;
-        dispatch_once(&dateFormatOnceToken, ^{
-            dateFormatter = [NSDateFormatter new];
+        /*
+         * These formatters used to have their locale/dateFormat reset for every
+         * message.  On iOS 5/6 NSDateFormatter setup is extremely expensive and
+         * cold window restore runs this path up to 80 times in one main-thread
+         * burst.  Keep two immutable input formatters instead: one for Discord's
+         * fractional-second timestamps and one for the fallback whole-second
+         * form.
+         */
+        static dispatch_once_t messageDateFormatOnceToken;
+        static NSDateFormatter *fractionalDateFormatter;
+        static NSDateFormatter *wholeSecondDateFormatter;
+        static NSDateFormatter *prettyDateFormatter;
+        dispatch_once(&messageDateFormatOnceToken, ^{
+            NSLocale *posix = [[NSLocale alloc] initWithLocaleIdentifier:@"en_US_POSIX"];
+
+            fractionalDateFormatter = [NSDateFormatter new];
+            fractionalDateFormatter.locale = posix;
+            fractionalDateFormatter.dateFormat = @"yyyy-MM-dd'T'HH:mm:ss.SSSSSSZ";
+
+            wholeSecondDateFormatter = [NSDateFormatter new];
+            wholeSecondDateFormatter.locale = posix;
+            wholeSecondDateFormatter.dateFormat = @"yyyy-MM-dd'T'HH:mm:ssZ";
+
+            prettyDateFormatter = [NSDateFormatter new];
+            prettyDateFormatter.dateStyle = NSDateFormatterShortStyle;
+            prettyDateFormatter.timeStyle = NSDateFormatterShortStyle;
+            prettyDateFormatter.doesRelativeDateFormatting = YES;
         });
-        // Normalize timezone +HH:MM -> +HHMM for iOS 5 compatibility
+
+        // Normalize timezone +HH:MM -> +HHMM for iOS 5 compatibility.
         NSString *rawTimestamp = [jsonMessage objectForKey:@"timestamp"];
+        if (![rawTimestamp isKindOfClass:[NSString class]]) rawTimestamp = nil;
         if (rawTimestamp.length > 6) {
             NSString *tzPart = [rawTimestamp substringFromIndex:rawTimestamp.length - 6];
             if ([tzPart characterAtIndex:3] == ':') {
                 rawTimestamp = [rawTimestamp stringByReplacingCharactersInRange:NSMakeRange(rawTimestamp.length - 3, 1) withString:@""];
             }
         }
-        dateFormatter.dateFormat = @"yyyy-MM-dd'T'HH:mm:ss.SSSSSSZ";
-        dateFormatter.locale     = [[NSLocale alloc] initWithLocaleIdentifier:@"en_US_POSIX"];
-        newMessage.timestamp = [dateFormatter dateFromString:rawTimestamp];
-        if (newMessage.timestamp == nil) {
-            dateFormatter.dateFormat = @"yyyy-MM-dd'T'HH:mm:ssZ";
-            newMessage.timestamp = [dateFormatter dateFromString:rawTimestamp];
+        newMessage.timestamp = [fractionalDateFormatter dateFromString:rawTimestamp];
+        if (newMessage.timestamp == nil && rawTimestamp.length) {
+            newMessage.timestamp = [wholeSecondDateFormatter dateFromString:rawTimestamp];
         }
 
-        if ([jsonMessage objectForKey:@"edited_timestamp"] != [NSNull null]) {
-            NSString *rawEditedTimestamp = [jsonMessage objectForKey:@"edited_timestamp"];
+        id editedTimestampValue = [jsonMessage objectForKey:@"edited_timestamp"];
+        if (editedTimestampValue != [NSNull null] &&
+            [editedTimestampValue isKindOfClass:[NSString class]]) {
+            NSString *rawEditedTimestamp = editedTimestampValue;
             if (rawEditedTimestamp.length > 6) {
                 NSString *tzPart = [rawEditedTimestamp substringFromIndex:rawEditedTimestamp.length - 6];
                 if ([tzPart characterAtIndex:3] == ':') {
@@ -606,25 +947,18 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
                         NSMakeRange(rawEditedTimestamp.length - 3, 1) withString:@""];
                 }
             }
-            dateFormatter.dateFormat = @"yyyy-MM-dd'T'HH:mm:ss.SSSSSSZ";
-            newMessage.editedTimestamp = [dateFormatter dateFromString:rawEditedTimestamp];
-            if (newMessage.editedTimestamp == nil) {
-                dateFormatter.dateFormat = @"yyyy-MM-dd'T'HH:mm:ssZ";
-                newMessage.editedTimestamp = [dateFormatter dateFromString:rawEditedTimestamp];
+            newMessage.editedTimestamp =
+                [fractionalDateFormatter dateFromString:rawEditedTimestamp];
+            if (newMessage.editedTimestamp == nil && rawEditedTimestamp.length) {
+                newMessage.editedTimestamp =
+                    [wholeSecondDateFormatter dateFromString:rawEditedTimestamp];
             }
         }
 
-        static dispatch_once_t prettyFormatOnceToken;
-        static NSDateFormatter *prettyDateFormatter;
-        dispatch_once(&prettyFormatOnceToken, ^{
-            prettyDateFormatter = [NSDateFormatter new];
-        });
-        prettyDateFormatter.dateStyle                  = NSDateFormatterShortStyle;
-        prettyDateFormatter.timeStyle                  = NSDateFormatterShortStyle;
-        prettyDateFormatter.doesRelativeDateFormatting = YES;
-
-        newMessage.prettyTimestamp =
-            [prettyDateFormatter stringFromDate:newMessage.timestamp];
+        newMessage.prettyTimestamp = newMessage.timestamp
+            ? [prettyDateFormatter stringFromDate:newMessage.timestamp]
+            : @"";
+        perfDatesEnd = CFAbsoluteTimeGetCurrent();
         // Load embeded images from both links and attatchments
         // ─── EMBEDS ───────────────────────────────────────────────────────────────────
         // Discord embeds are rich previews generated server-side from links in messages.
@@ -634,13 +968,6 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
         if (embeds) {
             for (NSDictionary *embed in embeds) {
                 NSString *embedType = [embed objectForKey:@"type"];
-                // image embedding log
-                // NSLog(@"[Embed] type: %@ url: %@", embedType, [embed objectForKey:@"url"]);
-                // video embedding log
-                // NSLog(@"[Embed] type: %@ url: %@ video_url: %@", 
-                //     embedType, 
-                //     [embed objectForKey:@"url"],
-                //     [embed valueForKeyPath:@"video.url"]);
                 // image/gifv
                 // Handle static image embeds and Tenor/Giphy gif embeds.
                 // gifv from other providers falls through to the video block below.
@@ -654,10 +981,6 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
                     newMessage.content = [newMessage.content stringByReplacingOccurrencesOfString:[embed objectForKey:@"url"] withString:@""];
 
                     NSString *attachmentURL;
-                    // NSLog(@"[Embed] embedType: %@ proxy_url: %@ thumbnail_url: %@",
-                    //     embedType,
-                    //     [embed valueForKeyPath:@"thumbnail.proxy_url"],
-                    //     [embed valueForKeyPath:@"thumbnail.url"]);
                     
                     // gifv URL construction
                     // Tenor and Giphy use different URL schemes to serve their gifs.
@@ -673,7 +996,6 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
                             NSString *filename = [parts[4] stringByReplacingOccurrencesOfString:@".png" withString:@".gif"];
                             NSString *newGifId = [gifId stringByReplacingCharactersInRange:NSMakeRange(gifId.length - 1, 1) withString:@"C"]; // -AAAAC (0x00000002) = HD GIF
                             attachmentURL = [NSString stringWithFormat:@"https://media.tenor.com/%@/%@", newGifId, filename];
-                            // NSLog(@"[Tenor] thumbnail.url: %@ constructed: %@", [embed valueForKeyPath:@"thumbnail.url"], attachmentURL);
                         } else if ([[embed valueForKeyPath:@"provider.name"] isEqualToString:@"Giphy"]) {
                             attachmentURL = [[embed valueForKeyPath:@"video.url"] stringByReplacingOccurrencesOfString:@".mp4" withString:@".gif"];
                         }
@@ -717,7 +1039,6 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
                     // Build the final download URL, requesting PNG format to ensure iOS compatibility.
                     // Some Discord CDN URLs already have width/height baked in — don't append them again.
                     // Always trim trailing & or ? before appending parameters to avoid malformed URLs.
-                    // NSLog(@"[Embed Image] attachmentURL before construction: %@", attachmentURL);
                     BOOL alreadyHasDimensions = [attachmentURL rangeOfString:@"width="].location != NSNotFound;
                     NSURL *urlString;
                     if (alreadyHasDimensions) {
@@ -726,7 +1047,6 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
                         urlString = [NSURL URLWithString:[NSString
                             stringWithFormat:@"%@%cformat=png", trimmedURL,
                             [trimmedURL rangeOfString:@"?"].location == NSNotFound ? '?' : '&']];
-                        // NSLog(@"[Embed Image] final urlString: %@", urlString);
                     } else if (width != 0 || height != 0) {
                         NSString *trimmedURL = [attachmentURL stringByTrimmingCharactersInSet:
                             [NSCharacterSet characterSetWithCharactersInString:@"&?"]];
@@ -734,85 +1054,26 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
                             stringWithFormat:@"%@%cformat=png&width=%ld&height=%ld", trimmedURL,
                             [trimmedURL rangeOfString:@"?"].location == NSNotFound ? '?' : '&',
                             (long)width, (long)height]];
-                        // NSLog(@"[Embed Image] final urlString: %@", urlString);
                     } else {
                         NSString *trimmedURL = [attachmentURL stringByTrimmingCharactersInSet:
                             [NSCharacterSet characterSetWithCharactersInString:@"&?"]];
                         urlString = [NSURL URLWithString:[NSString
                             stringWithFormat:@"%@%cformat=png", trimmedURL,
                             [trimmedURL rangeOfString:@"?"].location == NSNotFound ? '?' : '&']];
-                        // NSLog(@"[Embed Image] final urlString: %@", urlString);
                     }
 
-                    // GIF VS Static
-                    // Gif attachments use DCGifInfo (data only, no UIKit) — the view is created later
-                    // in cellForRowAtIndexPath on the main thread. Static images use UILazyImage directly.
-                    NSUInteger idx = [newMessage.attachments count];
+                    // Publish geometry/URLs only; visible attachment views own decoded pixels.
                     if (isGif) {
                         DCGifInfo *gif = [DCGifInfo new];
                         gif.gifURL = [NSURL URLWithString:attachmentURL];
-                        if ([[embed valueForKeyPath:@"thumbnail.placeholder_version"] integerValue] == 1) {
-                            UIImage *img = thumbHashToImage([NSData dataWithBase64EncodedString:[embed valueForKeyPath:@"thumbnail.placeholder"]]);
-                            UIImage *scaled = [DCTools scaledImageFromImage:img withURL:urlString].image;
-                            gif.staticThumbnail = scaled;
-                        }
+                        gif.thumbnailURL = urlString;
+                        gif.naturalSize = CGSizeMake(width, height);
                         [newMessage.attachments addObject:gif];
-
-                        if (!DCServerCommunicator.sharedInstance.dataSaver) {
-                            SDWebImageManager *manager = [SDWebImageManager sharedManager];
-                            [manager downloadImageWithURL:urlString
-                                                  options:SDWebImageCacheMemoryOnly | SDWebImageRetryFailed
-                                                 progress:nil
-                                                completed:^(UIImage *retrievedImage, NSError *error, SDImageCacheType cacheType, BOOL finished, NSURL *imageURL) {
-                                                    @autoreleasepool {
-                                                        if (!retrievedImage || !finished) {
-                                                            NSLog(@"Failed to load gif thumbnail with URL %@: %@", urlString, error);
-                                                            return;
-                                                        }
-                                                        UIImage *firstFrame = (retrievedImage.images.count > 0) ? retrievedImage.images[0] : retrievedImage;
-                                                        UIImage *scaled = [DCTools scaledImageFromImage:firstFrame withURL:nil].image;
-                                                        dispatch_async(dispatch_get_main_queue(), ^{
-                                                            gif.staticThumbnail    = scaled;
-                                                            [newMessage.attachments replaceObjectAtIndex:idx withObject:gif];
-                                                            [NSNotificationCenter.defaultCenter
-                                                                postNotificationName:@"RELOAD MESSAGE DATA"
-                                                                              object:newMessage];
-                                                        });
-                                                    }
-                                                }];
-                        }
                     } else {
-                        if ([[embed valueForKeyPath:@"thumbnail.placeholder_version"] integerValue] == 1) {
-                            UIImage *img = thumbHashToImage([NSData dataWithBase64EncodedString:[embed valueForKeyPath:@"thumbnail.placeholder"]]);
-                            UILazyImage *placeholder = [DCTools scaledImageFromImage:img withURL:urlString];
-                            placeholder.naturalSize = CGSizeMake(width, height);
-                            [newMessage.attachments addObject:placeholder];
-                        } else {
-                            [newMessage.attachments addObject:@[ @(width), @(height) ]];
-                        }
-
-                        if (!DCServerCommunicator.sharedInstance.dataSaver) {
-                            SDWebImageManager *manager = [SDWebImageManager sharedManager];
-                            [manager downloadImageWithURL:urlString
-                                                  options:SDWebImageCacheMemoryOnly | SDWebImageRetryFailed
-                                                 progress:nil
-                                                completed:^(UIImage *retrievedImage, NSError *error, SDImageCacheType cacheType, BOOL finished, NSURL *imageURL) {
-                                                    @autoreleasepool {
-                                                        if (!retrievedImage || !finished) {
-                                                            NSLog(@"Failed to load embed image with URL %@: %@", urlString, error);
-                                                            return;
-                                                        }
-                                                        dispatch_async(dispatch_get_main_queue(), ^{
-                                                            UILazyImage *loaded = [DCTools scaledImageFromImage:retrievedImage withURL:urlString];
-                                                            loaded.naturalSize = CGSizeMake(width, height);
-                                                            [newMessage.attachments replaceObjectAtIndex:idx withObject:loaded];
-                                                            [NSNotificationCenter.defaultCenter
-                                                                postNotificationName:@"RELOAD MESSAGE DATA"
-                                                                              object:newMessage];
-                                                        });
-                                                    }
-                                                }];
-                        }
+                        UILazyImage *lazyImage = [UILazyImage new];
+                        lazyImage.imageURL = urlString;
+                        lazyImage.naturalSize = CGSizeMake(width, height);
+                        [newMessage.attachments addObject:lazyImage];
                     }
                 } else if ([embedType isEqualToString:@"video"] ||
                            [embedType isEqualToString:@"gifv"]) {
@@ -834,7 +1095,6 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
                     if (!isYouTube) {
                         newMessage.content = [newMessage.content stringByReplacingOccurrencesOfString:originalEmbedURL withString:@""];
                     }
-                    // NSLog(@"[Video Embed] full embed: %@", embed);
                     if ([embed valueForKeyPath:@"video.proxy_url"] != nil &&
                         [[embed valueForKeyPath:@"video.proxy_url"]
                             isKindOfClass:[NSString class]]) {
@@ -845,14 +1105,13 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
                     } else {
                         attachmentURL = [NSURL URLWithString:originalEmbedURL];
                     }
-
-                    //[newMessage.attachments
-                    // addObject:[[MPMoviePlayerViewController alloc]
-                    // initWithContentURL:attachmentURL]];
-                    DCChatVideoAttachment *video = [[[NSBundle mainBundle]
-                        loadNibNamed:@"DCChatVideoAttachment"
-                               owner:self
-                             options:nil] objectAtIndex:0];
+                    CFAbsoluteTime videoViewStart = CFAbsoluteTimeGetCurrent();
+                    DCChatVideoAttachment *video = [[DCChatVideoAttachment alloc]
+                        initMetadataOnly];
+                    NSTimeInterval videoViewTime = CFAbsoluteTimeGetCurrent() - videoViewStart;
+                    if (videoViewTime >= 0.008) {
+                        NSLog(@"[MediaPerf] video view build %.1fms", videoViewTime * 1000.0);
+                    }
 
                     video.videoURL = attachmentURL;
                     // YouTube videos and shorts
@@ -891,6 +1150,14 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
                         [[embed valueForKeyPath:@"video.width"] integerValue];
                     NSInteger height =
                         [[embed valueForKeyPath:@"video.height"] integerValue];
+                    if (width <= 0 || height <= 0) {
+                        width = [[embed valueForKeyPath:@"thumbnail.width"] integerValue];
+                        height = [[embed valueForKeyPath:@"thumbnail.height"] integerValue];
+                    }
+                    if (width <= 0 || height <= 0) {
+                        width = 16;
+                        height = 9;
+                    }
                     CGFloat aspectRatio = (CGFloat)width / (CGFloat)height;
 
                     if (height > 1024) {
@@ -909,85 +1176,21 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
                         }
                     }
 
-                    // Discord CDN format=png
-                    // Only append format=png for Discord CDN URLs — third party URLs don't support it
-                    // and appending it causes SSL errors or invalid responses on iOS 5/6.
-                    NSURL *urlString = [NSURL URLWithString:baseURL];
-                    BOOL isDiscord = [baseURL hasPrefix:@"https://media.discordapp.net/"] ||
-                                     [baseURL hasPrefix:@"https://images-ext-1.discordapp.net/"] ||
-                                     [baseURL hasPrefix:@"https://images-ext-2.discordapp.net/"];
+                    video.naturalSize = CGSizeMake(width, height);
 
-                    if (isDiscord) {
-                        if (width != 0 || height != 0) {
-                            urlString = [NSURL URLWithString:[NSString stringWithFormat:
-                                @"%@%cformat=png&width=%ld&height=%ld",
-                                urlString,
-                                [urlString query].length == 0 ? '?' : '&',
-                                (long)width, (long)height]];
-                        } else {
-                            urlString = [NSURL URLWithString:[NSString stringWithFormat:
-                                @"%@%cformat=png",
-                                urlString,
-                                [urlString query].length == 0 ? '?' : '&']];
-                        }
-                    }
-                    // non-Discord URLs used as-is, no format parameter appended
+                    // Keep the source thumbnail URL in the model; the media manager owns request rewriting.
+                    NSURL *urlString = [baseURL isKindOfClass:[NSString class]]
+                        ? [NSURL URLWithString:baseURL]
+                        : nil;
 
-                    // Placeholder/Thumbhash
-                    // Show a blurry thumbhash placeholder immediately while the real thumbnail downloads.
-                    // Check both thumbnail and video fields since third party embeds store it under video.
-                    NSUInteger idx = [newMessage.attachments count];
-                    if ([[embed valueForKeyPath:@"thumbnail.placeholder_version"] integerValue] == 1) {
-                        UIImage *img = thumbHashToImage([NSData dataWithBase64EncodedString:[embed valueForKeyPath:@"thumbnail.placeholder"]]);
-                        video.thumbnail.image = [DCTools scaledImageFromImage:img withURL:urlString].image;
-                        [newMessage.attachments addObject:video];
-                    } else if ([[embed valueForKeyPath:@"video.placeholder_version"] integerValue] == 1) {
-                        UIImage *img = thumbHashToImage([NSData dataWithBase64EncodedString:[embed valueForKeyPath:@"video.placeholder"]]);
-                        video.thumbnail.image = [DCTools scaledImageFromImage:img withURL:urlString].image;
-                        [newMessage.attachments addObject:video];
-                    } else {
-                        [newMessage.attachments addObject:@[ @(width), @(height) ]];
-                    }
+                    // Publish lightweight video metadata immediately so layout has stable geometry.
+                    video.thumbnailURL = urlString;
+                    [newMessage.attachments addObject:video];
 
-                    if (!DCServerCommunicator.sharedInstance.dataSaver) {
-                        SDWebImageManager *manager = [SDWebImageManager sharedManager];
-                        [manager downloadImageWithURL:urlString
-                                              options:SDWebImageCacheMemoryOnly | SDWebImageRetryFailed
-                                             progress:nil
-                                            completed:^(UIImage *retrievedImage, NSError *error, SDImageCacheType cacheType, BOOL finished, NSURL *imageURL) {
-                                                @autoreleasepool {
-                                                    if (!retrievedImage || !finished) {
-                                                        NSLog(@"Failed to load video thumbnail with URL %@: %@", urlString, error);
-                                                        dispatch_async(dispatch_get_main_queue(), ^{
-                                                            video.videoWarning.hidden = NO;
-                                                            video.videoWarning.text = @"Unsupported Embed";
-                                                            [newMessage.attachments replaceObjectAtIndex:idx withObject:video];
-                                                            [NSNotificationCenter.defaultCenter
-                                                                postNotificationName:@"RELOAD MESSAGE DATA"
-                                                                              object:newMessage];
-                                                        });
-                                                        return;
-                                                    }
-                                                    dispatch_async(
-                                                        dispatch_get_main_queue(),
-                                                        ^{
-                                                            UIImage *firstFrame = (retrievedImage.images.count > 0) ? retrievedImage.images[0] : retrievedImage;
-                                                            UIImage *scaled = [DCTools scaledImageFromImage:firstFrame withURL:nil].image;
-                                                            video.thumbnail.image = roundedCornerImage(scaled, 6);
-                                                            [newMessage.attachments replaceObjectAtIndex:idx withObject:video];
-                                                            [NSNotificationCenter.defaultCenter
-                                                                postNotificationName:@"RELOAD MESSAGE DATA"
-                                                                              object:newMessage];
-                                                        }
-                                                    );
-                                                }
-                                            }];
-                    }
-
+                    // Decode video thumbnails only while the attachment is visible.
                     video.userInteractionEnabled = YES;
                     newMessage.attachmentCount++;
                 } else {
-                    // NSLog(@"unknown embed type %@", embedType);
                     continue;
                 }
             }
@@ -1007,12 +1210,18 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
                 if ([fileType rangeOfString:@"image/"].location != NSNotFound) {
                     newMessage.attachmentCount++;
 
-                    NSString *attachmentURL;
-                    if ([attachment objectForKey:@"proxy_url"]) {
-                        attachmentURL = [attachment objectForKey:@"proxy_url"];
+                    NSString *attachmentURL = nil;
+                    id proxyURLValue = [attachment objectForKey:@"proxy_url"];
+                    if ([proxyURLValue isKindOfClass:[NSString class]] &&
+                        [(NSString *)proxyURLValue length] > 0) {
+                        attachmentURL = proxyURLValue;
                     } else {
-                        attachmentURL = [attachment objectForKey:@"url"];
+                        id originalURLValue = [attachment objectForKey:@"url"];
+                        if ([originalURLValue isKindOfClass:[NSString class]]) {
+                            attachmentURL = originalURLValue;
+                        }
                     }
+                    if (attachmentURL.length == 0) continue;
                     NSURL *attachmentNSURL = [NSURL URLWithString:attachmentURL];
                     NSString *pathExtension = [attachmentNSURL.path.lowercaseString pathExtension];
                     BOOL isGif = [fileType isEqualToString:@"image/gif"] || 
@@ -1051,7 +1260,6 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
                         urlString = [NSURL URLWithString:[NSString
                             stringWithFormat:@"%@%cformat=png", trimmedURL,
                             [trimmedURL rangeOfString:@"?"].location == NSNotFound ? '?' : '&']];
-                        // NSLog(@"[Embed Image] urlString: %@", urlString);
                     } else {
                         NSString *trimmedURL = [attachmentURL stringByTrimmingCharactersInSet:
                             [NSCharacterSet characterSetWithCharactersInString:@"&?"]];
@@ -1059,79 +1267,20 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
                             stringWithFormat:@"%@%cformat=png&width=%ld&height=%ld", trimmedURL,
                             [trimmedURL rangeOfString:@"?"].location == NSNotFound ? '?' : '&',
                             (long)width, (long)height]];
-                        // NSLog(@"[Embed Image] urlString: %@", urlString);
                     }
 
-                    NSUInteger idx = [newMessage.attachments count];
-
+                    // Direct uploads follow the same metadata-only lifecycle as image embeds.
                     if (isGif) {
                         DCGifInfo *gif = [DCGifInfo new];
-                        gif.gifURL = urlString;
-                        if ([[attachment objectForKey:@"placeholder_version"] integerValue] == 1) {
-                            UIImage *img = thumbHashToImage([NSData dataWithBase64EncodedString:[attachment objectForKey:@"placeholder"]]);
-                            UIImage *scaled = [DCTools scaledImageFromImage:img withURL:urlString].image;
-                            gif.staticThumbnail    = scaled;
-                        }
+                        gif.gifURL = [NSURL URLWithString:attachmentURL];
+                        gif.thumbnailURL = urlString;
+                        gif.naturalSize = CGSizeMake(width, height);
                         [newMessage.attachments addObject:gif];
-
-                        if (!DCServerCommunicator.sharedInstance.dataSaver) {
-                            SDWebImageManager *manager = [SDWebImageManager sharedManager];
-                            [manager downloadImageWithURL:urlString
-                                                  options:SDWebImageCacheMemoryOnly | SDWebImageRetryFailed
-                                                 progress:nil
-                                                completed:^(UIImage *retrievedImage, NSError *error, SDImageCacheType cacheType, BOOL finished, NSURL *imageURL) {
-                                                    @autoreleasepool {
-                                                        if (!retrievedImage || !finished) {
-                                                            NSLog(@"Failed to load gif with URL %@: %@", urlString, error);
-                                                            return;
-                                                        }
-                                                        // Take only the first frame for the static thumbnail
-                                                        UIImage *firstFrame = (retrievedImage.images.count > 0)
-                                                            ? retrievedImage.images[0]
-                                                            : retrievedImage;
-                                                        UIImage *scaled = [DCTools scaledImageFromImage:firstFrame withURL:nil].image;
-                                                        dispatch_async(dispatch_get_main_queue(), ^{
-                                                            gif.staticThumbnail    = scaled;
-                                                            [newMessage.attachments replaceObjectAtIndex:idx withObject:gif];
-                                                            [NSNotificationCenter.defaultCenter
-                                                                postNotificationName:@"RELOAD MESSAGE DATA"
-                                                                              object:newMessage];
-                                                        });
-                                                    }
-                                                }];
-                        }
                     } else {
-                        if ([[attachment objectForKey:@"placeholder_version"] integerValue] == 1) {
-                            UIImage *img = thumbHashToImage([NSData dataWithBase64EncodedString:[attachment objectForKey:@"placeholder"]]);
-                            UILazyImage *placeholder = [DCTools scaledImageFromImage:img withURL:urlString];
-                            placeholder.naturalSize = CGSizeMake(width, height);
-                            [newMessage.attachments addObject:placeholder];
-                        } else {
-                            [newMessage.attachments addObject:@[ @(width), @(height) ]];
-                        }
-
-                        if (!DCServerCommunicator.sharedInstance.dataSaver) {
-                            SDWebImageManager *manager = [SDWebImageManager sharedManager];
-                            [manager downloadImageWithURL:urlString
-                                                  options:SDWebImageCacheMemoryOnly | SDWebImageRetryFailed
-                                                 progress:nil
-                                                completed:^(UIImage *retrievedImage, NSError *error, SDImageCacheType cacheType, BOOL finished, NSURL *imageURL) {
-                                                    @autoreleasepool {
-                                                        if (!retrievedImage || !finished) {
-                                                            NSLog(@"Failed to load image with URL %@: %@", urlString, error);
-                                                            return;
-                                                        }
-                                                        dispatch_async(dispatch_get_main_queue(), ^{
-                                                            UILazyImage *loaded = [DCTools scaledImageFromImage:retrievedImage withURL:urlString];
-                                                            loaded.naturalSize = CGSizeMake(width, height);
-                                                            [newMessage.attachments replaceObjectAtIndex:idx withObject:loaded];
-                                                            [NSNotificationCenter.defaultCenter
-                                                                postNotificationName:@"RELOAD MESSAGE DATA"
-                                                                              object:newMessage];
-                                                        });
-                                                    }
-                                                }];
-                        }
+                        UILazyImage *lazyImage = [UILazyImage new];
+                        lazyImage.imageURL = urlString;
+                        lazyImage.naturalSize = CGSizeMake(width, height);
+                        [newMessage.attachments addObject:lazyImage];
                     }
 
                 // Video Attachments
@@ -1147,115 +1296,60 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
 
                     NSURL *attachmentURL =
                         [NSURL URLWithString:[attachment objectForKey:@"url"]];
-                    dispatch_async(dispatch_get_main_queue(), ^{
-                        //[newMessage.attachments
-                        // addObject:[[MPMoviePlayerViewController alloc]
-                        // initWithContentURL:attachmentURL]];
-                        DCChatVideoAttachment *video = [[NSBundle mainBundle]
-                                                           loadNibNamed:@"DCChatVideoAttachment"
-                                                                  owner:self
-                                                                options:nil]
-                                                           .firstObject;
 
-                        video.videoURL = attachmentURL;
+                    // Publish video metadata synchronously so layout cannot observe an empty attachment model.
+                    CFAbsoluteTime videoViewStart = CFAbsoluteTimeGetCurrent();
+                    DCChatVideoAttachment *video = [[DCChatVideoAttachment alloc]
+                        initMetadataOnly];
+                    NSTimeInterval videoViewTime = CFAbsoluteTimeGetCurrent() - videoViewStart;
+                    if (videoViewTime >= 0.008) {
+                        NSLog(@"[MediaPerf] video metadata build %.1fms", videoViewTime * 1000.0);
+                    }
 
-                        NSString *baseURL = [attachment objectForKey:@"proxy_url"];
+                    video.videoURL = attachmentURL;
 
-                        NSInteger width =
-                            [[attachment objectForKey:@"width"] integerValue];
-                        NSInteger height =
-                            [[attachment objectForKey:@"height"] integerValue];
-                        CGFloat aspectRatio = (CGFloat)width / (CGFloat)height;
+                    NSString *baseURL = [attachment objectForKey:@"proxy_url"];
+                    if (![baseURL isKindOfClass:[NSString class]] || baseURL.length == 0) {
+                        baseURL = [attachment objectForKey:@"url"];
+                    }
+                    NSInteger width = [[attachment objectForKey:@"width"] integerValue];
+                    NSInteger height = [[attachment objectForKey:@"height"] integerValue];
+                    if (width <= 0 || height <= 0) {
+                        width = 16;
+                        height = 9;
+                    }
+                    CGFloat aspectRatio = (CGFloat)width / (CGFloat)height;
 
+                    if (height > 1024) {
+                        height = 1024;
+                        width = height * aspectRatio;
+                        if (width > 1024) {
+                            width = 1024;
+                            height = width / aspectRatio;
+                        }
+                    } else if (width > 1024) {
+                        width = 1024;
+                        height = width / aspectRatio;
                         if (height > 1024) {
                             height = 1024;
-                            width  = height * aspectRatio;
-                            if (width > 1024) {
-                                width  = 1024;
-                                height = width / aspectRatio;
-                            }
-                        } else if (width > 1024) {
-                            width  = 1024;
-                            height = width / aspectRatio;
-                            if (height > 1024) {
-                                height = 1024;
-                                width  = height * aspectRatio;
-                            }
+                            width = height * aspectRatio;
                         }
+                    }
 
+                    video.naturalSize = CGSizeMake(width, height);
 
-                        NSURL *urlString = [NSURL
-                            URLWithString:[NSString
-                                              stringWithFormat:@"%@format=png&width=%ld&height=%ld",
-                                                               baseURL, (long)width, (long)height]];
-                        if ([urlString query].length == 0) {
-                            urlString = [NSURL URLWithString:[NSString stringWithFormat:
-                                                                           @"%@?format=png&width=%ld&height=%ld",
-                                                                           baseURL, (long)width, (long)height]];
-                        }
+                    /* The media manager appends safe format/size parameters at
+                     * display time.  Keeping this URL clean also fixes the old
+                     * missing-? construction for direct video proxy thumbnails. */
+                    video.thumbnailURL = [baseURL isKindOfClass:[NSString class]]
+                        ? [NSURL URLWithString:baseURL]
+                        : nil;
 
-                        NSUInteger idx = [newMessage.attachments count];
-                        if ([[attachment objectForKey:@"placeholder_version"] integerValue] == 1) {
-                            NSString *placeholder = [attachment objectForKey:@"placeholder"];
-                            NSData *thumbData = placeholder.length > 0
-                                ? [NSData dataWithBase64EncodedString:placeholder]
-                                : nil;
+                    [newMessage.attachments addObject:video];
 
-                            // Thumbhash minimum is 5 bytes; reject anything shorter
-                            if (thumbData.length >= 5) {
-                                dispatch_async(dispatch_get_main_queue(), ^{
-                                    UIImage *img = thumbHashToImage(thumbData);
-                                    video.thumbnail.image = img
-                                        ? [DCTools scaledImageFromImage:img withURL:urlString].image
-                                        : nil;
-                                });
-                            }
-                            [newMessage.attachments addObject:video];
-                        } else {
-                            [newMessage.attachments addObject:@[ @(width), @(height) ]];
-                        }
-
-                        if (!DCServerCommunicator.sharedInstance.dataSaver) {
-                            SDWebImageManager *manager = [SDWebImageManager sharedManager];
-                            [manager downloadImageWithURL:urlString
-                                                  options:SDWebImageCacheMemoryOnly | SDWebImageRetryFailed
-                                                 progress:nil
-                                                completed:^(UIImage *retrievedImage, NSError *error, SDImageCacheType cacheType, BOOL finished, NSURL *imageURL) {
-                                                    @autoreleasepool {
-                                                        if (!retrievedImage || !finished
-                                                            || !video || !video.thumbnail
-                                                            || ![video.thumbnail isKindOfClass:[UIImageView class]]) {
-                                                            NSLog(@"Failed to load video thumbnail with URL %@: %@", imageURL, error);
-                                                            dispatch_async(dispatch_get_main_queue(), ^{
-                                                                video.videoWarning.hidden = NO;
-                                                                video.videoWarning.text = @"Unsupported Attachment";
-                                                                [newMessage.attachments replaceObjectAtIndex:idx withObject:video];
-                                                                [NSNotificationCenter.defaultCenter
-                                                                    postNotificationName:@"RELOAD MESSAGE DATA"
-                                                                                  object:newMessage];
-                                                            });
-                                                            return;
-                                                        }
-                                                        dispatch_async(
-                                                            dispatch_get_main_queue(),
-                                                            ^{
-                                                                video.thumbnail.image =
-                                                                    [DCTools scaledImageFromImage:retrievedImage
-                                                                                          withURL:nil]
-                                                                        .image;
-                                                                [newMessage.attachments replaceObjectAtIndex:idx withObject:video];
-                                                                [NSNotificationCenter.defaultCenter
-                                                                    postNotificationName:@"RELOAD MESSAGE DATA"
-                                                                                  object:newMessage];
-                                                            }
-                                                        );
-                                                    }
-                                                }];
-                        }
-                        video.userInteractionEnabled = YES;
-                    });
+                    // Thumbnail pixels are resident only while the attachment is visible.
+                    video.userInteractionEnabled = YES;
                 } else {
-                    // NSLog(@"unknown attachment type %@", fileType);
                     newMessage.content =
                         [NSString stringWithFormat:@"%@\n%@", newMessage.content,
                                                    [attachment objectForKey:@"url"]];
@@ -1297,54 +1391,15 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
                 newMessage.isSticker = YES;
                 newMessage.attachmentCount++;
 
-                // Insert a square placeholder so heightForRowAtIndexPath can
-                // return the correct row height before the image arrives.
-                NSUInteger idx = newMessage.attachments.count;
-                [newMessage.attachments addObject:@[@(160), @(160)]];
-
-                SDWebImageManager *manager = [SDWebImageManager sharedManager];
-                [manager downloadImageWithURL:stickerURL
-                                      options:SDWebImageCacheMemoryOnly | SDWebImageRetryFailed
-                                     progress:nil
-                                    completed:^(UIImage *retrievedImage, NSError *error, SDImageCacheType cacheType, BOOL finished, NSURL *imageURL) {
-                                        @autoreleasepool {
-                                            if (!retrievedImage || !finished) {
-                                                NSLog(@"Failed to load sticker %@ with URL %@: %@",
-                                                      stickerId, stickerURL, error);
-                                                // Zero out the placeholder so the height calc skips it,
-                                                // then fall back to a text representation.
-                                                NSString *fallback = [NSString stringWithFormat:@"[sticker: %@]",
-                                                    ([stickerName isKindOfClass:[NSString class]] ? stickerName : @"unknown")];
-                                                dispatch_async(dispatch_get_main_queue(), ^{
-                                                    [newMessage.attachments replaceObjectAtIndex:idx withObject:@[@0, @0]];
-                                                    newMessage.attachmentCount--;
-                                                    newMessage.content = newMessage.content.length > 0
-                                                        ? [newMessage.content stringByAppendingFormat:@" %@", fallback]
-                                                        : fallback;
-                                                    [NSNotificationCenter.defaultCenter
-                                                        postNotificationName:@"RELOAD MESSAGE DATA"
-                                                                      object:newMessage];
-                                                });
-                                                return;
-                                            }
-
-                                            // Wrap in UILazyImage so the existing attachment
-                                            // rendering pipeline in DCChatViewController can
-                                            // display it. DCChatStickerCell also reads this.
-                                            UILazyImage *lazyImage = [UILazyImage new];
-                                            lazyImage.image        = retrievedImage;
-                                            lazyImage.imageURL     = stickerURL;
-                                            lazyImage.naturalSize  = CGSizeMake(160, 160);
-                                            dispatch_async(dispatch_get_main_queue(), ^{
-                                                [newMessage.attachments replaceObjectAtIndex:idx withObject:lazyImage];
-                                                [NSNotificationCenter.defaultCenter
-                                                    postNotificationName:@"RELOAD MESSAGE DATA"
-                                                                  object:newMessage];
-                                            });
-                                        }
-                                    }];
+                // Stickers use the lazy thumbnail path while retaining fixed layout geometry.
+                UILazyImage *lazyImage = [UILazyImage new];
+                lazyImage.imageURL = stickerURL;
+                lazyImage.naturalSize = CGSizeMake(160, 160);
+                [newMessage.attachments addObject:lazyImage];
             }
         }
+
+        perfMediaEnd = CFAbsoluteTimeGetCurrent();
 
         // Parse in-text mentions into readable @<username>
         NSArray *mentions     = [jsonMessage objectForKey:@"mentions"];
@@ -1373,7 +1428,10 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
             }
         }
 
+        perfMentionsEnd = CFAbsoluteTimeGetCurrent();
+
         NSString *content = [newMessage.content emojizedString];
+        perfEmojizeEnd = CFAbsoluteTimeGetCurrent();
 
         content = [content stringByReplacingOccurrencesOfString:@"\u2122\uFE0F"
                                                      withString:@"™"];
@@ -1391,12 +1449,13 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
                  sizeWithFont:[UIFont boldSystemFontOfSize:15]
             constrainedToSize:CGSizeMake(contentWidth, MAXFLOAT)
                 lineBreakMode:(NSLineBreakMode)UILineBreakModeWordWrap];
-        CGSize contentSize = [newMessage.content
-                 sizeWithFont:[UIFont systemFontOfSize:14]
-            constrainedToSize:CGSizeMake(contentWidth, MAXFLOAT)
-                lineBreakMode:(NSLineBreakMode)UILineBreakModeWordWrap];
-        contentSize.height = ceil(contentSize.height);
-
+        /*
+         * Build the attributed string first, but do not lay it out yet.  The old
+         * path measured plain UIKit text, laid the DTCoreText string out once,
+         * optionally appended the edited marker, then laid it out a second time.
+         * The first two measurements can never affect the final value.
+         */
+        CGSize contentSize = CGSizeMake(contentWidth, 0.0f);
         newMessage.attributedContent = nil;
         if ([newMessage.content length] > 0) {
             NSAttributedString *attributedText = [[DCMarkdownParser sharedParser]
@@ -1404,15 +1463,6 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
             if (attributedText) {
                 newMessage.attributedContent = attributedText;
                 newMessage.content = attributedText.string;
-                // Recalculate height using DTCoreText layout engine for accuracy
-                if (newMessage.attributedContent) {
-                    DTCoreTextLayouter *layouter = [[DTCoreTextLayouter alloc] 
-                        initWithAttributedString:newMessage.attributedContent];
-                    CGRect layoutRect = CGRectMake(0, 0, contentWidth, CGFLOAT_HEIGHT_UNKNOWN);
-                    DTCoreTextLayoutFrame *layoutFrame = [layouter layoutFrameWithRect:layoutRect 
-                                                                                 range:NSMakeRange(0, 0)];
-                    contentSize.height = ceil(CGRectGetHeight(layoutFrame.frame));
-                }
             }
         }
 
@@ -1446,20 +1496,43 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
             newMessage.attributedContent = mutable;
         }
 
-        // Recalculate cell height after all content modifications
-        if (newMessage.attributedContent) {
-            DTCoreTextLayouter *layouter = [[DTCoreTextLayouter alloc] 
-                initWithAttributedString:newMessage.attributedContent];
-            CGRect layoutRect = CGRectMake(0, 0, contentWidth, CGFLOAT_HEIGHT_UNKNOWN);
-            DTCoreTextLayoutFrame *layoutFrame = [layouter layoutFrameWithRect:layoutRect 
-                                                                         range:NSMakeRange(0, 0)];
-            contentSize.height = ceil(CGRectGetHeight(layoutFrame.frame));
+        /*
+         * Resolve newer supplementary emoji before any DTCoreText measurement.
+         * This is intentionally render-only: newMessage.content/rawContent stay
+         * unchanged even when an unsupported cluster needs a placeholder.
+         */
+        DCApplyLegacyUnicodeCompatibility(newMessage);
+
+        perfMarkdownEnd = CFAbsoluteTimeGetCurrent();
+
+        // REST/history callers may defer measurement so layout runs once at the actual table width.
+        if (deferLegacyLayout) {
+            measurementMode = @"deferred";
+            newMessage.textHeight = 0.0f;
+        } else {
+            if (newMessage.attributedContent) {
+                measurementMode = @"dtcoretext";
+                DTCoreTextLayouter *layouter = [[DTCoreTextLayouter alloc]
+                    initWithAttributedString:newMessage.attributedContent];
+                CGRect layoutRect = CGRectMake(0, 0, contentWidth, CGFLOAT_HEIGHT_UNKNOWN);
+                DTCoreTextLayoutFrame *layoutFrame = [layouter layoutFrameWithRect:layoutRect
+                                                                             range:NSMakeRange(0, 0)];
+                contentSize.height = ceil(CGRectGetHeight(layoutFrame.frame));
+            } else if ([newMessage.content length] > 0) {
+                measurementMode = @"uikit-fallback";
+                CGSize measured = [newMessage.content
+                     sizeWithFont:[UIFont systemFontOfSize:14]
+                constrainedToSize:CGSizeMake(contentWidth, MAXFLOAT)
+                    lineBreakMode:(NSLineBreakMode)UILineBreakModeWordWrap];
+                contentSize.height = ceil(measured.height);
+            }
+            newMessage.textHeight = ceil(contentSize.height) + 2;
         }
-        newMessage.textHeight = ceil(contentSize.height) + 2;
+        perfLayoutEnd = CFAbsoluteTimeGetCurrent();
 
 
 
-        // types of messages we display specially
+        // Message types with specialized presentation.
         BOOL cond = (
             newMessage.messageType == 6 
             || (newMessage.messageType != 18 
@@ -1474,14 +1547,64 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
         BOOL hasVisibleContent = [[newMessage.content stringByTrimmingCharactersInSet:invisibleChars] length] > 0
             || newMessage.emojis.count > 0;
         CGFloat minHeight = (cond ? authorNameSize.height : 0) + (hasVisibleContent ? [UIFont systemFontOfSize:14].lineHeight : 0) + 10;
-        newMessage.contentHeight = MAX(
-            (cond ? authorNameSize.height : 0)
-                + (newMessage.attachmentCount ? (hasVisibleContent ? contentSize.height : 0) : MAX(contentSize.height, 18))
-                + 10
-                + (newMessage.referencedMessage != nil ? 16 : 0),
-            minHeight
-        );
+        if (deferLegacyLayout) {
+            // DCMessageLayoutBuilder owns the real per-width geometry for this path.
+            newMessage.contentHeight = 0;
+        } else {
+            newMessage.contentHeight = MAX(
+                (cond ? authorNameSize.height : 0)
+                    + (newMessage.attachmentCount ? (hasVisibleContent ? contentSize.height : 0) : MAX(contentSize.height, 18))
+                    + 10
+                    + (newMessage.referencedMessage != nil ? 16 : 0),
+                minHeight
+            );
+        }
         newMessage.authorNameWidth = 60 + authorNameSize.width;
+        perfTailEnd = CFAbsoluteTimeGetCurrent();
+    }
+
+    CFAbsoluteTime perfTotal = perfTailEnd - perfStart;
+    NSTimeInterval perfMedia = perfMediaEnd - perfDatesEnd;
+    if (perfTotal >= 0.075 || perfMedia >= 0.010 || (deferLegacyLayout && perfTotal >= 0.015)) {
+        NSString *perfID = [newMessage.snowflake isKindOfClass:[NSString class]]
+            ? newMessage.snowflake : @"?";
+        NSString *rawPerfContent = [newMessage.rawContent isKindOfClass:[NSString class]]
+            ? newMessage.rawContent : @"";
+        NSUInteger nonASCII = 0;
+        NSUInteger newlines = 0;
+        BOOL hasZWJ = NO;
+        BOOL hasVariationSelector = NO;
+        for (NSUInteger i = 0; i < rawPerfContent.length; i++) {
+            unichar ch = [rawPerfContent characterAtIndex:i];
+            if (ch > 0x7F) nonASCII++;
+            if (ch == '\n') newlines++;
+            if (ch == 0x200D) hasZWJ = YES;
+            if (ch == 0xFE0F) hasVariationSelector = YES;
+        }
+        BOOL hasCustomEmojiSyntax =
+            [rawPerfContent rangeOfString:@"<:"].location != NSNotFound ||
+            [rawPerfContent rangeOfString:@"<a:"].location != NSNotFound;
+        BOOL hasMentionSyntax = [rawPerfContent rangeOfString:@"<@"].location != NSNotFound;
+
+        NSLog(@"[MessagePerf] convert %@ total %.1fms identity %.1f dates %.1f media %.1f mentions %.1f emojize %.1f markdown %.1f layout %.1f tail %.1f measure %@ shape len %lu nonascii %lu nl %lu customEmoji %d mention %d zwj %d vs16 %d",
+              perfID,
+              perfTotal * 1000.0,
+              (perfIdentityEnd - perfStart) * 1000.0,
+              (perfDatesEnd - perfIdentityEnd) * 1000.0,
+              (perfMediaEnd - perfDatesEnd) * 1000.0,
+              (perfMentionsEnd - perfMediaEnd) * 1000.0,
+              (perfEmojizeEnd - perfMentionsEnd) * 1000.0,
+              (perfMarkdownEnd - perfEmojizeEnd) * 1000.0,
+              (perfLayoutEnd - perfMarkdownEnd) * 1000.0,
+              (perfTailEnd - perfLayoutEnd) * 1000.0,
+              measurementMode,
+              (unsigned long)rawPerfContent.length,
+              (unsigned long)nonASCII,
+              (unsigned long)newlines,
+              hasCustomEmojiSyntax,
+              hasMentionSyntax,
+              hasZWJ,
+              hasVariationSelector);
     }
 
     return newMessage;
@@ -1586,22 +1709,30 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
                                         NSLog(@"Failed to load guild icon with URL %@: %@", iconURL, error);
                                         return;
                                     }
-                                    newGuild.icon   = icon;
-                                    CGSize itemSize = CGSizeMake(40, 40);
-                                    dispatch_async(dispatch_get_main_queue(), ^{
+                                    dispatch_async(dispatch_get_global_queue(
+                                        DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+                                        CGSize itemSize = CGSizeMake(40.0f, 40.0f);
                                         UIGraphicsBeginImageContextWithOptions(
                                             itemSize, NO, UIScreen.mainScreen.scale
                                         );
                                         CGRect imageRect = CGRectMake(
-                                            0.0, 0.0, itemSize.width,
+                                            0.0f, 0.0f, itemSize.width,
                                             itemSize.height
                                         );
-                                        [newGuild.icon drawInRect:imageRect];
-                                        newGuild.icon = UIGraphicsGetImageFromCurrentImageContext();
+                                        [icon drawInRect:imageRect];
+                                        UIImage *resized = UIGraphicsGetImageFromCurrentImageContext();
                                         UIGraphicsEndImageContext();
-                                        [NSNotificationCenter.defaultCenter
-                                            postNotificationName:@"RELOAD GUILD"
-                                                          object:newGuild];
+                                        UIImage *source = resized ?: icon;
+                                        [DCContentManager processedGuildIcon:source];
+
+                                        dispatch_async(dispatch_get_main_queue(), ^{
+                                            // The source-associated composite is already warm,
+                                            // so the DCGuild setter performs no bitmap work here.
+                                            newGuild.icon = source;
+                                            [NSNotificationCenter.defaultCenter
+                                                postNotificationName:@"RELOAD GUILD"
+                                                              object:newGuild];
+                                        });
                                     });
                                 }
                             }];
@@ -1663,7 +1794,7 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
         }
 
         // Make sure jsonChannel is a text channel or a category
-        // we dont want to include voice channels in the text channel list
+        // Exclude voice channels from the text-channel list.
         if ([[jsonChannel objectForKey:@"type"] isEqual:@(DCChannelTypeGuildText)] ||         // text channel
             [[jsonChannel objectForKey:@"type"] isEqual:@(DCChannelTypeGuildAnnouncement)] || // announcements
             [[jsonChannel objectForKey:@"type"] isEqual:@(DCChannelTypeGuildCategory)]) {     // category
@@ -1776,11 +1907,6 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
         }
 
 #warning TODO: voice channels at the bottom
-        // if (channel1.type < channel2.type) {
-        //     return NSOrderedAscending;
-        // } else if (channel1.type > channel2.type) {
-        //     return NSOrderedDescending;
-        // } else
         if (channel1.position < channel2.position) {
             return NSOrderedAscending;
         } else if (channel1.position > channel2.position) {
@@ -1964,58 +2090,7 @@ static UIImage *roundedCornerImage(UIImage *image, CGFloat radius) {
     return messageString;
 }
 
-//+ (void)joinGuild:(NSString *)inviteCode {
-//    // dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0),
-//    // ^{
-//    NSURL *guildURL = [NSURL
-//        URLWithString:[NSString stringWithFormat:
-//                                    @"https://discordapp.com/api/v9/invite/%@",
-//                                    inviteCode]];
-//
-//    NSMutableURLRequest *urlRequest = [NSMutableURLRequest
-//         requestWithURL:guildURL
-//            cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
-//        timeoutInterval:15];
-//    [urlRequest setValue:@"no-store" forHTTPHeaderField:@"Cache-Control"];
-//
-//    urlRequest.HTTPMethod = @"POST";
-//
-//    //[urlRequest setHTTPBody:[NSData dataWithBytes:[messageString UTF8String]
-//    // length:[messageString length]]];
-//    [urlRequest addValue:DCServerCommunicator.sharedInstance.token
-//        forHTTPHeaderField:@"Authorization"];
-//    [urlRequest addValue:@"application/json"
-//        forHTTPHeaderField:@"Content-Type"];
-//
-//    /*NSError *error = nil;
-//     NSHTTPURLResponse *responseCode = nil;
-//     int attempts = 0;
-//     while (attempts == 0 || (attempts <= 10 && error.code ==
-//     NSURLErrorTimedOut)) { attempts++; error = nil; [UIApplication
-//     sharedApplication].networkActivityIndicatorVisible++; [DCTools
-//     checkData:[NSURLConnection sendSynchronousRequest:urlRequest
-//     returningResponse:&responseCode error:&error] withError:error];
-//     [UIApplication sharedApplication].networkActivityIndicatorVisible--;*/
-//    dispatch_async(dispatch_get_main_queue(), ^{
-//        [UIApplication sharedApplication].networkActivityIndicatorVisible = YES;
-//    });
-//    [NSURLConnection
-//        sendAsynchronousRequest:urlRequest
-//                          queue:[NSOperationQueue currentQueue]
-//              completionHandler:^(
-//                  NSURLResponse *response, NSData *data, NSError *connError
-//              ) {
-//                  dispatch_sync(dispatch_get_main_queue(), ^{
-//                      [UIApplication sharedApplication]
-//                          .networkActivityIndicatorVisible = NO;
-//                  });
-//              }];
-//    //}
-//    //});
-//}
 
-
-// New joinGuild function that uses new header. Should be safer.
 + (void)joinGuild:(NSString *)inviteCode {
     NSMutableURLRequest *urlRequest = [DCServerCommunicator
                                        requestWithPath:[NSString stringWithFormat:@"/invite/%@", inviteCode]

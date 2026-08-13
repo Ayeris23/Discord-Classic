@@ -14,6 +14,8 @@
 #import "DCUser.h"
 #import "DCRole.h"
 #import "DCCacheManager.h"
+#import "DCResourceManager.h"
+#import "DCChatMediaManager.h"
 #import "DCGuild.h"
 #import "DCChannel.h"
 #import "DCContentManager.h"
@@ -308,15 +310,8 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
 
 - (BOOL)application:(UIApplication *)application
     didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
-    // [NSTimer scheduledTimerWithTimeInterval:2.0
-    //     target:[UIDevice currentDevice]
-    //     selector:@selector(currentMemoryUsage)
-    //     userInfo:nil
-    //     repeats:YES];
-
     // App version reporting
     NSString *version = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
-//    NSString *build = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleVersion"];
     [[NSUserDefaults standardUserDefaults] setObject:[NSString stringWithFormat:@"%@", version]
                                               forKey:@"version"];
     [[NSUserDefaults standardUserDefaults] synchronize];
@@ -324,10 +319,6 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(handleLogOut)
                                                  name:@"DCUserDidLogOut"
-                                               object:nil];
-    [[NSNotificationCenter defaultCenter] addObserver:self
-                                             selector:@selector(updateAppBadge)
-                                                 name:@"MENTION_COUNT_UPDATED"
                                                object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(updateAppBadge)
@@ -354,11 +345,6 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
         [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"hackyMode"];
     }
 
-    // if (NSFoundationVersionNumber > NSFoundationVersionNumber_iOS_6_1) {
-    //     UIStoryboard *storyboard = [UIStoryboard storyboardWithName:@"Storyboard-7" bundle:nil];
-    //     UIViewController *initialViewController = [storyboard instantiateInitialViewController];
-    //     self.window.rootViewController = initialViewController;
-    //     [self.window makeKeyAndVisible];
     if (self.experimental) {
         UIStoryboard *storyboard = [UIStoryboard storyboardWithName:@"Experimental" bundle:nil];
         UIViewController *initialViewController = [storyboard instantiateInitialViewController];
@@ -374,13 +360,19 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
                  forBarMetrics:UIBarMetricsDefault];
     }
 
+    // Resource budgets scale with physical memory.
+    DCResourceManager *resourceManager = [DCResourceManager sharedManager];
     NSURLCache *urlCache = [[NSURLCache alloc]
-        initWithMemoryCapacity:1024 * 1024 * 8  // 8MB mem cache
-                  diskCapacity:1024 * 1024 * 60 // 60MB disk cache
+        initWithMemoryCapacity:resourceManager.URLMemoryCacheBudget
+                  diskCapacity:1024 * 1024 * 60
                       diskPath:nil];
     [NSURLCache setSharedURLCache:urlCache];
-    [SDWebImageManager sharedManager].imageCache.maxMemoryCost = 1024 * 1024 * 20; // 20MB for decoded images
-    [SDWebImageManager sharedManager].imageCache.maxMemoryCountLimit = 50; // max 50 images in memory
+
+    SDImageCache *imageCache = [SDWebImageManager sharedManager].imageCache;
+    imageCache.shouldCacheImagesInMemory = YES;
+    imageCache.maxMemoryCost = resourceManager.imageMemoryCacheBudget;
+    imageCache.maxMemoryCountLimit = resourceManager.imageMemoryCacheCountLimit;
+    [resourceManager logResourceProfileWithReason:@"launch"];
 
     CFNotificationCenterPostNotification(
         CFNotificationCenterGetDarwinNotifyCenter(),
@@ -390,16 +382,13 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
     if (launchOptions[UIApplicationLaunchOptionsRemoteNotificationKey]) {
         NSDictionary *notification = launchOptions[UIApplicationLaunchOptionsRemoteNotificationKey];
         NSDictionary *aps          = notification[@"aps"];
-        NSString *channelId        = aps[@"channelId"]; // Adjusted to reflect your payload structure
-        // NSLog(@"Channel id: %@", channelId);
+        NSString *channelId        = aps[@"channelId"];
         if (channelId) {
             // A notification tap is an explicit navigation request and should
             // override whichever chat happened to be active before termination.
             [[DCCacheManager sharedInstance]
                 saveLastActiveChatChannelID:channelId];
 
-            // NSLog(@"App launched with notification, channelId: %@",
-            // channelId);
             dispatch_after(
                 dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)),
                 dispatch_get_main_queue(),
@@ -420,8 +409,7 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
         // Guild/channel records and message snapshots contain enough identity to
         // render immediately; the canonical user database hydrates just after
         // presentation and merges in place.
-        if (!DCServerCommunicator.sharedInstance.loadedUsers)
-            DCServerCommunicator.sharedInstance.loadedUsers = NSMutableDictionary.new;
+        [DCServerCommunicator.sharedInstance ensureLoadedUsersRegistry];
 
         CFAbsoluteTime guildCacheStart = CFAbsoluteTimeGetCurrent();
         NSArray *cachedGuilds = [cache loadCachedGuilds];
@@ -429,7 +417,7 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
                CFAbsoluteTimeGetCurrent() - guildCacheStart);
         if (cachedGuilds.count) {
             DCServerCommunicator.sharedInstance.guilds = [cachedGuilds mutableCopy];
-            // Phase 4.5 persists guild_positions/guild_folders in DCUserInfo.
+            // Persist guild ordering/folder settings with user info.
             // Rebuild displayGuilds from those IDs instead of unarchiving a second
             // complete guild/channel object graph from dc_layout_cache.archive.
             DCServerCommunicator.sharedInstance.cachedDisplayLayout = nil;
@@ -480,6 +468,22 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
                 }
                 BOOL isPrivateGuild = (guild.snowflake == nil &&
                     [guild.name isEqualToString:@"Direct Messages"]);
+
+                // UIImage objects are intentionally absent from the durable guild
+                // archive. Rebuild a cheap local source immediately so the first
+                // menu paint already has a finished 48pt composite. Hash-backed
+                // guilds show this default only until SDWebImage hydrates the real
+                // icon below.
+                if (isPrivateGuild) {
+                    guild.icon = [UIImage imageNamed:@"privateGuildLogo"];
+                } else if (guild.snowflake.length > 0) {
+                    unsigned long long value = [guild.snowflake longLongValue];
+                    NSUInteger selector = (NSUInteger)((value >> 22) % 6);
+                    NSArray *defaults = [DCUser defaultAvatars];
+                    if (selector < defaults.count)
+                        guild.icon = [defaults objectAtIndex:selector];
+                }
+
                 for (DCChannel *channel in guild.channels) {
                     channel.parentGuild = guild;
 
@@ -575,11 +579,29 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
                                     progress:nil
                                    completed:^(UIImage *image, NSError *error, SDImageCacheType cacheType, BOOL finished, NSURL *imageURL) {
                                        if (!image || !finished) return;
-                                       dispatch_async(dispatch_get_main_queue(), ^{
-                                           capturedGuild.icon = image;
-                                           [NSNotificationCenter.defaultCenter
-                                               postNotificationName:@"RELOAD GUILD"
-                                                             object:capturedGuild];
+                                       dispatch_async(dispatch_get_global_queue(
+                                           DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+                                           CGSize itemSize = CGSizeMake(40.0f, 40.0f);
+                                           UIGraphicsBeginImageContextWithOptions(
+                                               itemSize, NO, UIScreen.mainScreen.scale
+                                           );
+                                           [image drawInRect:CGRectMake(
+                                               0.0f, 0.0f, itemSize.width, itemSize.height
+                                           )];
+                                           UIImage *resized = UIGraphicsGetImageFromCurrentImageContext();
+                                           UIGraphicsEndImageContext();
+                                           UIImage *source = resized ?: image;
+
+                                           // Prewarm the source-associated composite here. The
+                                           // DCGuild setter on main will then hit this cache.
+                                           [DCContentManager processedGuildIcon:source];
+
+                                           dispatch_async(dispatch_get_main_queue(), ^{
+                                               capturedGuild.icon = source;
+                                               [NSNotificationCenter.defaultCenter
+                                                   postNotificationName:@"RELOAD GUILD"
+                                                                 object:capturedGuild];
+                                           });
                                        });
                                    }];
                 }
@@ -620,11 +642,9 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
 
 - (void)application:(UIApplication *)application
     didReceiveRemoteNotification:(NSDictionary *)userInfo {
-    // NSLog(@"RECEIVED REMOTE NOTIFICATION");
 
     NSDictionary *aps   = userInfo[@"aps"];
     NSString *channelId = aps[@"channelId"];
-    // NSLog(@"Received notification with Channel id: %@", channelId);
 
     if (channelId) {
         UIApplicationState state = [application applicationState];
@@ -639,7 +659,6 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
                                 userInfo:@{@"channelId" : channelId}];
             });
         } else {
-            // NSLog(@"FUCK YOU LJB I HATE YOU");
             // ok requis
         }
     }
@@ -694,13 +713,19 @@ didFailToRegisterForRemoteNotificationsWithError:(NSError *)error {
 
 - (void)applicationWillResignActive:(UIApplication *)application {
     [[NSUserDefaults standardUserDefaults] synchronize];
-    // NSLog(@"Will resign active");
 }
 
 
 - (void)applicationDidEnterBackground:(UIApplication *)application {
     [[NSUserDefaults standardUserDefaults] synchronize];
     self.shouldReload = DCServerCommunicator.sharedInstance.didAuthenticate;
+
+    // Drop decoded image residency on background while keeping compressed disk caches.
+    SDImageCache *imageCache = [SDWebImageManager sharedManager].imageCache;
+    imageCache.shouldCacheImagesInMemory = NO;
+    [imageCache clearMemory];
+    [[DCChatMediaManager sharedManager] enterBackground];
+    [[DCResourceManager sharedManager] logResourceProfileWithReason:@"entered background"];
     // Flush cold-start state and publish the Gateway sequence only after those
     // writes are durable. A short background task prevents iOS from suspending
     // the process halfway through the checkpoint. Message windows remain an
@@ -733,40 +758,32 @@ didFailToRegisterForRemoteNotificationsWithError:(NSError *)error {
 
 
 - (void)applicationWillEnterForeground:(UIApplication *)application {
-    // NSLog(@"Will enter foreground");
     [[NSUserDefaults standardUserDefaults] synchronize];
+
+    DCResourceManager *resourceManager = [DCResourceManager sharedManager];
+    SDImageCache *imageCache = [SDWebImageManager sharedManager].imageCache;
+    imageCache.maxMemoryCost = resourceManager.imageMemoryCacheBudget;
+    imageCache.maxMemoryCountLimit = resourceManager.imageMemoryCacheCountLimit;
+    imageCache.shouldCacheImagesInMemory = YES;
+    [[DCChatMediaManager sharedManager] enterForeground];
+    [resourceManager logResourceProfileWithReason:@"entering foreground"];
 }
 
 
 - (void)applicationDidBecomeActive:(UIApplication *)application {
-    // NSLog(@"Did become active");
     [[NSUserDefaults standardUserDefaults] synchronize];
-    // if (self.shouldReload) {
-    //     [DCServerCommunicator.sharedInstance sendResume];
-    // }
 }
 
 
 - (void)applicationWillTerminate:(UIApplication *)application {
     [[NSUserDefaults standardUserDefaults] synchronize];
-    // NSLog(@"Will terminate");
 }
 
 - (void)applicationDidReceiveMemoryWarning:(UIApplication *)application {
     NSLog(@"Memory warning received, clearing image cache!");
-    // for (DCUser *user in DCServerCommunicator.sharedInstance.loadedUsers.allValues) {
-    //     @autoreleasepool {
-    //         user.profileImage = nil;
-    //         user.avatarDecoration = nil;
-    //     }
-    // }
-    // for (DCRole *role in DCServerCommunicator.sharedInstance.loadedRoles.allValues) {
-    //     @autoreleasepool {
-    //         role.icon = nil;
-    //     }
-    // }
-    [[UIDevice currentDevice] currentMemoryUsage];
+    [[DCResourceManager sharedManager] noteMemoryWarning];
     [SDWebImageManager.sharedManager.imageCache clearMemory];
+    [[DCChatMediaManager sharedManager] handleMemoryWarning];
 }
 
 @end

@@ -15,6 +15,140 @@
 #import "DTCoreTextLayouter.h"
 #import "DTCoreTextLayoutFrame.h"
 #import "DCCacheManager.h"
+#import "DTCoreTextConstants.h"
+#import <CoreText/CoreText.h>
+
+/*
+ * Diagnostics for rare DTCoreText pathologies. This deliberately logs only
+ * structural characteristics, never the message text itself.
+ */
+static void DCLogAttributedStringShape(DCMessage *message,
+                                       CGFloat contentWidth,
+                                       NSTimeInterval elapsed,
+                                       NSString *reason) {
+    NSAttributedString *attributed = message.attributedContent;
+    NSString *plain = attributed ? [attributed string] : @"";
+
+    __block NSUInteger attributeRuns = 0;
+    __block NSUInteger attachmentRuns = 0;
+    __block NSUInteger linkRuns = 0;
+    __block NSUInteger fontRuns = 0;
+    __block NSUInteger paragraphRuns = 0;
+    __block NSUInteger headerRuns = 0;
+    __block NSUInteger shadowRuns = 0;
+
+    if (attributed.length > 0) {
+        [attributed enumerateAttributesInRange:NSMakeRange(0, attributed.length)
+                                       options:0
+                                    usingBlock:^(NSDictionary *attrs,
+                                                 NSRange range,
+                                                 BOOL *stop) {
+            attributeRuns++;
+
+            if ([attrs objectForKey:NSAttachmentAttributeName]) {
+                attachmentRuns++;
+            }
+            if ([attrs objectForKey:DTLinkAttribute]) {
+                linkRuns++;
+            }
+            if ([attrs objectForKey:(NSString *)kCTFontAttributeName]) {
+                fontRuns++;
+            }
+            if ([attrs objectForKey:(NSString *)kCTParagraphStyleAttributeName]) {
+                paragraphRuns++;
+            }
+            if ([attrs objectForKey:DTHeaderLevelAttribute]) {
+                headerRuns++;
+            }
+            if ([attrs objectForKey:DTShadowsAttribute]) {
+                shadowRuns++;
+            }
+        }];
+    }
+
+    NSUInteger newlineCount = 0;
+    NSUInteger nonASCII = 0;
+    NSUInteger surrogateUnits = 0;
+    NSUInteger combiningUnits = 0;
+    NSUInteger zwjCount = 0;
+    NSUInteger variation16Count = 0;
+    NSUInteger bidiControlCount = 0;
+    NSUInteger zeroWidthCount = 0;
+    NSUInteger currentTokenLength = 0;
+    NSUInteger longestTokenLength = 0;
+
+    NSCharacterSet *whitespace = [NSCharacterSet whitespaceAndNewlineCharacterSet];
+    NSCharacterSet *nonBase = [NSCharacterSet nonBaseCharacterSet];
+
+    for (NSUInteger i = 0; i < plain.length; i++) {
+        unichar c = [plain characterAtIndex:i];
+
+        if (c == '\n' || c == '\r') newlineCount++;
+        if (c > 0x7F) nonASCII++;
+        if (c >= 0xD800 && c <= 0xDFFF) surrogateUnits++;
+        if ([nonBase characterIsMember:c]) combiningUnits++;
+        if (c == 0x200D) zwjCount++;
+        if (c == 0xFE0F) variation16Count++;
+
+        if ((c >= 0x202A && c <= 0x202E) ||
+            (c >= 0x2066 && c <= 0x2069)) {
+            bidiControlCount++;
+        }
+
+        if (c == 0x200B || c == 0x200C || c == 0x200D ||
+            c == 0x2060 || c == 0xFEFF) {
+            zeroWidthCount++;
+        }
+
+        if ([whitespace characterIsMember:c]) {
+            if (currentTokenLength > longestTokenLength) {
+                longestTokenLength = currentTokenLength;
+            }
+            currentTokenLength = 0;
+        } else {
+            currentTokenLength++;
+        }
+    }
+
+    if (currentTokenLength > longestTokenLength) {
+        longestTokenLength = currentTokenLength;
+    }
+
+    NSLog(@"[LayoutDiag] %@ %@ %.1fms width %.0f "
+          @"type %ld raw %lu content %lu attr %lu "
+          @"runs %lu attachRuns %lu links %lu fonts %lu para %lu headers %lu shadows %lu "
+          @"nl %lu nonASCII %lu surrogate %lu combining %lu zwj %lu vs16 %lu "
+          @"bidi %lu zeroWidth %lu longestToken %lu "
+          @"modelAtts %ld/%lu emojis %lu refState %ld",
+          reason ?: @"shape",
+          message.snowflake ?: @"?",
+          elapsed * 1000.0,
+          contentWidth,
+          (long)message.messageType,
+          (unsigned long)message.rawContent.length,
+          (unsigned long)message.content.length,
+          (unsigned long)attributed.length,
+          (unsigned long)attributeRuns,
+          (unsigned long)attachmentRuns,
+          (unsigned long)linkRuns,
+          (unsigned long)fontRuns,
+          (unsigned long)paragraphRuns,
+          (unsigned long)headerRuns,
+          (unsigned long)shadowRuns,
+          (unsigned long)newlineCount,
+          (unsigned long)nonASCII,
+          (unsigned long)surrogateUnits,
+          (unsigned long)combiningUnits,
+          (unsigned long)zwjCount,
+          (unsigned long)variation16Count,
+          (unsigned long)bidiControlCount,
+          (unsigned long)zeroWidthCount,
+          (unsigned long)longestTokenLength,
+          (long)message.attachmentCount,
+          (unsigned long)message.attachments.count,
+          (unsigned long)message.emojis.count,
+          (long)message.referencedMessageState);
+}
 
 @implementation DCMessageLayoutBuilder
 
@@ -71,17 +205,7 @@
     return [systemTypes containsObject:@(messageType)];
 }
 
-// Author-name measurement: whether this message type shows/measures an
-// author name at all. Ported verbatim from the `cond` expression in
-// calculateHeightForMessage:.
-//
-// NOTE: this disagrees with +isSystemMessageType: for type 6 (CHANNEL
-// PINNED MESSAGE) — that method says "system cell", this one says "show
-// author name" for the same type. Ported as-is since I can't tell from
-// the code alone whether that's intentional (a pin announcement showing
-// who pinned it, inside the system cell) or a leftover inconsistency.
-// Worth confirming before slice 3 (reuseIdentifier wiring) — if it's a
-// bug, collapsing these into one predicate is a one-line fix here.
+// Type 6 retains the existing behavior of showing an author name in its system cell.
 + (BOOL)shouldShowAuthorNameForMessageType:(NSInteger)messageType {
     return (messageType == 6)
         || (messageType != 18 && (messageType < 1 || messageType > 8));
@@ -101,7 +225,68 @@
     BOOL showsAuthorName = [self.class shouldShowAuthorNameForMessageType:message.messageType];
 
     CGFloat contentWidth = tableWidth - 63;
-    CGFloat textHeight = [self textHeightForMessage:message contentWidth:contentWidth];
+
+    /*
+     * The text glyph/frame layout depends on the final attributed string and
+     * content width, but NOT on message neighbors.  Grouping does depend on
+     * neighbors, which is why DCMessageLayout itself keeps the composite key.
+     * Keep the expensive DTCoreText frame in a second, neighbor-independent
+     * cache so sliding the 80-message window does not reshape the same text.
+     */
+    DCCacheManager *cacheManager = [DCCacheManager sharedInstance];
+    DTCoreTextLayoutFrame *textLayoutFrame =
+        [cacheManager textLayoutFrameForSnowflake:message.snowflake
+                                     contentWidth:contentWidth
+                                  editedTimestamp:message.editedTimestamp];
+
+    if (!textLayoutFrame && message.attributedContent) {
+        CFAbsoluteTime textFrameStart = CFAbsoluteTimeGetCurrent();
+        textLayoutFrame =
+            [self textLayoutFrameForMessage:message contentWidth:contentWidth];
+        NSTimeInterval textFrameTime = CFAbsoluteTimeGetCurrent() - textFrameStart;
+        if (textLayoutFrame) {
+            [cacheManager setTextLayoutFrame:textLayoutFrame
+                                  forSnowflake:message.snowflake
+                                   contentWidth:contentWidth
+                                editedTimestamp:message.editedTimestamp];
+        }
+        if (textFrameTime >= 0.008) {
+            NSLog(@"[ChatPerf] text frame BUILD %@ %.1fms at %.0fpt",
+                  message.snowflake ?: @"?",
+                  textFrameTime * 1000.0,
+                  contentWidth);
+        }
+        if (textFrameTime >= 0.020) {
+            DCLogAttributedStringShape(message,
+                                       contentWidth,
+                                       textFrameTime,
+                                       @"SLOW TEXT FRAME");
+        }
+    }
+
+    CGFloat textHeight = textLayoutFrame ? ceil(CGRectGetHeight(textLayoutFrame.frame)) : 0;
+
+    if (message.attributedContent.length > 0 && textHeight <= 0.0f) {
+        DCLogAttributedStringShape(message,
+                                   contentWidth,
+                                   0,
+                                   @"ZERO TEXT HEIGHT");
+    }
+
+    if (message.attributedContent.length == 0 &&
+        (message.content.length > 0 || message.rawContent.length > 0) &&
+        (message.messageType == DCMessageTypeDefault ||
+         message.messageType == DCMessageTypeReply)) {
+        NSLog(@"[LayoutDiag] MISSING/EMPTY ATTRIBUTED CONTENT %@ "
+              @"type %ld raw %lu content %lu attrObject %@ atts %ld/%lu",
+              message.snowflake ?: @"?",
+              (long)message.messageType,
+              (unsigned long)message.rawContent.length,
+              (unsigned long)message.content.length,
+              message.attributedContent ? @"present" : @"nil",
+              (long)message.attachmentCount,
+              (unsigned long)message.attachments.count);
+    }
 
     DCMessageLayout *layout = [DCMessageLayout new];
     layout.messageSnowflake = message.snowflake;
@@ -111,6 +296,7 @@
     layout.hasReference = hasReference;
     layout.showsAuthorName = showsAuthorName;
     layout.textHeight = textHeight;
+    layout.textLayoutFrame = textLayoutFrame;
     layout.reuseIdentifier = [self.class reuseIdentifierForMessage:message
                                                               grouped:grouped
                                                          hasReference:hasReference];
@@ -184,44 +370,75 @@
     return contentHeight + attachmentHeight + (attachmentHeight ? 11 : 0);
 }
 
-- (void)prewarmLayoutCacheForMessages:(NSArray *)messages {
-    if (!messages.count) return;
+- (void)prewarmLayoutCacheForMessage:(DCMessage *)message
+                        previousMessage:(DCMessage *)previousMessage
+                            nextMessage:(DCMessage *)nextMessage
+                             tableWidth:(CGFloat)tableWidth {
+    if (!message || !message.snowflake.length || tableWidth <= 0.0f) return;
 
-    UIUserInterfaceIdiom idiom = [UIDevice currentDevice].userInterfaceIdiom;
-    CGFloat screenWidth    = UIScreen.mainScreen.bounds.size.width;
-    CGFloat screenHeight   = UIScreen.mainScreen.bounds.size.height;
-    CGFloat portraitWidth  = MIN(screenWidth, screenHeight);
-    CGFloat landscapeWidth = MAX(screenWidth, screenHeight);
-
-    for (NSInteger i = 0; i < (NSInteger)messages.count; i++) {
-        DCMessage *message = messages[i];
-        if (!message.snowflake) continue;
-
-        BOOL hasUnloaded = NO;
-        for (id attachment in message.attachments) {
-            if ([attachment isKindOfClass:[NSArray class]] ||
-                ([attachment isKindOfClass:[DCGifInfo class]] &&
-                 !((DCGifInfo *)attachment).staticThumbnail)) {
-                hasUnloaded = YES;
+    // Attachment metadata supplies row geometry; defer only when dimensions are unknown.
+    BOOL hasUnknownGeometry = NO;
+    for (id attachment in message.attachments) {
+        if ([attachment isKindOfClass:[NSArray class]]) {
+            NSArray *dimensions = attachment;
+            if (dimensions.count != 2 ||
+                [dimensions[0] floatValue] <= 0 ||
+                [dimensions[1] floatValue] <= 0) {
+                hasUnknownGeometry = YES;
+                break;
+            }
+        } else if ([attachment isKindOfClass:[UILazyImage class]]) {
+            UILazyImage *image = attachment;
+            if ((image.naturalSize.width <= 0 || image.naturalSize.height <= 0) &&
+                (!image.image || image.image.size.width <= 0 || image.image.size.height <= 0)) {
+                hasUnknownGeometry = YES;
+                break;
+            }
+        } else if ([attachment isKindOfClass:[DCChatVideoAttachment class]]) {
+            DCChatVideoAttachment *video = attachment;
+            if ((video.naturalSize.width <= 0 || video.naturalSize.height <= 0) &&
+                (!video.thumbnailImage ||
+                 video.thumbnailImage.size.width <= 0 ||
+                 video.thumbnailImage.size.height <= 0)) {
+                hasUnknownGeometry = YES;
+                break;
+            }
+        } else if ([attachment isKindOfClass:[DCGifInfo class]]) {
+            DCGifInfo *gif = attachment;
+            if ((gif.naturalSize.width <= 0 || gif.naturalSize.height <= 0) &&
+                (!gif.staticThumbnail ||
+                 gif.staticThumbnail.size.width <= 0 ||
+                 gif.staticThumbnail.size.height <= 0)) {
+                hasUnknownGeometry = YES;
                 break;
             }
         }
-        if (hasUnloaded) continue;
+    }
+    if (hasUnknownGeometry) return;
 
-        DCMessage *prev = (i > 0) ? messages[i - 1] : nil;
-        DCMessage *next = (i + 1 < (NSInteger)messages.count) ? messages[i + 1] : nil;
+    [self prewarmForMessage:message
+                       prev:previousMessage
+                       next:nextMessage
+                      width:tableWidth];
+}
 
-        [self prewarmForMessage:message
-                           prev:prev
-                           next:next
-                          width:portraitWidth];
+- (void)prewarmLayoutCacheForMessages:(NSArray *)messages
+                      previousMessage:(DCMessage *)previousBoundary
+                          nextMessage:(DCMessage *)nextBoundary
+                           tableWidth:(CGFloat)tableWidth {
+    if (!messages.count || tableWidth <= 0.0f) return;
 
-        if (idiom == UIUserInterfaceIdiomPad) {
-            [self prewarmForMessage:message
-                               prev:prev
-                               next:next
-                              width:landscapeWidth];
-        }
+    for (NSInteger i = 0; i < (NSInteger)messages.count; i++) {
+        DCMessage *message = messages[i];
+        if (!message.snowflake.length) continue;
+
+        DCMessage *prev = (i > 0) ? messages[i - 1] : previousBoundary;
+        DCMessage *next = (i + 1 < (NSInteger)messages.count) ? messages[i + 1] : nextBoundary;
+
+        [self prewarmLayoutCacheForMessage:message
+                           previousMessage:prev
+                               nextMessage:next
+                                tableWidth:tableWidth];
     }
 }
 
@@ -234,7 +451,7 @@
                                           previousSnowflake:prev.snowflake
                                               nextSnowflake:next.snowflake
                                             editedTimestamp:message.editedTimestamp]) {
-        return; // already cached
+        return;
     }
 
     DCMessageLayout *layout = [self layoutForMessage:message
@@ -250,33 +467,45 @@
                                  editedTimestamp:message.editedTimestamp];
 }
 
-// Per-width text layout pass — this is the fix for (A), "iPad shows
-// portrait heights in landscape". Previously calculateHeightForMessage:
-// read message.textHeight, a single value computed once in DCTools.m at
-// UIScreen.mainScreen.bounds width (fixed/portrait on iOS 5–7 regardless
-// of current orientation). Now computed fresh for `contentWidth`, which
-// varies with `tableWidth`, and gets cached per-width automatically via
-// DCMessageLayout's composite cache key in the next slice.
-//
-// The original's "store as ceil(h)+2, then read back as >2 ? value-2 : 0"
-// round trip is arithmetically a no-op: ceil(h)+2 > 2 <=> ceil(h) > 0,
-// and (ceil(h)+2)-2 == ceil(h); since CGRectGetHeight is never negative,
-// both branches collapse to just ceil(h). Flagging the simplification in
-// case I've missed why the +2/-2 was there.
-- (CGFloat)textHeightForMessage:(DCMessage *)message contentWidth:(CGFloat)contentWidth {
-    if (!message.attributedContent) return 0;
+- (void)prewarmLayoutCacheForMessages:(NSArray *)messages {
+    if (!messages.count) return;
+
+    UIUserInterfaceIdiom idiom = [UIDevice currentDevice].userInterfaceIdiom;
+    CGFloat screenWidth    = UIScreen.mainScreen.bounds.size.width;
+    CGFloat screenHeight   = UIScreen.mainScreen.bounds.size.height;
+    CGFloat portraitWidth  = MIN(screenWidth, screenHeight);
+    CGFloat landscapeWidth = MAX(screenWidth, screenHeight);
+
+    [self prewarmLayoutCacheForMessages:messages
+                        previousMessage:nil
+                            nextMessage:nil
+                             tableWidth:portraitWidth];
+
+    if (idiom == UIUserInterfaceIdiomPad) {
+        [self prewarmLayoutCacheForMessages:messages
+                            previousMessage:nil
+                                nextMessage:nil
+                                 tableWidth:landscapeWidth];
+    }
+}
+
+// Build and cache text layout at the exact table width.
+- (DTCoreTextLayoutFrame *)textLayoutFrameForMessage:(DCMessage *)message
+                                               contentWidth:(CGFloat)contentWidth {
+    if (!message.attributedContent || contentWidth <= 0.0f) return nil;
+
+    // This is the same authoritative DTCoreText layout operation that
+    // previously produced only a CGFloat height.  Keep the resulting frame
+    // so the DTAttributedLabel can draw/rebuild link/emoji custom views from
+    // the exact prewarmed glyph layout instead of laying the string out again
+    // on the main thread when the cell is configured.
     DTCoreTextLayouter *layouter = [[DTCoreTextLayouter alloc]
         initWithAttributedString:message.attributedContent];
     CGRect layoutRect = CGRectMake(0, 0, contentWidth, CGFLOAT_HEIGHT_UNKNOWN);
-    DTCoreTextLayoutFrame *layoutFrame = [layouter layoutFrameWithRect:layoutRect
-                                                                  range:NSMakeRange(0, 0)];
-    return ceil(CGRectGetHeight(layoutFrame.frame));
+    return [layouter layoutFrameWithRect:layoutRect range:NSMakeRange(0, 0)];
 }
 
-// Ported verbatim from calculateHeightForMessage:, including its int
-// truncation behavior on newWidth/newHeight — preserved deliberately so
-// this port doesn't shift any cached height by a point as a side effect.
-// CGFloat-vs-int cleanup, if wanted, is a separate follow-up.
+// Preserve calculateHeightForMessage:'s integer truncation so cached heights remain stable.
 - (int)attachmentHeightForMessage:(DCMessage *)message tableWidth:(CGFloat)tableWidth {
     int attachmentHeight = 0;
     for (id attachment in message.attachments) {
@@ -300,9 +529,15 @@
             attachmentHeight += newHeight;
         } else if ([attachment isKindOfClass:[DCChatVideoAttachment class]]) {
             DCChatVideoAttachment *video = attachment;
-            CGFloat aspectRatio = (video.thumbnail.image && video.thumbnail.image.size.height > 0)
-                ? video.thumbnail.image.size.width / video.thumbnail.image.size.height
-                : 16.0f / 9.0f;
+            CGSize sourceSize = CGSizeZero;
+            if (video.naturalSize.width > 0 && video.naturalSize.height > 0) {
+                sourceSize = video.naturalSize;
+            } else if (video.thumbnailImage) {
+                sourceSize = video.thumbnailImage.size;
+            } else {
+                sourceSize = CGSizeMake(16, 9);
+            }
+            CGFloat aspectRatio = sourceSize.width / sourceSize.height;
             int newWidth  = 200 * aspectRatio;
             int newHeight = 200;
             if (newWidth > tableWidth - 66) {
@@ -312,8 +547,15 @@
             attachmentHeight += newHeight;
         } else if ([attachment isKindOfClass:[DCGifInfo class]]) {
             DCGifInfo *gifInfo = attachment;
-            if (!gifInfo.staticThumbnail) continue;
-            CGFloat aspectRatio = gifInfo.staticThumbnail.size.width / gifInfo.staticThumbnail.size.height;
+            CGSize sourceSize = CGSizeZero;
+            if (gifInfo.naturalSize.width > 0 && gifInfo.naturalSize.height > 0) {
+                sourceSize = gifInfo.naturalSize;
+            } else if (gifInfo.staticThumbnail) {
+                sourceSize = gifInfo.staticThumbnail.size;
+            } else {
+                continue;
+            }
+            CGFloat aspectRatio = sourceSize.width / sourceSize.height;
             int newWidth  = (int)(200 * aspectRatio);
             int newHeight = 200;
             if (newWidth > tableWidth - 66) {

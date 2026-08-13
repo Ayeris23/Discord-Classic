@@ -12,8 +12,11 @@
 @property (weak, nonatomic) IBOutlet UIImageView *gifThumbnail;
 @property (weak, nonatomic) IBOutlet UIImageView *gifBadge;
 @property (strong, nonatomic) NSURL *gifURL;
+@property (strong, nonatomic) NSURL *thumbnailURL;
 @property (strong, nonatomic) UIImage *staticThumbnail;
 @property (nonatomic) BOOL isLoading;
 - (void)stopPlayback;
 - (void)prepareForDisplay;
+- (void)prepareForDisplayAllowLoading:(BOOL)allowLoading;
+- (void)releaseThumbnailForResidency;
 @end

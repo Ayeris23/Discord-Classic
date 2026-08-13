@@ -28,6 +28,12 @@
 #import "DCMessageStore.h"
 #import "Base64.h"
 #include <stdint.h>
+#include <pthread.h>
+
+/* The canonical user registry is shared across several queues. A reader/writer
+ * lock keeps lookups synchronous with writes without introducing a dispatch
+ * barrier backlog. */
+static pthread_rwlock_t DCUserRegistryLock = PTHREAD_RWLOCK_INITIALIZER;
 
 typedef NS_OPTIONS(NSUInteger, DCReadyChannelCommitFields) {
     DCReadyChannelCommitHasParentID      = 1 << 0,
@@ -39,10 +45,7 @@ typedef NS_OPTIONS(NSUInteger, DCReadyChannelCommitFields) {
     DCReadyChannelCommitHasWriteability  = 1 << 6,
 };
 
-// Detached READY-derived channel state. Instances are built only on the
-// serial Gateway queue from immutable JSON and are never exposed to UIKit.
-// Main-thread publication copies these normalized fields onto the existing
-// canonical DCChannel objects, preserving object identity.
+// Detached channel state prepared off-main and committed onto canonical objects.
 @interface DCReadyChannelCommit : NSObject
 @property (strong, nonatomic) NSString *snowflake;
 @property (strong, nonatomic) NSString *parentID;
@@ -68,9 +71,7 @@ typedef NS_OPTIONS(NSUInteger, DCReadyUserCommitFields) {
     DCReadyUserCommitHasStatus             = 1 << 5,
 };
 
-// Detached READY-derived user patch. Like DCReadyChannelCommit, this is built
-// from immutable Gateway JSON only. Main applies it to the existing canonical
-// DCUser so message/cell/user references keep stable object identity.
+// Detached user state prepared off-main and committed onto canonical objects.
 @interface DCReadyUserCommit : NSObject
 @property (strong, nonatomic) NSString *snowflake;
 @property (strong, nonatomic) NSString *username;
@@ -142,22 +143,19 @@ NSTimer *heartbeatTimer = nil;
 // earlier event that is still being applied on another worker thread.
 static dispatch_queue_t gatewayEventQueue = NULL;
 
-// READY touches the canonical user/role/emoji registries thousands of times.
-// While READY is executing on its owning thread, use local mutable snapshots
-// and fold them back into Discord::Data::Access with one barrier at the end.
-// Other threads continue to see the last committed registry until publication.
+// Bulk READY reconciliation uses local snapshots and publishes them once complete.
 static NSThread *readyBulkCacheThread = nil;
 static NSMutableDictionary *readyBulkUsers = nil;
 static NSMutableDictionary *readyBulkRoles = nil;
 static NSMutableDictionary *readyBulkEmojis = nil;
 
 /*
- * READY gives us a resume_gateway_url without any guarantee that it carries
- * the same query parameters as our initial Gateway connection. Discord
+ * READY provides resume_gateway_url without guaranteeing the initial Gateway
+ * query parameters. Discord
  * requires Resume to use the same API version, encoding, and compression.
  *
  * Keep this helper Foundation-only so it remains compatible with iOS 5/6
- * (NSURLComponents is too new for our deployment target).
+ * (NSURLComponents is unavailable on the deployment target).
  */
 
 static BOOL DCChannelTypeAppearsInGuildList(DCChannelType type) {
@@ -195,7 +193,7 @@ static NSString *DCConfiguredGatewayURL(NSString *urlString) {
 /*
  * USER_SETTINGS_PROTO_UPDATE carries settings.proto as a Base64-encoded
  * PreloadedUserSettings protobuf. Pulling in a full protobuf runtime just to
- * keep the guild sidebar synchronized is unnecessary on our old targets, so
+ * keep the guild sidebar synchronized is unnecessary on this deployment target, so
  * this tiny reader understands only the protobuf wire types needed by
  * PreloadedUserSettings.guild_folders:
  *
@@ -485,7 +483,7 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
     if ([[UIDevice currentDevice] respondsToSelector:@selector(identifierForVendor)]) {
         vendorID = [[[UIDevice currentDevice] identifierForVendor] UUIDString] ?: @"";
     } else {
-        // iOS 5 fallback — generate and persist our own vendor ID
+        // iOS 5 fallback: generate and persist a vendor ID
         vendorID = [[NSUserDefaults standardUserDefaults] stringForKey:@"DCVendorID"];
         if (!vendorID) {
             CFUUIDRef uuid = CFUUIDCreate(NULL);
@@ -623,15 +621,18 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
 
 // Accessor Methods for thread safe data interactions
 - (void)beginReadyBulkEntityCache {
-    // READY is serialized by Discord::Gateway::State and currently committed
-    // on one thread, so only that owner is allowed to touch these local maps.
+    // Bulk maps are owned by the thread that opened the reconciliation pass.
     if (readyBulkCacheThread) return;
 
-    __block NSDictionary *users = nil;
+    NSDictionary *users = nil;
     __block NSDictionary *roles = nil;
     __block NSDictionary *emojis = nil;
+
+    pthread_rwlock_rdlock(&DCUserRegistryLock);
+    users = [NSDictionary dictionaryWithDictionary:self.loadedUsers ?: @{}];
+    pthread_rwlock_unlock(&DCUserRegistryLock);
+
     dispatch_sync(self.accessQueue, ^{
-        users = [NSDictionary dictionaryWithDictionary:self.loadedUsers ?: @{}];
         roles = [NSDictionary dictionaryWithDictionary:self.loadedRoles ?: @{}];
         emojis = [NSDictionary dictionaryWithDictionary:self.loadedEmojis ?: @{}];
     });
@@ -649,21 +650,21 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
     NSMutableDictionary *roles = readyBulkRoles;
     NSMutableDictionary *emojis = readyBulkEmojis;
 
-    // Stop routing new calls to the local maps before the publication barrier.
+    // Stop routing lookups to local maps before publishing them.
     readyBulkCacheThread = nil;
     readyBulkUsers = nil;
     readyBulkRoles = nil;
     readyBulkEmojis = nil;
 
+    pthread_rwlock_wrlock(&DCUserRegistryLock);
+    if (!self.loadedUsers) self.loadedUsers = [NSMutableDictionary dictionary];
+    // Merge so concurrent cache hydration is not discarded; live data wins.
+    [self.loadedUsers addEntriesFromDictionary:users];
+    pthread_rwlock_unlock(&DCUserRegistryLock);
+
     dispatch_barrier_sync(self.accessQueue, ^{
-        if (!self.loadedUsers) self.loadedUsers = [NSMutableDictionary dictionary];
         if (!self.loadedRoles) self.loadedRoles = [NSMutableDictionary dictionary];
         if (!self.loadedEmojis) self.loadedEmojis = [NSMutableDictionary dictionary];
-
-        // Merge rather than replace so a legitimate background cache write that
-        // occurred during READY cannot be discarded. Fresh READY data wins for
-        // snowflakes that were present in both maps.
-        [self.loadedUsers addEntriesFromDictionary:users];
         [self.loadedRoles addEntriesFromDictionary:roles];
         [self.loadedEmojis addEntriesFromDictionary:emojis];
     });
@@ -674,10 +675,18 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
     if (readyBulkCacheThread == [NSThread currentThread] && readyBulkUsers) {
         return [readyBulkUsers objectForKey:snowflake];
     }
-    __block DCUser *user;
-    dispatch_sync(self.accessQueue, ^{
-        user = self.loadedUsers[snowflake];
-    });
+
+    CFAbsoluteTime waitStart = CFAbsoluteTimeGetCurrent();
+    pthread_rwlock_rdlock(&DCUserRegistryLock);
+    DCUser *user = self.loadedUsers[snowflake];
+    pthread_rwlock_unlock(&DCUserRegistryLock);
+    NSTimeInterval waitTime = CFAbsoluteTimeGetCurrent() - waitStart;
+    if (waitTime >= 0.020) {
+        NSLog(@"[EntityPerf] user lookup %@ waited %.1fms%@",
+              snowflake,
+              waitTime * 1000.0,
+              [NSThread isMainThread] ? @" on main" : @"");
+    }
     return user;
 }
 
@@ -687,16 +696,22 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
         [readyBulkUsers setObject:user forKey:snowflake];
         return;
     }
-    dispatch_barrier_async(self.accessQueue, ^{
-        self.loadedUsers[snowflake] = user;
-    });
+    pthread_rwlock_wrlock(&DCUserRegistryLock);
+    if (!self.loadedUsers) self.loadedUsers = [NSMutableDictionary dictionary];
+    self.loadedUsers[snowflake] = user;
+    pthread_rwlock_unlock(&DCUserRegistryLock);
+}
+
+- (void)ensureLoadedUsersRegistry {
+    pthread_rwlock_wrlock(&DCUserRegistryLock);
+    if (!self.loadedUsers) self.loadedUsers = [NSMutableDictionary dictionary];
+    pthread_rwlock_unlock(&DCUserRegistryLock);
 }
 
 - (NSDictionary *)loadedUsersSnapshot {
-    __block NSDictionary *snapshot = nil;
-    dispatch_sync(self.accessQueue, ^{
-        snapshot = [NSDictionary dictionaryWithDictionary:self.loadedUsers ?: @{}];
-    });
+    pthread_rwlock_rdlock(&DCUserRegistryLock);
+    NSDictionary *snapshot = [NSDictionary dictionaryWithDictionary:self.loadedUsers ?: @{}];
+    pthread_rwlock_unlock(&DCUserRegistryLock);
     return snapshot;
 }
 
@@ -704,90 +719,78 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
     if (![cachedUsers isKindOfClass:[NSDictionary class]] || cachedUsers.count == 0)
         return;
 
-    /*
-     * Cold-start user hydration is deliberately late now.  Merge the disk
-     * snapshot conservatively so live Gateway data always wins, while cached
-     * data can still fill placeholders created by a restored message window.
-     */
+    /* Merge cached users conservatively so live Gateway data wins. Release the
+     * registry lock between records to keep readers responsive during hydration. */
     NSMutableArray *changedPlaceholders = [NSMutableArray array];
-    dispatch_barrier_sync(self.accessQueue, ^{
-        if (!self.loadedUsers)
-            self.loadedUsers = [NSMutableDictionary dictionary];
+    [self ensureLoadedUsersRegistry];
 
-        for (NSString *snowflake in cachedUsers) {
-            DCUser *cached = [cachedUsers objectForKey:snowflake];
-            if (![cached isKindOfClass:[DCUser class]] || !snowflake.length)
-                continue;
+    for (NSString *snowflake in cachedUsers) {
+        DCUser *cached = [cachedUsers objectForKey:snowflake];
+        if (![cached isKindOfClass:[DCUser class]] || !snowflake.length)
+            continue;
 
-            DCUser *existing = [self.loadedUsers objectForKey:snowflake];
-            if (!existing) {
-                // No live identity object exists yet, so the cached status is the
-                // best resumable baseline we have.
-                [self.loadedUsers setObject:cached forKey:snowflake];
-                continue;
-            }
-
-            BOOL changed = NO;
-            BOOL placeholderName =
-                !existing.username.length ||
-                [existing.username isEqualToString:@"Unknown User"];
-            BOOL placeholderGlobalName =
-                !existing.globalName.length ||
-                [existing.globalName isEqualToString:@"Unknown User"];
-
-            if (placeholderName && cached.username.length) {
-                existing.username = cached.username;
-                changed = YES;
-            }
-            if (placeholderGlobalName && cached.globalName.length) {
-                existing.globalName = cached.globalName;
-                changed = YES;
-            }
-            if (!existing.avatarID && cached.avatarID) {
-                existing.avatarID = cached.avatarID;
-                /*
-                 * A placeholder may already have generated a default avatar
-                 * before late hydration supplied the real hash.  Clear that
-                 * runtime image so the next visible-cell request uses the real
-                 * hash-versioned CDN asset instead of keeping the placeholder.
-                 */
-                existing.profileImage = nil;
-                existing.rawProfileImage = nil;
-                changed = YES;
-            }
-            if (!existing.avatarDecorationID && cached.avatarDecorationID) {
-                existing.avatarDecorationID = cached.avatarDecorationID;
-                existing.avatarDecoration = nil;
-                existing.profileImage = nil;
-                changed = YES;
-            }
-            if (!existing.biography.length && cached.biography.length)
-                existing.biography = cached.biography;
-            if (existing.discriminator == 0 && cached.discriminator != 0)
-                existing.discriminator = cached.discriminator;
-
-            // Presence is part of the durable resumable baseline now. A live
-            // PRESENCE_UPDATE/READY presence received by this process always wins
-            // over a status restored later from disk.
-            if (![self.livePresenceUserIDs containsObject:snowflake] &&
-                existing.status != cached.status) {
-                existing.status = cached.status;
-                changed = YES;
-            }
-
-            if (!existing.guildNicknames)
-                existing.guildNicknames = [NSMutableDictionary dictionary];
-            for (NSString *guildID in cached.guildNicknames) {
-                if (![existing.guildNicknames objectForKey:guildID]) {
-                    id nickname = [cached.guildNicknames objectForKey:guildID];
-                    if (nickname)
-                        [existing.guildNicknames setObject:nickname forKey:guildID];
-                }
-            }
-
-            if (changed) [changedPlaceholders addObject:existing];
+        pthread_rwlock_wrlock(&DCUserRegistryLock);
+        DCUser *existing = [self.loadedUsers objectForKey:snowflake];
+        if (!existing) {
+            // No live identity object exists yet, so the cached status is the
+            // best available resumable baseline.
+            [self.loadedUsers setObject:cached forKey:snowflake];
+            pthread_rwlock_unlock(&DCUserRegistryLock);
+            continue;
         }
-    });
+
+        BOOL changed = NO;
+        BOOL placeholderName =
+            !existing.username.length ||
+            [existing.username isEqualToString:@"Unknown User"];
+        BOOL placeholderGlobalName =
+            !existing.globalName.length ||
+            [existing.globalName isEqualToString:@"Unknown User"];
+
+        if (placeholderName && cached.username.length) {
+            existing.username = cached.username;
+            changed = YES;
+        }
+        if (placeholderGlobalName && cached.globalName.length) {
+            existing.globalName = cached.globalName;
+            changed = YES;
+        }
+        if (!existing.avatarID && cached.avatarID) {
+            existing.avatarID = cached.avatarID;
+            existing.profileImage = nil;
+            existing.rawProfileImage = nil;
+            changed = YES;
+        }
+        if (!existing.avatarDecorationID && cached.avatarDecorationID) {
+            existing.avatarDecorationID = cached.avatarDecorationID;
+            existing.avatarDecoration = nil;
+            existing.profileImage = nil;
+            changed = YES;
+        }
+        if (!existing.biography.length && cached.biography.length)
+            existing.biography = cached.biography;
+        if (existing.discriminator == 0 && cached.discriminator != 0)
+            existing.discriminator = cached.discriminator;
+
+        if (![self.livePresenceUserIDs containsObject:snowflake] &&
+            existing.status != cached.status) {
+            existing.status = cached.status;
+            changed = YES;
+        }
+
+        if (!existing.guildNicknames)
+            existing.guildNicknames = [NSMutableDictionary dictionary];
+        for (NSString *guildID in cached.guildNicknames) {
+            if (![existing.guildNicknames objectForKey:guildID]) {
+                id nickname = [cached.guildNicknames objectForKey:guildID];
+                if (nickname)
+                    [existing.guildNicknames setObject:nickname forKey:guildID];
+            }
+        }
+        pthread_rwlock_unlock(&DCUserRegistryLock);
+
+        if (changed) [changedPlaceholders addObject:existing];
+    }
 
     if (changedPlaceholders.count) {
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -962,7 +965,7 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
 
 
 - (DCChannel *)findChannelById:(NSString *)channelId {
-    for (DCGuild *guild in self.guilds) { // Replace `self.guilds` with your guilds array
+    for (DCGuild *guild in self.guilds) {
         for (DCChannel *channel in guild.channels) {
             if ([channel.snowflake isEqualToString:channelId]) {
                 return channel;
@@ -1479,7 +1482,6 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
         self.resumeGatewayURL = nil;
         DBGLOG(@"READY did not contain a usable resume_gateway_url");
     }
-    // THIS IS US, hey hey hey this is MEEEEE BITCCCH MORTY DID YOU HEAR, THIS IS ME, AND MY USER ID, YES MORT(BUÜÜÜRPP)Y, THIS IS ME. BITCCHHHH. 100 YEARS OF DISCORD CLASSIC MORTYY YOU AND MEEEE
     self.snowflake       = [NSString stringWithFormat:@"%@", [d valueForKeyPath:@"user.id"]];
     DCUserInfo *userInfo = [DCUserInfo new];
     userInfo.username    = [d valueForKeyPath:@"user.username"];
@@ -1506,7 +1508,6 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
                                         forKey:[channelSetting objectForKey:@"channel_id"]];
         }
     }
-    // NSLog(@"[MuteCheck] userChannelSettings: %@", self.userChannelSettings);
     // Bulk mode keeps READY's canonical entity traffic local instead of paying
     // a synchronized Discord::Data::Access round-trip for every object.
     [self beginReadyBulkEntityCache];
@@ -1686,10 +1687,8 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
     // preserved. Rebuild only the lightweight display layout on demand.
     self.cachedDisplayLayout = nil;
     self.guildsIsSorted = NO;
-    // Read states are recieved in READY payload
-    // they give a channel ID and the ID of the last read message in that channel
+    // READY read states provide the last-read message and mention count per channel.
     NSArray *readstatesArray = [d objectForKey:@"read_state"];
-    // NSLog(@"[ReadState] array: %@", [d objectForKey:@"read_state"]);
     for (NSDictionary *readstate in readstatesArray) {
         NSString *readstateChannelId = [readstate objectForKey:@"id"];
         NSString *readstateMessageId = [readstate objectForKey:@"last_message_id"];
@@ -1697,11 +1696,6 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
         DCChannel *channelOfReadstate = [self.channels objectForKey:readstateChannelId];
         channelOfReadstate.lastReadMessageId = readstateMessageId;
         channelOfReadstate.mentionCount = mentionCount;
-        // NSLog(@"[ReadState] channel:%@ lastMessageId:%@ lastReadMessageId:%@ muted:%d", 
-        //         channelOfReadstate.name,
-        //         channelOfReadstate.lastMessageId,
-        //         channelOfReadstate.lastReadMessageId,
-        //         channelOfReadstate.muted);
         if (channelOfReadstate) {
             channelOfReadstate.unread =
                 (channelOfReadstate.mentionCount > 0) ||
@@ -1710,12 +1704,6 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
                  [channelOfReadstate.lastMessageId isKindOfClass:[NSString class]] &&
                  ![channelOfReadstate.lastMessageId isEqualToString:channelOfReadstate.lastReadMessageId]);
         }
-        // NSLog(@"[ReadState] channel:%@ id:%@ mentionCount:%ld lastMessageId:%@ lastReadMessageId:%@",
-        //     channelOfReadstate.name,
-        //     channelOfReadstate.snowflake,
-        //     (long)channelOfReadstate.mentionCount,
-        //     channelOfReadstate.lastMessageId,
-        //     channelOfReadstate.lastReadMessageId);
     }
     // Wire up channel mute state from userChannelSettings
     for (DCGuild *guild in self.guilds) {
@@ -1729,9 +1717,6 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
         // All channel flags are now established, so one aggregate pass is enough.
         [guild checkIfRead];
     }
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [NSNotificationCenter.defaultCenter postNotificationName:@"MENTION_COUNT_UPDATED" object:nil];
-    });
     // Keep communicator selection canonical too. With reconciliation this is
     // normally already the same object; the lookup only matters if READY
     // authoritatively removed the previously selected guild.
@@ -1824,25 +1809,19 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
         // Check if a channel is currently being viewed
         // and if so, if that channel is the same the message was sent in
         if (self.selectedChannel != nil && [channelIdOfMessage isEqualToString:self.selectedChannel.snowflake]) {
-            // NSLog(@"[MESSAGE_CREATE] Message received in currently selected channel: %@", self.selectedChannel.name);
             dispatch_async(dispatch_get_main_queue(), ^{
                 // Send notification with the new message
                 // will be recieved by DCChatViewController
                 [NSNotificationCenter.defaultCenter postNotificationName:@"MESSAGE CREATE" object:self userInfo:d];
-                // Also notify menu to update DM list position/unread state
-                [NSNotificationCenter.defaultCenter postNotificationName:@"MESSAGE ACK"
-                                                                  object:self
-                                                                userInfo:@{@"channelId": channelIdOfMessage}];
             }); // Update current channel & read state last message
             [self.selectedChannel setLastMessageId:messageId];
-            // Ack message since we are currently viewing this channel
+            // Acknowledge messages in the currently viewed channel.
             [self.selectedChannel ackMessage:messageId];
         } else {
             DCChannel *channelOfMessage = [self.channels objectForKey:channelIdOfMessage];
-            // NSLog(@"[MESSAGE_CREATE] Message received in channel %@ (ID: %@) not currently selected", channelOfMessage.name, channelIdOfMessage);
             channelOfMessage.lastMessageId = messageId;
             
-            // Don't mark as unread if we sent the message
+            // Messages authored by the current user remain read.
             NSString *authorId = [d valueForKeyPath:@"author.id"];
             if (![authorId isEqualToString:self.snowflake]) {
                 // Increment mention count for DMs
@@ -1868,7 +1847,7 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
                 }
                 [channelOfMessage checkIfRead];
             } else {
-                // We sent it, update lastReadMessageId to match so it stays read
+                // Advance lastReadMessageId for messages authored by the current user.
                 channelOfMessage.lastReadMessageId = messageId;
             }
             
@@ -1894,7 +1873,7 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
         });
         // Update current channel & read state last message
         [self.selectedChannel setLastMessageId:messageId];
-        // Ack message since we are currently viewing this channel
+        // Acknowledge messages in the currently viewed channel.
         [self.selectedChannel ackMessage:messageId];
     }
 }
@@ -2259,17 +2238,25 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
         // A second update may have arrived while this request was in flight.
         if (![guild.iconID isEqualToString:iconHash]) return;
 
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (![guild.iconID isEqualToString:iconHash]) return;
-            CGSize itemSize = CGSizeMake(40, 40);
+        dispatch_async(dispatch_get_global_queue(
+            DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+            CGSize itemSize = CGSizeMake(40.0f, 40.0f);
             UIGraphicsBeginImageContextWithOptions(itemSize, NO,
                                                    UIScreen.mainScreen.scale);
-            [image drawInRect:CGRectMake(0, 0, itemSize.width, itemSize.height)];
+            [image drawInRect:CGRectMake(0.0f, 0.0f,
+                                         itemSize.width, itemSize.height)];
             UIImage *resized = UIGraphicsGetImageFromCurrentImageContext();
             UIGraphicsEndImageContext();
-            guild.icon = resized ?: image;
-            [NSNotificationCenter.defaultCenter postNotificationName:@"RELOAD GUILD"
-                                                              object:guild];
+            UIImage *source = resized ?: image;
+            [DCContentManager processedGuildIcon:source];
+            [DCContentManager processedFolderMiniGuildIcon:source];
+
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (![guild.iconID isEqualToString:iconHash]) return;
+                guild.icon = source;
+                [NSNotificationCenter.defaultCenter postNotificationName:@"RELOAD GUILD"
+                                                                  object:guild];
+            });
         });
     }];
 }
@@ -2504,9 +2491,7 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
     if (!guild.channels) guild.channels = [NSMutableArray array];
     if (!self.channels) self.channels = [NSMutableDictionary dictionary];
 
-    // Build one per-guild channel index up front. Patch 5's lazy fallback
-    // experiment ended up constructing this for 79/81 guilds, so the lazy
-    // branch added complexity without saving meaningful work.
+    // Build one per-guild channel index up front for O(1) channel resolution.
     NSMutableDictionary *listedByID =
         [NSMutableDictionary dictionaryWithCapacity:guild.channels.count];
     for (DCChannel *listedChannel in guild.channels) {
@@ -2545,10 +2530,7 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
         if (perf)
             perf->channelResolve += CFAbsoluteTimeGetCurrent() - resolveStarted;
 
-        // mergeChannel already receives the parent guild directly. The old
-        // READY path mutable-copied every channel dictionary solely to inject
-        // guild_id, which mergeChannel never reads. Avoid ~4.6k transient
-        // dictionaries/rehashes on this account's current READY payload.
+        // mergeChannel receives the parent guild directly; avoid copying channel JSON.
         [self mergeChannel:channel
                    fromData:rawChannel
                       guild:guild
@@ -2644,9 +2626,8 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
 }
 
 - (void)checkpointGuildState {
-    DCCacheManager *cache = [DCCacheManager sharedInstance];
-    [cache saveGuilds:self.guilds];
-    if (self.currentUserInfo) [cache saveUserInfo:self.currentUserInfo];
+    /* Structural Gateway events update memory only. Durable checkpoints persist
+     * the guild graph before publishing the matching Gateway sequence. */
 }
 
 - (void)handleUserSettingsProtoUpdateWithData:(NSDictionary *)d {
@@ -2656,7 +2637,7 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
     if (![settings isKindOfClass:[NSDictionary class]]) return;
 
     // Type 1 is PreloadedUserSettings. Other settings protos (frecency, etc.)
-    // do not contain the guild sidebar layout we care about here.
+    // do not contain the required guild sidebar layout.
     id typeValue = [settings objectForKey:@"type"];
     if ([typeValue respondsToSelector:@selector(integerValue)] &&
         [typeValue integerValue] != 1) {
@@ -2742,7 +2723,7 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
     DCGuild *guild = [self guildWithSnowflake:guildID];
     if (!guild) {
         // UPDATE normally targets a known guild, but preserve forward progress
-        // if our cache missed it. Create a minimal canonical shell rather than
+        // after a cache miss. Create a minimal canonical shell rather than
         // forcing a master refresh.
         guild = [DCGuild new];
         guild.snowflake = guildID;
@@ -3024,22 +3005,8 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
         return;
     }
 
-    /*
-     * Discord channel overwrites are not role-priority ordered. The effective
-     * sequence for a member is: @everyone overwrite, the combined overwrites
-     * of every matching role (all denies together, then all allows), and then
-     * the member-specific overwrite. READY used to sort every channel's
-     * overwrite array by role.position and mutate one BOOL sequentially. Apart
-     * from being the dominant channel-merge cost, that made conflicting role
-     * overwrites depend on role position. Gather the SEND_MESSAGES bit in one
-     * pass instead; no temporary array and no role dictionary lookup per sort
-     * comparison are needed.
-     *
-     * This method intentionally keeps the existing model's base assumption
-     * (writeable unless a channel overwrite says otherwise); Patch 4 only
-     * replaces overwrite resolution, not the broader guild base-permission
-     * model.
-     */
+    /* Discord role overwrites are combined, not role-priority ordered: apply
+     * @everyone, aggregate matching-role denies/allows, then the member overwrite. */
     BOOL everyoneDeny = NO;
     BOOL everyoneAllow = NO;
     BOOL roleDeny = NO;
@@ -3300,10 +3267,8 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
 }
 
 - (void)checkpointChannelStructure {
-    // Channel structural events are infrequent enough that a complete guild
-    // structure checkpoint is acceptable for now. This will become dirty-ID
-    // persistence once the cache is normalized.
-    [[DCCacheManager sharedInstance] saveGuilds:self.guilds];
+    /* Channel/thread events update memory only; durable checkpointing persists
+     * the graph together with its matching Gateway sequence. */
 }
 
 - (void)handleChannelCreateWithData:(NSDictionary *)d {
@@ -3349,7 +3314,7 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
 
     DCChannel *channel = [self.channels objectForKey:channelID];
     if (!channel) {
-        // Treat an update for an object we somehow missed as an upsert. This is
+        // Treat an update for a missing object as an upsert. This is
         // safe for Gateway replay and avoids requiring a master refresh.
         [self handleChannelCreateWithData:d];
         return;
@@ -3479,14 +3444,6 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
                     continue;
                 }
                 guild.members = NSMutableArray.new;
-                // #ifdef DEBUG
-                //              NSLog(
-                //                  @"SYNC: length: %lu, range: [%lu..%lu]",
-                //                  (unsigned long)[op[@"items"] count],
-                //                  (unsigned long)[op[@"range"][0] integerValue],
-                //                  (unsigned long)[op[@"range"][1] integerValue]
-                //              );
-                // #endif
                 for (NSDictionary *item in [op objectForKey:@"items"]) {
                     id member = [self handleGuildMemberItemWithItem:item guild:guild];
                     if (!member) {
@@ -3540,12 +3497,8 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
             }
         }
         if ([guild.members count] > 100) {
-            // NSLog(@"Capping guild members at 100");
             guild.members = [[guild.members subarrayWithRange:NSMakeRange(0, 100)] mutableCopy];
         }
-        // #ifdef DEBUG
-        //      NSLog(@"size: %lu", (unsigned long)[guild.members count]);
-        // #endif
     }
     if (self.selectedChannel != nil && [self.selectedChannel.parentGuild.snowflake isEqualToString:guild.snowflake]) {
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -3639,7 +3592,7 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
             // loadedUsers is a canonical store and may have been restored from
             // disk before this IDENTIFY. Do not throw it away here; READY will
             // merge fresh user fields into those existing objects.
-            if (!self.loadedUsers) self.loadedUsers = NSMutableDictionary.new;
+            [self ensureLoadedUsersRegistry];
 
             // Roles are still rebuilt from READY.  Emoji objects, however,
             // may already have been synthesized from cached/external message
@@ -3657,9 +3610,6 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
     } else if (!guildId || !channelId) {
         return;
     }
-    // #ifdef DEBUG
-    //     NSLog(@"Sending guild subscription for guild %@ and channel %@", guildId, channelId);
-    // #endif
     [self sendJSON:@{
         @"op" : @(DCGatewayOpCodeGuildSubscriptions),
         @"d" : @{
@@ -3685,7 +3635,6 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
     // Get event type and sequence number
     NSString *t         = [parsedJsonResponse objectForKey:@"t"];
     self.sequenceNumber = [[parsedJsonResponse objectForKey:@"s"] integerValue];
-    // NSLog(@"Got event %@", t);
     // received READY
     if (![[parsedJsonResponse objectForKey:@"t"] isKindOfClass:[NSString class]]) {
         return;
@@ -3862,8 +3811,6 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
                                       object:self
                                     userInfo:@{ @"channelId" : channelId }];
                 }
-                [NSNotificationCenter.defaultCenter
-                    postNotificationName:@"MENTION_COUNT_UPDATED" object:self];
             });
         }
     } else if ([t isEqualToString:GUILD_MEMBER_LIST_UPDATE]) {
@@ -3895,7 +3842,12 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
             });
         }
     } else {
-        DBGLOG(@"Unhandled event type: %@, content: %@", t, d);
+        if ([DCTools isOriginalIPad]) {
+            // Log the event type without formatting the full ignored payload.
+            DBGLOG(@"Unhandled event type: %@ (payload omitted on iPad1,1)", t);
+        } else {
+            DBGLOG(@"Unhandled event type: %@, content: %@", t, d);
+        }
         return;
     }
 }
@@ -4104,7 +4056,6 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
     self.oldMode         = [[NSUserDefaults standardUserDefaults] boolForKey:@"hackyMode"];
 
     // Dev
-    // [DCTools checkForAppUpdate];
     // Devend
 
     
@@ -4115,7 +4066,7 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
     __weak typeof(self) weakSelf = self;
 
     
-    // Establish websocket connection with Discord. If we still have a session
+    // Establish the websocket connection. If a resumable session exists,
     // that handleHelloWithData: will attempt to RESUME, use the per-session
     // resume gateway supplied by READY.
     BOOL hasResumableSession =
@@ -4149,7 +4100,7 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
         }
         DBGLOG(@"Websocket closed with status code %lu and message: %@", (unsigned long)statusCode, message);
         if (statusCode == 1000) {
-            // we closed it, do nothing
+            // Ignore locally initiated closes.
             return;
         } else if (statusCode == 2) {
             // kCFErrorDomainCFNetwork error 2 => DNS failure, likely not connected to the internet
@@ -4251,16 +4202,24 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
                             [weakSelf handleReadyWithData:d preparedHints:preparedHints];
                         });
                     } else if (requiresMainModelCommit) {
+                        // Time structural main-thread commits for performance diagnostics.
+                        CFAbsoluteTime mainCommitStarted = CFAbsoluteTimeGetCurrent();
                         dispatch_sync(dispatch_get_main_queue(), ^{
                             [weakSelf handleDispatchWithResponse:parsedJsonResponse];
                         });
+                        CFTimeInterval mainCommitElapsed =
+                            CFAbsoluteTimeGetCurrent() - mainCommitStarted;
+                        if (mainCommitElapsed >= 0.100) {
+                            DBGLOG(@"[GatewayPerf] main commit %@ %.3fs",
+                                   eventType ?: @"(unknown)", mainCommitElapsed);
+                        }
                     } else {
                         [weakSelf handleDispatchWithResponse:parsedJsonResponse];
                     }
                     break;
                 }
                 case DCGatewayOpCodeHeartbeat: {
-                    // ack with our own heartbeat
+                    // Acknowledge with a heartbeat.
                     [weakSelf sendJSON:@{
                         @"op" : @(DCGatewayOpCodeHeartbeat),
                         @"d" : @(weakSelf.sequenceNumber)
@@ -4288,12 +4247,7 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
                     dispatch_async(dispatch_get_main_queue(), ^{
                         [UIApplication sharedApplication].networkActivityIndicatorVisible = NO;
                     });
-                    if (weakSelf.didAuthenticate && weakSelf.guilds.count > 0) {
-                        DCCacheManager *cache = [DCCacheManager sharedInstance];
-                        [cache saveGuilds:weakSelf.guilds];
-                        [cache saveUserInfo:weakSelf.currentUserInfo];
-                        DBGLOG(@"[HeartbeatACK] Flushed cold-start cache");
-                    }
+                    // HEARTBEAT_ACK is a liveness signal; durable graph checkpoints happen elsewhere.
                     break;
                 }
                 case DCGatewayOpCodeReconnect: {
@@ -4622,7 +4576,9 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
     self.currentUserInfo     = nil;
     self.guilds              = nil;
     self.channels            = nil;
+    pthread_rwlock_wrlock(&DCUserRegistryLock);
     self.loadedUsers         = nil;
+    pthread_rwlock_unlock(&DCUserRegistryLock);
     self.loadedRoles         = nil;
     self.loadedEmojis        = nil;
     self.selectedGuild       = nil;

@@ -11,6 +11,7 @@
 @class DCMessage;
 @class DCChannelWindow;
 @class DCMessageLayout;
+@class DTCoreTextLayoutFrame;
 @class DCUser;
 @class DCUserInfo;
 @class DCEmoji;
@@ -33,16 +34,11 @@
 
 // Targeted invalidation
 - (void)invalidateSnowflake:(NSString *)snowflake;
+- (void)invalidateSnowflakes:(NSArray *)snowflakes;
 
 // --- Layout cache ---
-// Composite-key cache for DCMessageLayout, keyed by snowflake, table
-// width, immediate neighbor snowflakes, and the message's edited
-// timestamp. A change to either neighbor snowflake (insertion or
-// eviction at either edge) or to editedTimestamp produces a natural
-// cache miss on the next lookup. Other state changes — attachment load
-// completing, reference snapshot refresh — don't have version fields in
-// the key yet (those land with the DCMessage.h changes in a later
-// slice), so callers still need -invalidateSnowflake: for those cases.
+// Composite-key layout cache keyed by message, width, neighbors, and edit timestamp.
+// Callers must explicitly invalidate state changes not represented by the key.
 - (DCMessageLayout *)layoutForSnowflake:(NSString *)snowflake
                               tableWidth:(CGFloat)tableWidth
                        previousSnowflake:(NSString *)previousSnowflake
@@ -55,6 +51,17 @@
   previousSnowflake:(NSString *)previousSnowflake
       nextSnowflake:(NSString *)nextSnowflake
     editedTimestamp:(NSDate *)editedTimestamp;
+
+// Text shaping is independent of message grouping/neighbors.  Cache the exact
+// DTCoreText frame separately so a window-edge/grouping topology change can
+// recompute cheap cell geometry without reshaping the attributed string.
+- (DTCoreTextLayoutFrame *)textLayoutFrameForSnowflake:(NSString *)snowflake
+                                          contentWidth:(CGFloat)contentWidth
+                                       editedTimestamp:(NSDate *)editedTimestamp;
+- (void)setTextLayoutFrame:(DTCoreTextLayoutFrame *)layoutFrame
+               forSnowflake:(NSString *)snowflake
+                contentWidth:(CGFloat)contentWidth
+             editedTimestamp:(NSDate *)editedTimestamp;
 
 // All cache access must go through the cache queue.
 // Use -performCacheOperation: for synchronous reads,
@@ -79,6 +86,7 @@
 
 // --- Memory management ---
 - (void)handleMemoryWarning;
+- (void)handleMemoryWarningPreservingSnowflakes:(NSSet *)preservedSnowflakes;
 
 
 // --- Message window cache (disk-backed) ---
@@ -100,7 +108,7 @@
 - (NSString *)loadLastSelectedGuildID;
 - (void)clearLastSelectedGuild;
 
-// --- Gateway resume checkpoint (disk-backed) ---
+// --- Gateway resume checkpoint ---
 // This record is deliberately written only after the state represented by
 // sequence has been queued/durably flushed. It is tiny and is not a second
 // copy of application state; it is only the cursor Discord needs for RESUME.
@@ -112,17 +120,17 @@
 - (NSDictionary *)loadGatewayCheckpoint;
 - (void)invalidateGatewayCheckpoint;
 
-// --- Guild/structure cache (disk-backed) ---
+// --- Guild/structure cache ---
 - (void)saveGuilds:(NSArray *)guilds;
 - (NSArray *)loadCachedGuilds;
 - (void)invalidateGuildCache;
 
-// --- Diaply Layout cache (disk-backed) ---
+// --- Display layout cache ---
 - (void)saveDisplayLayout:(NSArray *)displayGuilds;
 - (NSArray *)loadDisplayLayout;
 - (void)invalidateDisplayLayout;
 
-// --- Folder composite cache (disk-backed derived UI asset) ---
+// --- Folder composite cache ---
 // Folder composites are tiny, slow-changing PNGs keyed by folder membership
 // and the first four guild icon hashes. They are safe to discard/rebuild.
 - (UIImage *)cachedFolderCompositeForFolderID:(NSInteger)folderID
@@ -132,7 +140,7 @@
                    cacheKey:(NSString *)cacheKey;
 - (void)invalidateFolderCompositeCache;
 
-// --- User cache (disk-backed) ---
+// --- User cache ---
 // Users are persisted as small durable records rather than archiving runtime
 // UIImages/processed assets. Last-known presence is retained as part of the
 // resumable state baseline and is overwritten by live Gateway presence data.
@@ -140,7 +148,7 @@
 - (NSDictionary *)loadCachedUsers;
 - (void)invalidateUserCache;
 
-// --- User Info cache (disk-backed) ---
+// --- User info cache ---
 - (void)saveUserInfo:(DCUserInfo *)userInfo;
 - (DCUserInfo *)loadCachedUserInfo;
 

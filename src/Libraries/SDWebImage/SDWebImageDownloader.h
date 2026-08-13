@@ -49,6 +49,9 @@ typedef NS_OPTIONS(NSUInteger, SDWebImageDownloaderOptions) {
      * Put the image in the high priority queue.
      */
     SDWebImageDownloaderHighPriority = 1 << 7,
+
+    /** Return downloaded bytes without constructing a UIImage first. */
+    SDWebImageDownloaderAvoidDecode = 1 << 8,
 };
 
 typedef NS_ENUM(NSInteger, SDWebImageDownloaderExecutionOrder) {

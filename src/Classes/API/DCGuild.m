@@ -8,8 +8,18 @@
 
 #import "DCGuild.h"
 #import "DCChannel.h"
+#import "DCContentManager.h"
 
 @implementation DCGuild
+
+@synthesize icon = _icon;
+
+- (void)setIcon:(UIImage *)icon {
+    if (_icon == icon) return;
+    _icon = icon;
+    self.compositedIcon = icon ? [DCContentManager processedGuildIcon:icon] : nil;
+    if (icon) [DCContentManager processedFolderMiniGuildIcon:icon];
+}
 
 - (NSString*)description {
     return [NSString

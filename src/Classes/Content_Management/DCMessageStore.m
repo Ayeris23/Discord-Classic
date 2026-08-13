@@ -10,6 +10,7 @@
 #import "DCChannel.h"
 #import "DCMessage.h"
 #import "DCCacheManager.h"
+#import "DCTools.h"
 
 @interface DCMessageStore ()
 @property (nonatomic, strong) NSMutableDictionary *channelWindows; // channelID -> DCChannelWindow
@@ -46,9 +47,7 @@
 
     NSArray *older = [channel getMessages:limit beforeMessage:anchor];
 
-    // If a full page came back there's probably more history before it; a short
-    // page means we've reached the start of the channel. Read by proximity
-    // loading in the next slice to know when to stop fetching backward.
+    // A short page marks the start of channel history.
     DCChannelWindow *window = [self windowForChannel:channel.snowflake];
     window.hasMoreBefore = (older.count >= (NSUInteger)limit);
 
@@ -69,21 +68,21 @@
                                   afterMessage:(DCMessage *)anchor {
     if (!channel || !anchor) return nil;
 
-    static const int kForwardLimit = 50;
+    const int forwardLimit = [DCTools isOriginalIPad] ? 18 : 50;
 
-    NSArray *fetched = [channel getMessages:kForwardLimit afterMessage:anchor];
+    NSArray *fetched = [channel getMessages:forwardLimit afterMessage:anchor];
     if (!fetched || fetched.count == 0) {
         return nil; // nothing newer than the anchor
     }
 
     DCMessageDelta *delta = [DCMessageDelta new];
 
-    if (fetched.count >= kForwardLimit) {
+    if (fetched.count >= forwardLimit) {
         // Cap hit: there may be a gap between the anchor and the present, and
         // paginating forward to bridge it is too costly on this hardware. The
         // user is returning to live, so re-anchor at the present instead.
         delta.requiresFullReload  = YES;
-        delta.replacementMessages = [channel getMessages:kForwardLimit beforeMessage:nil] ?: @[];
+        delta.replacementMessages = [channel getMessages:forwardLimit beforeMessage:nil] ?: @[];
     } else {
         delta.candidateMessages = fetched;
     }
@@ -127,8 +126,10 @@
     [self.checkpointGenerations setObject:[NSNumber numberWithUnsignedInteger:generation]
                                    forKey:channelID];
 
+    // Coalesce checkpoints more aggressively on the most constrained device.
+    NSTimeInterval checkpointDelay = [DCTools isOriginalIPad] ? 6.0 : 1.5;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
-                                 (int64_t)(1.5 * NSEC_PER_SEC)),
+                                 (int64_t)(checkpointDelay * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
         NSUInteger current = [[self.checkpointGenerations objectForKey:channelID]
             unsignedIntegerValue];

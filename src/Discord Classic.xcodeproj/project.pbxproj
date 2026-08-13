@@ -404,6 +404,10 @@
 		2F1DF6882F53B505009C44CE /* DCLoginManager.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F1DF6872F53B505009C44CE /* DCLoginManager.m */; };
 		2F1DF68B2F53B61E009C44CE /* DCTokenLoginPage.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F1DF68A2F53B61E009C44CE /* DCTokenLoginPage.m */; };
 		2F1DF68E2F53FF8F009C44CE /* DCTwoFactorViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F1DF68D2F53FF8F009C44CE /* DCTwoFactorViewController.m */; };
+		2F32F3DA30299540003BF841 /* DCResourceManager.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F32F3D930299540003BF841 /* DCResourceManager.m */; };
+		2F32F3DD3029AFC3003BF841 /* DCChatMediaManager.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F32F3DC3029AFC3003BF841 /* DCChatMediaManager.m */; };
+		2F32F3DF302B0009003BF841 /* folder@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F32F3DE302B0009003BF841 /* folder@2x.png */; };
+		2F32F3E1302D5903003BF841 /* GuildIconBase@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F32F3E0302D5903003BF841 /* GuildIconBase@2x.png */; };
 		2F7424082F70DA7E00FAF3D9 /* Settings.bundle in Resources */ = {isa = PBXBuildFile; fileRef = 2F7424072F70DA7E00FAF3D9 /* Settings.bundle */; };
 		2F74240A2F70E51B00FAF3D9 /* Storyboard-7.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 2F7424092F70E51B00FAF3D9 /* Storyboard-7.storyboard */; };
 		2F74240D2F7771D600FAF3D9 /* Badge.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F74240B2F7771D600FAF3D9 /* Badge.png */; };
@@ -1085,6 +1089,12 @@
 		2F1DF68A2F53B61E009C44CE /* DCTokenLoginPage.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCTokenLoginPage.m; sourceTree = "<group>"; };
 		2F1DF68C2F53FF8F009C44CE /* DCTwoFactorViewController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCTwoFactorViewController.h; sourceTree = "<group>"; };
 		2F1DF68D2F53FF8F009C44CE /* DCTwoFactorViewController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCTwoFactorViewController.m; sourceTree = "<group>"; };
+		2F32F3D830299540003BF841 /* DCResourceManager.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCResourceManager.h; sourceTree = "<group>"; };
+		2F32F3D930299540003BF841 /* DCResourceManager.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCResourceManager.m; sourceTree = "<group>"; };
+		2F32F3DB3029AFC3003BF841 /* DCChatMediaManager.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCChatMediaManager.h; sourceTree = "<group>"; };
+		2F32F3DC3029AFC3003BF841 /* DCChatMediaManager.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCChatMediaManager.m; sourceTree = "<group>"; };
+		2F32F3DE302B0009003BF841 /* folder@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "folder@2x.png"; sourceTree = "<group>"; };
+		2F32F3E0302D5903003BF841 /* GuildIconBase@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "GuildIconBase@2x.png"; sourceTree = "<group>"; };
 		2F7424072F70DA7E00FAF3D9 /* Settings.bundle */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.plug-in"; path = Settings.bundle; sourceTree = "<group>"; };
 		2F7424092F70E51B00FAF3D9 /* Storyboard-7.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; path = "Storyboard-7.storyboard"; sourceTree = "<group>"; };
 		2F74240B2F7771D600FAF3D9 /* Badge.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = Badge.png; sourceTree = "<group>"; };
@@ -1444,6 +1454,7 @@
 		2F111FCD2F4E913F00159D64 /* Images */ = {
 			isa = PBXGroup;
 			children = (
+				2F32F3DE302B0009003BF841 /* folder@2x.png */,
 				2FFA38AB2F95E11500E67A40 /* AppIcons */,
 				2F74240B2F7771D600FAF3D9 /* Badge.png */,
 				2F74240C2F7771D600FAF3D9 /* Badge@2x.png */,
@@ -1638,6 +1649,7 @@
 		2F1120292F4E913F00159D64 /* Guild_Cell */ = {
 			isa = PBXGroup;
 			children = (
+				2F32F3E0302D5903003BF841 /* GuildIconBase@2x.png */,
 				2F11202A2F4E913F00159D64 /* GuildIconBase.png */,
 				2F11202B2F4E913F00159D64 /* GuildIconBaseSelected.png */,
 				2F11202C2F4E913F00159D64 /* newMessages.png */,
@@ -2478,6 +2490,10 @@
 		2FD079AF2F6E79650021205C /* Content_Management */ = {
 			isa = PBXGroup;
 			children = (
+				2F32F3DB3029AFC3003BF841 /* DCChatMediaManager.h */,
+				2F32F3DC3029AFC3003BF841 /* DCChatMediaManager.m */,
+				2F32F3D830299540003BF841 /* DCResourceManager.h */,
+				2F32F3D930299540003BF841 /* DCResourceManager.m */,
 				2F97F5602FDFC1F400A645B1 /* DCMessageLayout.h */,
 				2F97F5612FDFC1F400A645B1 /* DCMessageLayout.m */,
 				2F97F5622FDFC1F400A645B1 /* DCMessageLayoutBuilder.h */,
@@ -2893,6 +2909,7 @@
 				2F1120DA2F4E913F00159D64 /* GuildIconBase.png in Resources */,
 				2F1120AF2F4E913F00159D64 /* C-PSN@2x.png in Resources */,
 				2F1120B12F4E913F00159D64 /* C-Reddit@2x.png in Resources */,
+				2F32F3DF302B0009003BF841 /* folder@2x.png in Resources */,
 				2F1121002F4E913F00159D64 /* offline@2x.png in Resources */,
 				2FFA38BD2F95E11500E67A40 /* icon114.png in Resources */,
 				2F11209C2F4E913F00159D64 /* BarButtonPressed.png in Resources */,
@@ -2932,6 +2949,7 @@
 				2F1120B42F4E913F00159D64 /* C-Steam.png in Resources */,
 				2F1121082F4E913F00159D64 /* ContactsBar.png in Resources */,
 				2F1121132F4E913F00159D64 /* TbarBG.png in Resources */,
+				2F32F3E1302D5903003BF841 /* GuildIconBase@2x.png in Resources */,
 				2F11210B2F4E913F00159D64 /* DescIntroducer@2x.png in Resources */,
 				2F1120FF2F4E913F00159D64 /* offline.png in Resources */,
 				2F1120E52F4E913F00159D64 /* DirectMessages@2x.png in Resources */,
@@ -3212,6 +3230,7 @@
 				2F11229E2F4EA03000159D64 /* lossless_enc_neon.c in Sources */,
 				2F11225B2F4EA03000159D64 /* UIImage+animatedGIF.m in Sources */,
 				2F11237F2F4EB0AE00159D64 /* DCContactViewController.m in Sources */,
+				2F32F3DA30299540003BF841 /* DCResourceManager.m in Sources */,
 				2F11229C2F4EA03000159D64 /* lossless_enc_mips_dsp_r2.c in Sources */,
 				2F1123832F4EB0AE00159D64 /* DCIntroductionPage.m in Sources */,
 				2FFA39692F987C2C00E67A40 /* DTCSSStylesheet.m in Sources */,
@@ -3363,6 +3382,7 @@
 				2F1122F52F4EA03000159D64 /* UIImageView+HighlightedWebCache.m in Sources */,
 				2F1122AC2F4EA03000159D64 /* rescaler_sse2.c in Sources */,
 				2F1122712F4EA03000159D64 /* tree_dec.c in Sources */,
+				2F32F3DD3029AFC3003BF841 /* DCChatMediaManager.m in Sources */,
 				2FFA39872F987C2C00E67A40 /* NSDictionary+DTCoreText.m in Sources */,
 				2FFA39572F987C2C00E67A40 /* DTAttributedTextCell.m in Sources */,
 				2FFA3A6B2F98879E00E67A40 /* NSData+DTCrypto.m in Sources */,

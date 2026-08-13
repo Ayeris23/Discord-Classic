@@ -8,6 +8,8 @@
 
 #import <Foundation/Foundation.h>
 
+@class DTCoreTextLayoutFrame;
+
 // Immutable description of how a single message renders at a specific
 // table width, given its immediate neighbors. Produced by
 // DCMessageLayoutBuilder and cached by DCCacheManager.
@@ -50,6 +52,13 @@
 // attachments without re-running the text layout pass that -height
 // already performed.
 @property (nonatomic, assign) CGFloat textHeight;
+
+// The exact DTCoreText frame used to derive textHeight at tableWidth.
+// Keeping this frame lets the cell renderer reuse the already-prepared
+// line/glyph layout instead of rebuilding the same frame synchronously
+// on the main thread every time a reusable cell scrolls onscreen.
+// This is an in-memory rendering cache only; it is never persisted.
+@property (nonatomic, strong) DTCoreTextLayoutFrame *textLayoutFrame;
 
 // Whether this message type shows/measures an author name (see
 // +shouldShowAuthorNameForMessageType: in DCMessageLayoutBuilder).

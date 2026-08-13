@@ -11,6 +11,7 @@
 #import "UILazyImage.h"
 #import "DCEmoji.h"
 #include "SDWebImageManager.h"
+#import <objc/runtime.h>
 
 @implementation DCContentManager
 
@@ -97,6 +98,106 @@
     UIImage *result = UIGraphicsGetImageFromCurrentImageContext();
     UIGraphicsEndImageContext();
     return result;
+}
+
+// --- Guild Icon processing ---
+
++ (UIImage *)processedGuildIcon:(UIImage *)image {
+    if (!image) return nil;
+
+    // Associate the finished tile with the source image for reuse.
+    static char DCProcessedGuildIconAssociationKey;
+    UIImage *cached = objc_getAssociatedObject(
+        image, &DCProcessedGuildIconAssociationKey
+    );
+    if (cached) return cached;
+
+    // Serialize one-time rendering for callers sharing the same source image.
+    @synchronized(image) {
+        cached = objc_getAssociatedObject(
+            image, &DCProcessedGuildIconAssociationKey
+        );
+        if (cached) return cached;
+
+        const CGFloat canvasSize = 48.0f;
+        const CGFloat iconSize = 40.0f;
+        const CGFloat iconInset = (canvasSize - iconSize) / 2.0f;
+        const CGFloat cornerRadius = iconSize / 6.0f;
+
+        UIGraphicsBeginImageContextWithOptions(
+            CGSizeMake(canvasSize, canvasSize), NO, 0.0f
+        );
+
+        UIImage *base = [UIImage imageNamed:@"GuildIconBase"];
+        if (base) {
+            [base drawInRect:CGRectMake(0.0f, 0.0f, canvasSize, canvasSize)];
+        }
+
+        CGRect iconRect = CGRectMake(iconInset, iconInset, iconSize, iconSize);
+        CGContextRef context = UIGraphicsGetCurrentContext();
+        CGContextSaveGState(context);
+        [[UIBezierPath bezierPathWithRoundedRect:iconRect
+                                    cornerRadius:cornerRadius] addClip];
+        [image drawInRect:iconRect];
+        CGContextRestoreGState(context);
+
+        UIImage *result = UIGraphicsGetImageFromCurrentImageContext();
+        UIGraphicsEndImageContext();
+
+        if (result) {
+            objc_setAssociatedObject(
+                image, &DCProcessedGuildIconAssociationKey, result,
+                OBJC_ASSOCIATION_RETAIN_NONATOMIC
+            );
+        }
+        return result;
+    }
+}
+
++ (UIImage *)processedFolderMiniGuildIcon:(UIImage *)image {
+    if (!image) return nil;
+
+    // Rasterize the 12pt mini icon explicitly at the device scale.
+    static char DCProcessedFolderMiniGuildIconAssociationKey;
+    UIImage *cached = objc_getAssociatedObject(
+        image, &DCProcessedFolderMiniGuildIconAssociationKey
+    );
+    if (cached) return cached;
+
+    @synchronized(image) {
+        cached = objc_getAssociatedObject(
+            image, &DCProcessedFolderMiniGuildIconAssociationKey
+        );
+        if (cached) return cached;
+
+        const CGFloat miniSize = 12.0f;
+        const CGFloat cornerRadius = miniSize / 6.0f;
+        const CGFloat deviceScale = [UIScreen mainScreen].scale;
+
+        UIGraphicsBeginImageContextWithOptions(
+            CGSizeMake(miniSize, miniSize), NO, deviceScale
+        );
+
+        CGRect rect = CGRectMake(0.0f, 0.0f, miniSize, miniSize);
+        CGContextRef context = UIGraphicsGetCurrentContext();
+        CGContextSaveGState(context);
+        CGContextSetInterpolationQuality(context, kCGInterpolationHigh);
+        [[UIBezierPath bezierPathWithRoundedRect:rect
+                                    cornerRadius:cornerRadius] addClip];
+        [image drawInRect:rect];
+        CGContextRestoreGState(context);
+
+        UIImage *result = UIGraphicsGetImageFromCurrentImageContext();
+        UIGraphicsEndImageContext();
+
+        if (result) {
+            objc_setAssociatedObject(
+                image, &DCProcessedFolderMiniGuildIconAssociationKey, result,
+                OBJC_ASSOCIATION_RETAIN_NONATOMIC
+            );
+        }
+        return result;
+    }
 }
 
 // --- DM Icon processing ---

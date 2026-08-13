@@ -53,7 +53,20 @@ BOOL ImageDataHasPNGPreffix(NSData *data) {
 }
 
 FOUNDATION_STATIC_INLINE NSUInteger SDCacheCostForImage(UIImage *image) {
-    return image.size.height * image.size.width * image.scale * image.scale;
+    // Report decoded image cost in bytes so NSCache limits reflect memory use.
+    CGImageRef cgImage = image.CGImage;
+    if (cgImage) {
+        size_t bytesPerRow = CGImageGetBytesPerRow(cgImage);
+        size_t height = CGImageGetHeight(cgImage);
+        if (bytesPerRow > 0 && height > 0) {
+            return (NSUInteger)(bytesPerRow * height);
+        }
+    }
+
+    /* Conservative fallback for unusual UIImage subclasses without CGImage. */
+    CGFloat pixelWidth = image.size.width * image.scale;
+    CGFloat pixelHeight = image.size.height * image.scale;
+    return (NSUInteger)(pixelWidth * pixelHeight * 4.0f);
 }
 
 @interface SDImageCache ()

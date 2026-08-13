@@ -110,8 +110,7 @@ static dispatch_queue_t channel_send_queue;
                       token:DCServerCommunicator.sharedInstance.token];
         [urlRequest setValue:@"no-store" forHTTPHeaderField:@"Cache-Control"];
 
-        // NSString *escapedMessage = [message emojizedString];
-        NSString *escapedMessage = message;
+            NSString *escapedMessage = message;
         CFStringRef transform = CFSTR("Any-Hex/Java");
         NSMutableString *mutableMessage = [escapedMessage mutableCopy];
         CFStringTransform((__bridge CFMutableStringRef)mutableMessage, NULL, transform, NO);
@@ -499,10 +498,8 @@ static dispatch_queue_t channel_send_queue;
         NSError *error                  = nil;
         NSHTTPURLResponse *responseCode = nil;
 
-        //[UIApplication sharedApplication].networkActivityIndicatorVisible =
         // YES; [DCTools checkData:[NSURLConnection
         // sendSynchronousRequest:urlRequest
-        // returningResponse:&responseCode error:&error] withError:error];
         [NSURLConnection sendSynchronousRequest:urlRequest
                               returningResponse:&responseCode
                                           error:&error];
@@ -530,10 +527,8 @@ static dispatch_queue_t channel_send_queue;
 
         [urlRequest setHTTPBody:postbody];
 
-        //[UIApplication sharedApplication].networkActivityIndicatorVisible =
         // YES; [DCTools checkData:[NSURLConnection
         // sendSynchronousRequest:urlRequest
-        // returningResponse:&responseCode error:&error] withError:error];
         [NSURLConnection sendSynchronousRequest:urlRequest
                               returningResponse:&responseCode
                                           error:&error];
@@ -541,7 +536,12 @@ static dispatch_queue_t channel_send_queue;
          * NO;*/
     });
     dispatch_async(dispatch_get_main_queue(), ^{
-        [NSNotificationCenter.defaultCenter postNotificationName:@"MENTION_COUNT_UPDATED" object:nil];
+        if (self.snowflake.length) {
+            [NSNotificationCenter.defaultCenter
+                postNotificationName:@"MESSAGE ACK"
+                              object:self
+                            userInfo:@{ @"channelId" : self.snowflake }];
+        }
     });
 }
 
@@ -601,22 +601,30 @@ static dispatch_queue_t channel_send_queue;
         return nil;
     }
 
-    // starting here it gets important
+    // JSON decoding is pure Foundation work; keep it off the UI thread.
+    CFAbsoluteTime jsonStart = CFAbsoluteTimeGetCurrent();
+    NSError *parseError = nil;
+    NSArray *parsedResponse =
+        [NSJSONSerialization JSONObjectWithData:response
+                                        options:0
+                                          error:&parseError];
+
+    if (parseError) {
+        NSLog(@"Error: %@", parseError);
+        return nil;
+    }
+    if (parsedResponse.count <= 0) {
+        return nil;
+    }
+
+    CFAbsoluteTime jsonElapsed = CFAbsoluteTimeGetCurrent() - jsonStart;
+
+    // Model/UI-backed message construction still commits on main, but REST
+    // history defers the legacy screen-width height pass. The chat layout
+    // builder will perform the same DTCoreText measurement at the exact table
+    // width before the rows are inserted.
+    CFAbsoluteTime convertStart = CFAbsoluteTimeGetCurrent();
     dispatch_sync(dispatch_get_main_queue(), ^{
-        NSError *error = nil;
-        NSArray *parsedResponse =
-            [NSJSONSerialization JSONObjectWithData:response
-                                            options:0
-                                              error:&error];
-
-        if (error) {
-            NSLog(@"Error: %@", error);
-            return;
-        }
-
-        if (parsedResponse.count <= 0) {
-            return;
-        }
 
         static NSArray *joinMessages;
         static dispatch_once_t onceToken;
@@ -641,7 +649,7 @@ static dispatch_queue_t channel_send_queue;
         for (NSDictionary *jsonMessage in parsedResponse) {
             @autoreleasepool {
                 DCMessage *convertedMessage =
-                    [DCTools convertJsonMessage:jsonMessage];
+                    [DCTools convertJsonMessage:jsonMessage deferLegacyLayout:YES];
 
                 NSString *messageType = [jsonMessage objectForKey:@"type"];
 
@@ -649,8 +657,7 @@ static dispatch_queue_t channel_send_queue;
                     NSArray *mentions     = [jsonMessage objectForKey:@"mentions"];
                     NSDictionary *mention = mentions.firstObject;
                     // NSString *targetName = [mentions
-                    // objectForKey:@"global_name"];
-                    NSString *targetUsername =
+                            NSString *targetUsername =
                         [mention objectForKey:@"global_name"];
                     if ([targetUsername isKindOfClass:[NSNull class]]) {
                         targetUsername = @"Deleted User";
@@ -747,11 +754,14 @@ static dispatch_queue_t channel_send_queue;
                             lineBreakMode:NSLineBreakByWordWrapping];
                     convertedMessage.contentHeight = textSize.height + 20;
                 }
-                // NSLog(@"[DCChannel] snowflake: %@ contentHeight: %f", convertedMessage.snowflake, convertedMessage.contentHeight);
                 [messages insertObject:convertedMessage atIndex:0];
             }
         }
     });
+    NSLog(@"[ChatPerf] REST older parse %.3fs off-main, convert %.3fs main (%lu msgs)",
+          jsonElapsed,
+          CFAbsoluteTimeGetCurrent() - convertStart,
+          (unsigned long)messages.count);
 
     if (messages.count > 0) {
         return messages;
@@ -820,22 +830,27 @@ static dispatch_queue_t channel_send_queue;
         return nil;
     }
 
-   // starting here it gets important
+   // JSON decoding is pure Foundation work; keep it off the UI thread.
+   CFAbsoluteTime jsonStart = CFAbsoluteTimeGetCurrent();
+   NSError *parseError = nil;
+   NSArray *parsedResponse =
+       [NSJSONSerialization JSONObjectWithData:response
+                                       options:0
+                                         error:&parseError];
+
+   if (parseError) {
+       NSLog(@"Error: %@", parseError);
+       return nil;
+   }
+   if (parsedResponse.count <= 0) {
+       return nil;
+   }
+
+   CFAbsoluteTime jsonElapsed = CFAbsoluteTimeGetCurrent() - jsonStart;
+
+   // Keep model/UI-backed conversion on main, but defer legacy sizing.
+   CFAbsoluteTime convertStart = CFAbsoluteTimeGetCurrent();
    dispatch_sync(dispatch_get_main_queue(), ^{
-       NSError *error = nil;
-       NSArray *parsedResponse =
-           [NSJSONSerialization JSONObjectWithData:response
-                                           options:0
-                                             error:&error];
-
-       if (error) {
-           NSLog(@"Error: %@", error);
-           return;
-       }
-
-       if (parsedResponse.count <= 0) {
-           return;
-       }
 
        static NSArray *joinMessages;
        static dispatch_once_t onceToken;
@@ -860,7 +875,7 @@ static dispatch_queue_t channel_send_queue;
         for (NSDictionary *jsonMessage in parsedResponse) {
             @autoreleasepool {
                 DCMessage *convertedMessage =
-                    [DCTools convertJsonMessage:jsonMessage];
+                    [DCTools convertJsonMessage:jsonMessage deferLegacyLayout:YES];
 
                 NSString *messageType = [jsonMessage objectForKey:@"type"];
 
@@ -868,8 +883,7 @@ static dispatch_queue_t channel_send_queue;
                     NSArray *mentions     = [jsonMessage objectForKey:@"mentions"];
                     NSDictionary *mention = mentions.firstObject;
                     // NSString *targetName = [mentions
-                    // objectForKey:@"global_name"];
-                    NSString *targetUsername =
+                            NSString *targetUsername =
                         [mention objectForKey:@"global_name"];
                     if ([targetUsername isKindOfClass:[NSNull class]]) {
                         targetUsername = @"Deleted User";
@@ -966,11 +980,14 @@ static dispatch_queue_t channel_send_queue;
                             lineBreakMode:NSLineBreakByWordWrapping];
                     convertedMessage.contentHeight = textSize.height + 20;
                 }
-                // NSLog(@"[DCChannel] snowflake: %@ contentHeight: %f", convertedMessage.snowflake, convertedMessage.contentHeight);
                 [messages insertObject:convertedMessage atIndex:0];
             }
         }
     });
+    NSLog(@"[ChatPerf] REST newer parse %.3fs off-main, convert %.3fs main (%lu msgs)",
+          jsonElapsed,
+          CFAbsoluteTimeGetCurrent() - convertStart,
+          (unsigned long)messages.count);
 
     return messages.count > 0 ? messages : nil;
 }

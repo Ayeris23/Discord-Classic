@@ -29,6 +29,102 @@ static CGFloat DCEmojiGetAscent(void *refCon)  { return 14.0f; }
 static CGFloat DCEmojiGetDescent(void *refCon) { return 4.0f;  }
 static CGFloat DCEmojiGetWidth(void *refCon)   { return 20.0f; }
 
+typedef NS_OPTIONS(NSUInteger, DCMarkdownFeatures) {
+    DCMarkdownFeatureCode       = 1 << 0,
+    DCMarkdownFeatureBlock      = 1 << 1,
+    DCMarkdownFeatureInline     = 1 << 2,
+    DCMarkdownFeatureCustomEmoji= 1 << 3,
+    DCMarkdownFeatureMention    = 1 << 4,
+    DCMarkdownFeatureURL        = 1 << 5,
+    DCMarkdownFeatureEscape     = 1 << 6,
+    DCMarkdownFeatureStrip      = 1 << 7,
+};
+
+/*
+ * One cheap pass over the raw message lets the parser skip whole stages that
+ * cannot possibly match.  The flags intentionally allow false positives; a
+ * false positive only runs the existing parser stage, while a false negative
+ * could change rendering.  This keeps the optimization semantics-neutral.
+ */
+static DCMarkdownFeatures DCScanMarkdownFeatures(NSString *text) {
+    DCMarkdownFeatures features = 0;
+    NSUInteger length = text.length;
+
+    for (NSUInteger i = 0; i < length; i++) {
+        unichar ch = [text characterAtIndex:i];
+        switch (ch) {
+            case '`':
+                features |= DCMarkdownFeatureCode | DCMarkdownFeatureInline;
+                break;
+            case '#':
+            case '>':
+            case '-':
+                features |= DCMarkdownFeatureBlock;
+                break;
+            case '*':
+                features |= DCMarkdownFeatureBlock | DCMarkdownFeatureInline | DCMarkdownFeatureStrip;
+                break;
+            case '_':
+            case '~':
+                features |= DCMarkdownFeatureInline | DCMarkdownFeatureStrip;
+                break;
+            case '|':
+            case '[':
+                features |= DCMarkdownFeatureInline;
+                break;
+            case '<':
+                features |= DCMarkdownFeatureMention;
+                if (i + 1 < length) {
+                    unichar next = [text characterAtIndex:i + 1];
+                    if (next == ':') {
+                        features |= DCMarkdownFeatureCustomEmoji;
+                    } else if (next == 'a' && i + 2 < length && [text characterAtIndex:i + 2] == ':') {
+                        features |= DCMarkdownFeatureCustomEmoji;
+                    }
+                }
+                break;
+            case '@':
+                features |= DCMarkdownFeatureMention;
+                break;
+            case '.': {
+                // Require token-like characters around a dot before invoking NSDataDetector.
+                if (i > 0 && i + 1 < length) {
+                    unichar prev = [text characterAtIndex:i - 1];
+                    unichar next = [text characterAtIndex:i + 1];
+                    NSCharacterSet *alphaNum = [NSCharacterSet alphanumericCharacterSet];
+                    if ([alphaNum characterIsMember:prev] &&
+                        [alphaNum characterIsMember:next]) {
+                        features |= DCMarkdownFeatureURL;
+                    }
+                }
+                break;
+            }
+            case ':':
+                if (i + 2 < length &&
+                    [text characterAtIndex:i + 1] == '/' &&
+                    [text characterAtIndex:i + 2] == '/') {
+                    features |= DCMarkdownFeatureURL;
+                }
+                break;
+            case '/':
+                // A slash alone is not something NSDataDetector can linkify.
+                // Schemed URLs are caught by the preceding :// and domains by '.'.
+                break;
+            case '\\':
+                features |= DCMarkdownFeatureEscape;
+                break;
+            default:
+                break;
+        }
+    }
+    return features;
+}
+
+
+@interface DCMarkdownParser ()
+@property (nonatomic, strong) NSMutableDictionary *compiledRegexCache;
+@property (nonatomic, strong) NSDataDetector *cachedLinkDetector;
+@end
 
 @implementation DCMarkdownParser
 
@@ -48,6 +144,7 @@ static CGFloat DCEmojiGetWidth(void *refCon)   { return 20.0f; }
 - (instancetype)init {
     self = [super init];
     if (self) {
+        _compiledRegexCache = [NSMutableDictionary dictionary];
         [self setupDefaults];
     }
     return self;
@@ -75,6 +172,80 @@ static CGFloat DCEmojiGetWidth(void *refCon)   { return 20.0f; }
     _strikethroughColor = _defaultColor;
 
     _minimumLineHeight = 18.0f;
+}
+
+
+
+#pragma mark - Cached Text Checking
+
+- (NSRegularExpression *)cachedRegexWithPattern:(NSString *)pattern
+                                        options:(NSRegularExpressionOptions)options {
+    if (!pattern.length) return nil;
+    NSString *key = [NSString stringWithFormat:@"%lu:%@", (unsigned long)options, pattern];
+    @synchronized (self.compiledRegexCache) {
+        NSRegularExpression *regex = [self.compiledRegexCache objectForKey:key];
+        if (!regex) {
+            regex = [NSRegularExpression regularExpressionWithPattern:pattern
+                                                              options:options
+                                                                error:nil];
+            if (regex) [self.compiledRegexCache setObject:regex forKey:key];
+        }
+        return regex;
+    }
+}
+
+- (NSDataDetector *)cachedURLDetector {
+    @synchronized (self) {
+        if (!self.cachedLinkDetector) {
+            self.cachedLinkDetector = [NSDataDetector dataDetectorWithTypes:NSTextCheckingTypeLink
+                                                                       error:nil];
+        }
+        return self.cachedLinkDetector;
+    }
+}
+
+
+- (void)prewarmReusableMatchers {
+    /*
+     * Compile the fixed parser regexes and create NSDataDetector away from the
+     * first user-driven scroll.  cachedRegexWithPattern: is synchronized, so
+     * this is safe to run from the chat controller's low-priority queue.
+     */
+    NSArray *plainPatterns = @[
+        @"\\\\([*_~`|\\\\#])",
+        @"`([^`\\n]+)`",
+        @"\\[([^\\]]+)\\]\\(([^\\)]+)\\)",
+        @"<@!?([0-9]+)>",
+        @"<#([0-9]+)>",
+        @"<@&([0-9]+)>",
+        @"<:[a-zA-Z0-9_]+:[0-9]+>",
+        @"<t:([0-9]+)(?::([tTdDfFR]))?>",
+        @"<(a?):(\\w+):(\\d+)>"
+    ];
+    for (NSString *pattern in plainPatterns) {
+        [self cachedRegexWithPattern:pattern options:0];
+    }
+
+    NSArray *dotPatterns = @[
+        @"(?<!\\\\)(\\*\\*\\*)(.+?)(\\*\\*\\*)",
+        @"(?<!\\\\)(\\*\\*)(.+?)(\\*\\*)",
+        @"(?<!\\\\)(__)(.+?)(__)",
+        @"(?<!\\\\)(~~)(.+?)(~~)",
+        @"(?<!\\\\)(?<!\\*)(\\*)(?!\\*).+?(?<!\\*)(\\*)(?!\\*)",
+        @"(?<!\\\\)\\*\\*\\*(.+?)\\*\\*\\*",
+        @"(?<!\\\\)\\*\\*(.+?)\\*\\*",
+        @"(?<!\\\\)__(.+?)__",
+        @"(?<!\\*)(?<!\\\\)\\*(?!\\*)(.*?)(?<!\\*)\\*(?!\\*)|(?<!_)_(?!_)(.*?)_",
+        @"(?<![a-zA-Z0-9])(?<!\\\\)_(.+?)_(?![a-zA-Z0-9])",
+        @"(?<!\\\\)~~(.+?)~~",
+        @"\\|\\|(.+?)\\|\\|"
+    ];
+    for (NSString *pattern in dotPatterns) {
+        [self cachedRegexWithPattern:pattern
+                             options:NSRegularExpressionDotMatchesLineSeparators];
+    }
+
+    (void)[self cachedURLDetector];
 }
 
 
@@ -158,17 +329,35 @@ static CGFloat DCEmojiGetWidth(void *refCon)   { return 20.0f; }
             attributes:[self baseAttributes]];
 
     NSMutableArray *protectedRanges = [NSMutableArray array];
+    DCMarkdownFeatures features = DCScanMarkdownFeatures(markdown);
 
-    // Order matters — code blocks first to protect their contents
-    [self applyMultilineCodeBlocks:result protectedRanges:protectedRanges];
-    [self applyBlockLevelFormatting:result protectedRanges:protectedRanges];
-    [self applyInlineFormatting:result protectedRanges:protectedRanges];
-    [self applyCustomEmojis:result protectedRanges:protectedRanges];
-    [self applyMentions:result protectedRanges:protectedRanges];
-    [self applyURLDetection:result protectedRanges:protectedRanges];
+    // Order matters: parse code blocks first to protect their contents.
+    // skips stages only when the raw character scan proves they cannot match.
+    if (features & DCMarkdownFeatureCode) {
+        [self applyMultilineCodeBlocks:result protectedRanges:protectedRanges];
+    }
+    if (features & DCMarkdownFeatureBlock) {
+        [self applyBlockLevelFormatting:result protectedRanges:protectedRanges];
+    }
+    if (features & DCMarkdownFeatureInline) {
+        [self applyInlineFormatting:result protectedRanges:protectedRanges];
+    }
+    if (features & DCMarkdownFeatureCustomEmoji) {
+        [self applyCustomEmojis:result protectedRanges:protectedRanges];
+    }
+    if (features & DCMarkdownFeatureMention) {
+        [self applyMentions:result protectedRanges:protectedRanges];
+    }
+    if (features & DCMarkdownFeatureURL) {
+        [self applyURLDetection:result protectedRanges:protectedRanges];
+    }
 
-    [self stripSyntaxMarkers:result];
-    [self applyEscapes:result protectedRanges:protectedRanges];
+    if (features & DCMarkdownFeatureStrip) {
+        [self stripSyntaxMarkers:result];
+    }
+    if (features & DCMarkdownFeatureEscape) {
+        [self applyEscapes:result protectedRanges:protectedRanges];
+    }
         
     return [result copy];
 }
@@ -176,36 +365,68 @@ static CGFloat DCEmojiGetWidth(void *refCon)   { return 20.0f; }
 - (NSAttributedString *)attributedStringFromMarkdown:(NSString *)markdown
                                          maxFontSize:(CGFloat)maxFontSize
                                                color:(UIColor *)color {
-    DCMarkdownParser *p = [[DCMarkdownParser alloc] init];
+    // Cache compact reply parsers by rendering style.
+    static NSMutableDictionary *compactParserCache = nil;
+    static dispatch_once_t compactParserCacheOnce;
+    dispatch_once(&compactParserCacheOnce, ^{
+        compactParserCache = [NSMutableDictionary dictionary];
+    });
 
-    // Cap every font variant at maxFontSize
-    p.defaultFont    = [UIFont systemFontOfSize:maxFontSize];
-    p.boldFont       = [UIFont boldSystemFontOfSize:maxFontSize];
-    p.italicFont     = [UIFont italicSystemFontOfSize:maxFontSize];
-    p.boldItalicFont = [UIFont fontWithName:@"Helvetica-BoldOblique" size:maxFontSize];
-    p.codeFont       = [UIFont fontWithName:@"Courier" size:maxFontSize];
-    p.underlineFont  = [UIFont systemFontOfSize:maxFontSize];
-    p.h1Font         = [UIFont boldSystemFontOfSize:maxFontSize];
-    p.h2Font         = [UIFont boldSystemFontOfSize:maxFontSize];
-    p.h3Font         = [UIFont boldSystemFontOfSize:maxFontSize];
-    p.subtextFont    = [UIFont systemFontOfSize:maxFontSize];
+    CGFloat red = 0.0f, green = 0.0f, blue = 0.0f, alpha = 1.0f;
+    if (![color getRed:&red green:&green blue:&blue alpha:&alpha]) {
+        CGFloat white = 0.0f;
+        if ([color getWhite:&white alpha:&alpha]) {
+            red = green = blue = white;
+        }
+    }
 
-    // Override all color slots with the requested color
-    p.defaultColor       = color;
-    p.linkColor          = color;
-    p.mentionColor       = color;
-    p.codeTextColor      = color;
-    p.spoilerHiddenColor = color;
-    p.blockquoteColor    = color;
-    p.subtextColor       = color;
-    p.strikethroughColor = color;
+    NSString *styleKey = [NSString stringWithFormat:@"%.2f:%u:%u:%u:%u",
+                          maxFontSize,
+                          (unsigned int)(red * 255.0f + 0.5f),
+                          (unsigned int)(green * 255.0f + 0.5f),
+                          (unsigned int)(blue * 255.0f + 0.5f),
+                          (unsigned int)(alpha * 255.0f + 0.5f)];
 
-    // Zero the minimum line height so CoreText uses natural 10pt metrics —
-    // the reply label is only 16px tall and the default 18pt floor would
-    // push text outside the frame, making the label appear blank.
-    p.minimumLineHeight = 0.0f;
+    DCMarkdownParser *p = nil;
+    @synchronized (compactParserCache) {
+        p = [compactParserCache objectForKey:styleKey];
+        if (!p) {
+            p = [[DCMarkdownParser alloc] init];
 
-    NSMutableAttributedString *result = [[p attributedStringFromMarkdown:markdown] mutableCopy];
+            // Cap every font variant at maxFontSize
+            p.defaultFont    = [UIFont systemFontOfSize:maxFontSize];
+            p.boldFont       = [UIFont boldSystemFontOfSize:maxFontSize];
+            p.italicFont     = [UIFont italicSystemFontOfSize:maxFontSize];
+            p.boldItalicFont = [UIFont fontWithName:@"Helvetica-BoldOblique" size:maxFontSize];
+            p.codeFont       = [UIFont fontWithName:@"Courier" size:maxFontSize];
+            p.underlineFont  = [UIFont systemFontOfSize:maxFontSize];
+            p.h1Font         = [UIFont boldSystemFontOfSize:maxFontSize];
+            p.h2Font         = [UIFont boldSystemFontOfSize:maxFontSize];
+            p.h3Font         = [UIFont boldSystemFontOfSize:maxFontSize];
+            p.subtextFont    = [UIFont systemFontOfSize:maxFontSize];
+
+            // Override all color slots with the requested color
+            p.defaultColor       = color;
+            p.linkColor          = color;
+            p.mentionColor       = color;
+            p.codeTextColor      = color;
+            p.spoilerHiddenColor = color;
+            p.blockquoteColor    = color;
+            p.subtextColor       = color;
+            p.strikethroughColor = color;
+
+            // Reply labels are only 16pt tall; use natural CoreText metrics.
+            p.minimumLineHeight = 0.0f;
+
+            [compactParserCache setObject:p forKey:styleKey];
+        }
+    }
+
+    NSAttributedString *parsed = nil;
+    @synchronized (p) {
+        parsed = [p attributedStringFromMarkdown:markdown];
+    }
+    NSMutableAttributedString *result = [parsed mutableCopy];
 
     NSDictionary *shadowDict = @{
         @"Offset": [NSValue valueWithCGSize:CGSizeMake(0, 1)],
@@ -217,11 +438,15 @@ static CGFloat DCEmojiGetWidth(void *refCon)   { return 20.0f; }
                    range:NSMakeRange(0, result.length)];
 
     return [result copy];
-
-    return [p attributedStringFromMarkdown:markdown];
 }
 
 - (void)stripSyntaxMarkers:(NSMutableAttributedString *)string {
+    static NSCharacterSet *stripMarkerSet = nil;
+    static dispatch_once_t stripMarkerOnce;
+    dispatch_once(&stripMarkerOnce, ^{
+        stripMarkerSet = [NSCharacterSet characterSetWithCharactersInString:@"*_~"];
+    });
+    if ([string.string rangeOfCharacterFromSet:stripMarkerSet].location == NSNotFound) return;
     NSArray *patterns = @[
         @"(?<!\\\\)(\\*\\*\\*)(.+?)(\\*\\*\\*)",
         @"(?<!\\\\)(\\*\\*)(.+?)(\\*\\*)",
@@ -231,10 +456,8 @@ static CGFloat DCEmojiGetWidth(void *refCon)   { return 20.0f; }
     ];
     
     for (NSString *pattern in patterns) {
-        NSRegularExpression *regex = [NSRegularExpression
-            regularExpressionWithPattern:pattern
-                                 options:NSRegularExpressionDotMatchesLineSeparators
-                                   error:nil];
+        NSRegularExpression *regex = [self cachedRegexWithPattern:pattern
+                                                      options:NSRegularExpressionDotMatchesLineSeparators];
         NSArray *matches = [regex matchesInString:string.string
                                           options:0
                                             range:NSMakeRange(0, string.string.length)];
@@ -495,6 +718,12 @@ static CGFloat DCEmojiGetWidth(void *refCon)   { return 20.0f; }
 
 - (void)applyInlineFormatting:(NSMutableAttributedString *)string
                protectedRanges:(NSMutableArray *)protectedRanges {
+    static NSCharacterSet *inlineMarkerSet = nil;
+    static dispatch_once_t inlineMarkerOnce;
+    dispatch_once(&inlineMarkerOnce, ^{
+        inlineMarkerSet = [NSCharacterSet characterSetWithCharactersInString:@"*_~`|["];
+    });
+    if ([string.string rangeOfCharacterFromSet:inlineMarkerSet].location == NSNotFound) return;
     [self applyMarkdownLinks:string protectedRanges:protectedRanges];
     [self applyInlineCode:string protectedRanges:protectedRanges];
 
@@ -527,10 +756,9 @@ static CGFloat DCEmojiGetWidth(void *refCon)   { return 20.0f; }
 
 - (void)applyEscapes:(NSMutableAttributedString *)string
       protectedRanges:(NSMutableArray *)protectedRanges {
-    NSRegularExpression *regex = [NSRegularExpression
-        regularExpressionWithPattern:@"\\\\([*_~`|\\\\#])"
-                             options:0
-                               error:nil];
+    if ([string.string rangeOfString:@"\\"].location == NSNotFound) return;
+    NSRegularExpression *regex = [self cachedRegexWithPattern:@"\\\\([*_~`|\\\\#])"
+                                                      options:0];
     
     NSArray *matches = [regex matchesInString:string.string
                                       options:0
@@ -549,10 +777,8 @@ static CGFloat DCEmojiGetWidth(void *refCon)   { return 20.0f; }
 
 - (void)applyInlineCode:(NSMutableAttributedString *)string
          protectedRanges:(NSMutableArray *)protectedRanges {
-    NSRegularExpression *regex = [NSRegularExpression
-        regularExpressionWithPattern:@"`([^`\\n]+)`"
-                             options:0
-                               error:nil];
+    NSRegularExpression *regex = [self cachedRegexWithPattern:@"`([^`\\n]+)`"
+                                                      options:0];
 
     NSArray *matches = [regex matchesInString:string.string
                                       options:0
@@ -587,10 +813,8 @@ static CGFloat DCEmojiGetWidth(void *refCon)   { return 20.0f; }
            underline:(BOOL)underline
               string:(NSMutableAttributedString *)string
      protectedRanges:(NSMutableArray *)protectedRanges {
-    NSRegularExpression *regex = [NSRegularExpression
-        regularExpressionWithPattern:pattern
-                             options:NSRegularExpressionDotMatchesLineSeparators
-                               error:nil];
+    NSRegularExpression *regex = [self cachedRegexWithPattern:pattern
+                                                      options:NSRegularExpressionDotMatchesLineSeparators];
     NSArray *matches = [regex matchesInString:string.string
                                       options:0
                                         range:NSMakeRange(0, string.string.length)];
@@ -615,10 +839,8 @@ static CGFloat DCEmojiGetWidth(void *refCon)   { return 20.0f; }
 
 - (void)applySpoilers:(NSMutableAttributedString *)string
        protectedRanges:(NSMutableArray *)protectedRanges {
-    NSRegularExpression *regex = [NSRegularExpression
-        regularExpressionWithPattern:@"\\|\\|(.+?)\\|\\|"
-                             options:NSRegularExpressionDotMatchesLineSeparators
-                               error:nil];
+    NSRegularExpression *regex = [self cachedRegexWithPattern:@"\\|\\|(.+?)\\|\\|"
+                                                      options:NSRegularExpressionDotMatchesLineSeparators];
 
     NSArray *matches = [regex matchesInString:string.string
                                       options:0
@@ -654,10 +876,8 @@ static CGFloat DCEmojiGetWidth(void *refCon)   { return 20.0f; }
 
 - (void)applyMarkdownLinks:(NSMutableAttributedString *)string
             protectedRanges:(NSMutableArray *)protectedRanges {
-    NSRegularExpression *regex = [NSRegularExpression
-        regularExpressionWithPattern:@"\\[([^\\]]+)\\]\\(([^\\)]+)\\)"
-                             options:0
-                               error:nil];
+    NSRegularExpression *regex = [self cachedRegexWithPattern:@"\\[([^\\]]+)\\]\\(([^\\)]+)\\)"
+                                                      options:0];
 
     NSArray *matches = [regex matchesInString:string.string
                                       options:0
@@ -761,6 +981,9 @@ static CGFloat DCEmojiGetWidth(void *refCon)   { return 20.0f; }
 
 - (void)applyMentions:(NSMutableAttributedString *)string
        protectedRanges:(NSMutableArray *)protectedRanges {
+    NSString *plain = string.string;
+    if ([plain rangeOfString:@"<"].location == NSNotFound &&
+        [plain rangeOfString:@"@"].location == NSNotFound) return;
     [self applyMentionPattern:@"<@!?([0-9]+)>"
                     urlPrefix:@"discord-user://"
                        string:string protectedRanges:protectedRanges];
@@ -786,10 +1009,7 @@ static CGFloat DCEmojiGetWidth(void *refCon)   { return 20.0f; }
                   urlPrefix:(NSString *)urlPrefix
                      string:(NSMutableAttributedString *)string
              protectedRanges:(NSMutableArray *)protectedRanges {
-    NSRegularExpression *regex = [NSRegularExpression
-        regularExpressionWithPattern:pattern
-                             options:0
-                               error:nil];
+    NSRegularExpression *regex = [self cachedRegexWithPattern:pattern options:0];
 
     NSArray *matches = [regex matchesInString:string.string
                                       options:0
@@ -874,17 +1094,12 @@ static CGFloat DCEmojiGetWidth(void *refCon)   { return 20.0f; }
 
 - (void)applyTimestamps:(NSMutableAttributedString *)string
          protectedRanges:(NSMutableArray *)protectedRanges {
-    NSError *regexError = nil;
-    NSRegularExpression *regex = [NSRegularExpression
-        regularExpressionWithPattern:@"<t:([0-9]+)(?::([tTdDfFR]))?>"
-                             options:0
-                               error:&regexError];
-    // NSLog(@"regex: %@ error: %@", regex, regexError);
+    NSRegularExpression *regex = [self cachedRegexWithPattern:@"<t:([0-9]+)(?::([tTdDfFR]))?>"
+                                                      options:0];
 
     NSArray *matches = [regex matchesInString:string.string
                                       options:0
                                         range:NSMakeRange(0, string.string.length)];
-    // NSLog(@"timestamp matches: %lu", (unsigned long)matches.count);
 
     for (NSTextCheckingResult *match in [matches reverseObjectEnumerator]) {
         if ([self range:match.range isProtectedBy:protectedRanges]) continue;
@@ -909,7 +1124,6 @@ static CGFloat DCEmojiGetWidth(void *refCon)   { return 20.0f; }
                           toRange:replacedRange
                          inString:string
                     overrideColor:nil];
-        // NSLog(@"timestamp attrs: %@", [string attributesAtIndex:replacedRange.location effectiveRange:NULL]);
         [protectedRanges addObject:[NSValue valueWithRange:replacedRange]];
     }
 }
@@ -953,9 +1167,20 @@ static CGFloat DCEmojiGetWidth(void *refCon)   { return 20.0f; }
 
 - (void)applyURLDetection:(NSMutableAttributedString *)string
            protectedRanges:(NSMutableArray *)protectedRanges {
-    NSError *error = nil;
-    NSDataDetector *detector = [NSDataDetector dataDetectorWithTypes:NSTextCheckingTypeLink
-                                                               error:&error];
+    /*
+     * NSDataDetector is surprisingly expensive to initialize on iOS 5/6.
+     * Most chat messages cannot contain a URL at all, so reject those before
+     * touching the system text-checking stack.  Any normal URL/domain has at
+     * least a dot, slash, or scheme colon.
+     */
+    NSString *plain = string.string;
+    if ([plain rangeOfString:@"."].location == NSNotFound &&
+        [plain rangeOfString:@"/"].location == NSNotFound &&
+        [plain rangeOfString:@":"].location == NSNotFound) {
+        return;
+    }
+
+    NSDataDetector *detector = [self cachedURLDetector];
     if (!detector) return;
 
     NSArray *matches = [detector matchesInString:string.string
@@ -1040,10 +1265,11 @@ static CGFloat DCEmojiGetWidth(void *refCon)   { return 20.0f; }
 
 - (void)applyCustomEmojis:(NSMutableAttributedString *)string
            protectedRanges:(NSMutableArray *)protectedRanges {
-    NSRegularExpression *regex = [NSRegularExpression
-        regularExpressionWithPattern:@"<(a?):(\\w+):(\\d+)>"
-                             options:0
-                               error:nil];
+    NSString *plain = string.string;
+    if ([plain rangeOfString:@"<:"].location == NSNotFound &&
+        [plain rangeOfString:@"<a:"].location == NSNotFound) return;
+    NSRegularExpression *regex = [self cachedRegexWithPattern:@"<(a?):(\\w+):(\\d+)>"
+                                                      options:0];
 
     NSArray *matches = [regex matchesInString:string.string
                                       options:0
@@ -1115,10 +1341,7 @@ static CGFloat DCEmojiGetWidth(void *refCon)   { return 20.0f; }
 - (void)protectPattern:(NSString *)pattern
                 string:(NSMutableAttributedString *)string
         protectedRanges:(NSMutableArray *)protectedRanges {
-    NSRegularExpression *regex = [NSRegularExpression
-        regularExpressionWithPattern:pattern
-                             options:0
-                               error:nil];
+    NSRegularExpression *regex = [self cachedRegexWithPattern:pattern options:0];
     NSArray *matches = [regex matchesInString:string.string
                                       options:0
                                         range:NSMakeRange(0, string.string.length)];

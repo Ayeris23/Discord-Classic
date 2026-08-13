@@ -37,4 +37,17 @@
 // within the batch are computed internally.
 - (void)prewarmLayoutCacheForMessages:(NSArray *)messages;
 
+// Pre-warm one or more exact layouts at the width the table will actually use.
+// These preserve the authoritative DTCoreText sizing path; they only change
+// when the work runs (before publication rather than inside UITableView).
+- (void)prewarmLayoutCacheForMessage:(DCMessage *)message
+                        previousMessage:(DCMessage *)previousMessage
+                            nextMessage:(DCMessage *)nextMessage
+                             tableWidth:(CGFloat)tableWidth;
+
+- (void)prewarmLayoutCacheForMessages:(NSArray *)messages
+                      previousMessage:(DCMessage *)previousMessage
+                          nextMessage:(DCMessage *)nextMessage
+                           tableWidth:(CGFloat)tableWidth;
+
 @end

@@ -8,6 +8,7 @@
 
 #import "DCCacheManager.h"
 #import "DCMessageLayout.h"
+#import "DTCoreTextLayoutFrame.h"
 #import "DCUser.h"
 #import "DCMessage.h"
 #import "DCChannelWindow.h"
@@ -23,7 +24,9 @@
 @property (strong, nonatomic) NSMutableDictionary *decorationCache;
 @property (strong, nonatomic) NSMutableDictionary *emojiCache;
 @property (strong, nonatomic) NSMutableDictionary *layoutCache;
+@property (strong, nonatomic) NSMutableDictionary *textLayoutFrameCache;
 @property (nonatomic, assign) dispatch_queue_t cacheQueue;
+@property (nonatomic, assign) dispatch_queue_t layoutCacheQueue;
 @end
 
 @implementation DCCacheManager
@@ -45,7 +48,9 @@
         _decorationCache = [NSMutableDictionary dictionary];
         _emojiCache      = [NSMutableDictionary dictionary];
         _layoutCache     = [NSMutableDictionary dictionary];
+        _textLayoutFrameCache = [NSMutableDictionary dictionary];
         self.cacheQueue = dispatch_queue_create("com.discordclassic.cacheQueue", DISPATCH_QUEUE_SERIAL);
+        self.layoutCacheQueue = dispatch_queue_create("com.discordclassic.layoutCacheQueue", DISPATCH_QUEUE_SERIAL);
     }
     return self;
 }
@@ -53,6 +58,9 @@
 - (void)dealloc {
     if (self.cacheQueue) {
         dispatch_release(self.cacheQueue);
+    }
+    if (self.layoutCacheQueue) {
+        dispatch_release(self.layoutCacheQueue);
     }
 }
 
@@ -69,6 +77,15 @@
 // Private helper — composite key for the layout cache. Shares the
 // "<snowflake>_..." prefix convention with cacheKeyForSnowflake:width:
 // so -invalidateSnowflake: can sweep both dictionaries the same way.
+- (NSString *)textLayoutFrameCacheKeyForSnowflake:(NSString *)snowflake
+                                         contentWidth:(CGFloat)contentWidth
+                                      editedTimestamp:(NSDate *)editedTimestamp {
+    if (!snowflake) return nil;
+    NSTimeInterval edited = editedTimestamp ? [editedTimestamp timeIntervalSince1970] : 0;
+    return [NSString stringWithFormat:@"%@_text_w%.0f_e%.0f",
+            snowflake, contentWidth, edited];
+}
+
 - (NSString *)layoutCacheKeyForSnowflake:(NSString *)snowflake
                                 tableWidth:(CGFloat)tableWidth
                          previousSnowflake:(NSString *)previousSnowflake
@@ -94,9 +111,15 @@
                                      editedTimestamp:editedTimestamp];
     if (!key) return nil;
     __block DCMessageLayout *result = nil;
-    dispatch_sync(self.cacheQueue, ^{
+    CFAbsoluteTime waitStart = CFAbsoluteTimeGetCurrent();
+    dispatch_sync(self.layoutCacheQueue, ^{
         result = self.layoutCache[key];
     });
+    NSTimeInterval wait = CFAbsoluteTimeGetCurrent() - waitStart;
+    if (wait >= 0.008) {
+        NSLog(@"[CachePerf] hot layout read %@ waited %.1fms",
+              snowflake ?: @"?", wait * 1000.0);
+    }
     return result;
 }
 
@@ -112,8 +135,44 @@
                                        nextSnowflake:nextSnowflake
                                      editedTimestamp:editedTimestamp];
     if (!key || !layout) return;
-    dispatch_async(self.cacheQueue, ^{
+    /*
+     * A prewarm is only useful if the entry is guaranteed to exist before
+     * UIKit starts asking for row heights.  The previous asynchronous write
+     * let prewarmLayoutCache... return while these writes were still queued,
+     * so the main thread could immediately observe a miss and rebuild the
+     * wrapper layout.
+     */
+    dispatch_sync(self.layoutCacheQueue, ^{
         self.layoutCache[key] = layout;
+    });
+}
+
+- (DTCoreTextLayoutFrame *)textLayoutFrameForSnowflake:(NSString *)snowflake
+                                          contentWidth:(CGFloat)contentWidth
+                                       editedTimestamp:(NSDate *)editedTimestamp {
+    NSString *key = [self textLayoutFrameCacheKeyForSnowflake:snowflake
+                                                   contentWidth:contentWidth
+                                                editedTimestamp:editedTimestamp];
+    if (!key) return nil;
+    __block DTCoreTextLayoutFrame *result = nil;
+    dispatch_sync(self.layoutCacheQueue, ^{
+        result = self.textLayoutFrameCache[key];
+    });
+    return result;
+}
+
+- (void)setTextLayoutFrame:(DTCoreTextLayoutFrame *)layoutFrame
+               forSnowflake:(NSString *)snowflake
+                contentWidth:(CGFloat)contentWidth
+             editedTimestamp:(NSDate *)editedTimestamp {
+    NSString *key = [self textLayoutFrameCacheKeyForSnowflake:snowflake
+                                                   contentWidth:contentWidth
+                                                editedTimestamp:editedTimestamp];
+    if (!key || !layoutFrame) return;
+    /* See setLayout: above: publishing the expensive DTCoreText frame is part
+     * of completing the prewarm, not deferred bookkeeping. */
+    dispatch_sync(self.layoutCacheQueue, ^{
+        self.textLayoutFrameCache[key] = layoutFrame;
     });
 }
 
@@ -130,23 +189,56 @@
 // Width-aware read
 - (DCMessageCacheEntry *)cacheEntryForSnowflake:(NSString *)snowflake width:(CGFloat)width {
     if (!snowflake) return nil;
-    return self.messageCache[[self cacheKeyForSnowflake:snowflake width:width]];
+    __block DCMessageCacheEntry *result = nil;
+    dispatch_sync(self.layoutCacheQueue, ^{
+        result = self.messageCache[[self cacheKeyForSnowflake:snowflake width:width]];
+    });
+    return result;
 }
 
 // Width-aware write
 - (void)setCacheEntry:(DCMessageCacheEntry *)entry forSnowflake:(NSString *)snowflake width:(CGFloat)width {
     if (!snowflake || !entry) return;
-    self.messageCache[[self cacheKeyForSnowflake:snowflake width:width]] = entry;
+    dispatch_sync(self.layoutCacheQueue, ^{
+        self.messageCache[[self cacheKeyForSnowflake:snowflake width:width]] = entry;
+    });
 }
 
 // Updated invalidateSnowflake — clears all width/layout variants
 - (void)invalidateSnowflake:(NSString *)snowflake {
     if (!snowflake) return;
-    NSString *prefix = [snowflake stringByAppendingString:@"_"];
-    dispatch_sync(self.cacheQueue, ^{
-        [self removeKeysWithPrefix:prefix fromDictionary:self.messageCache];
-        [self removeKeysWithPrefix:prefix fromDictionary:self.layoutCache];
+    [self invalidateSnowflakes:@[ snowflake ]];
+}
+
+- (void)invalidateSnowflakes:(NSArray *)snowflakes {
+    if (!snowflakes.count) return;
+    NSSet *snowflakeSet = [NSSet setWithArray:snowflakes];
+
+    CFAbsoluteTime invalidateStart = CFAbsoluteTimeGetCurrent();
+    dispatch_sync(self.layoutCacheQueue, ^{
+        NSArray *dictionaries = @[
+            self.messageCache,
+            self.layoutCache,
+            self.textLayoutFrameCache
+        ];
+
+        for (NSMutableDictionary *dictionary in dictionaries) {
+            NSArray *keys = [dictionary.allKeys copy];
+            for (NSString *key in keys) {
+                NSRange separator = [key rangeOfString:@"_"];
+                if (separator.location == NSNotFound) continue;
+                NSString *messageID = [key substringToIndex:separator.location];
+                if ([snowflakeSet containsObject:messageID]) {
+                    [dictionary removeObjectForKey:key];
+                }
+            }
+        }
     });
+    NSTimeInterval invalidateTime = CFAbsoluteTimeGetCurrent() - invalidateStart;
+    if (invalidateTime >= 0.008) {
+        NSLog(@"[CachePerf] hot layout invalidate %lu ids %.1fms",
+              (unsigned long)snowflakes.count, invalidateTime * 1000.0);
+    }
 }
 
 - (void)removeKeysWithPrefix:(NSString *)prefix fromDictionary:(NSMutableDictionary *)dictionary {
@@ -159,9 +251,10 @@
 }
 
 - (void)invalidateAllMessages {
-    dispatch_sync(self.cacheQueue, ^{
+    dispatch_sync(self.layoutCacheQueue, ^{
         [self.messageCache removeAllObjects];
         [self.layoutCache removeAllObjects];
+        [self.textLayoutFrameCache removeAllObjects];
     });
 }
 
@@ -204,15 +297,59 @@
 // --- Memory management ---
 
 - (void)handleMemoryWarning {
-    // Flush attributed content from message entries but keep heights
-    // Heights are cheap to store and expensive to recalculate
-    for (DCMessageCacheEntry *entry in self.messageCache.allValues) {
-        entry.attributedContent = nil;
-    }
-    // Flush emoji images — these re-download automatically when needed
+    dispatch_sync(self.layoutCacheQueue, ^{
+        // Flush attributed content from message entries but keep heights.
+        for (DCMessageCacheEntry *entry in self.messageCache.allValues) {
+            entry.attributedContent = nil;
+        }
+        [self.layoutCache removeAllObjects];
+        [self.textLayoutFrameCache removeAllObjects];
+    });
+
+    // Flush emoji images — these re-download automatically when needed.
     [self.emojiCache removeAllObjects];
-    [self.layoutCache removeAllObjects];
-    // SDWebImage memory cache is handled separately by the app delegate
+    // SDWebImage memory cache is handled separately by the app delegate.
+}
+
+- (void)handleMemoryWarningPreservingSnowflakes:(NSSet *)preservedSnowflakes {
+    NSSet *keep = [preservedSnowflakes isKindOfClass:[NSSet class]]
+        ? preservedSnowflakes : [NSSet set];
+
+    dispatch_sync(self.layoutCacheQueue, ^{
+        NSArray *messageKeys = [self.messageCache.allKeys copy];
+        for (NSString *key in messageKeys) {
+            NSRange sep = [key rangeOfString:@"_"];
+            NSString *messageID = (sep.location == NSNotFound)
+                ? nil : [key substringToIndex:sep.location];
+            DCMessageCacheEntry *entry = self.messageCache[key];
+            if (![keep containsObject:messageID]) {
+                // Heights are tiny/useful; release only the attributed payload.
+                entry.attributedContent = nil;
+            }
+        }
+
+        NSArray *layoutKeys = [self.layoutCache.allKeys copy];
+        for (NSString *key in layoutKeys) {
+            NSRange sep = [key rangeOfString:@"_"];
+            NSString *messageID = (sep.location == NSNotFound)
+                ? nil : [key substringToIndex:sep.location];
+            if (![keep containsObject:messageID]) {
+                [self.layoutCache removeObjectForKey:key];
+            }
+        }
+
+        NSArray *frameKeys = [self.textLayoutFrameCache.allKeys copy];
+        for (NSString *key in frameKeys) {
+            NSRange sep = [key rangeOfString:@"_"];
+            NSString *messageID = (sep.location == NSNotFound)
+                ? nil : [key substringToIndex:sep.location];
+            if (![keep containsObject:messageID]) {
+                [self.textLayoutFrameCache removeObjectForKey:key];
+            }
+        }
+    });
+
+    [self.emojiCache removeAllObjects];
 }
 
 
@@ -357,6 +494,7 @@ static const NSUInteger DCMessageWindowMessageLimit = 80;
 
     dispatch_async(self.cacheQueue, ^{
         @autoreleasepool {
+            CFAbsoluteTime diskStart = CFAbsoluteTimeGetCurrent();
             @try {
                 NSString *directory = [self messageWindowCacheDirectory];
                 [[NSFileManager defaultManager]
@@ -370,6 +508,11 @@ static const NSUInteger DCMessageWindowMessageLimit = 80;
                     return;
                 }
                 [self pruneMessageWindowCacheDirectory];
+                NSTimeInterval diskTime = CFAbsoluteTimeGetCurrent() - diskStart;
+                if (diskTime >= 0.050) {
+                    NSLog(@"[CachePerf] message window disk save %@ %.3fs",
+                          path.lastPathComponent ?: @"?", diskTime);
+                }
             }
             @catch (NSException *e) {
                 NSLog(@"[DCCacheManager] Message window save failed: %@", e);
@@ -383,8 +526,12 @@ static const NSUInteger DCMessageWindowMessageLimit = 80;
     NSString *path = [self messageWindowCachePathForChannel:channelSnowflake];
     if (!path || ![[NSFileManager defaultManager] fileExistsAtPath:path]) return nil;
 
+    CFAbsoluteTime restoreStart = CFAbsoluteTimeGetCurrent();
+    CFAbsoluteTime unarchiveStart = restoreStart;
+
     @try {
         NSDictionary *root = [NSKeyedUnarchiver unarchiveObjectWithFile:path];
+        CFAbsoluteTime unarchiveElapsed = CFAbsoluteTimeGetCurrent() - unarchiveStart;
         if (![root isKindOfClass:[NSDictionary class]]) {
             [self invalidateMessageWindowForChannel:channelSnowflake];
             return nil;
@@ -399,12 +546,36 @@ static const NSUInteger DCMessageWindowMessageLimit = 80;
         DCChannelWindow *window = [[DCChannelWindow alloc]
             initWithChannelSnowflake:channelSnowflake];
         NSArray *records = [root objectForKey:@"messages"];
+        NSUInteger availableRecordCount = [records isKindOfClass:[NSArray class]] ? records.count : 0;
+        NSUInteger restoreLimit = [DCTools isOriginalIPad]
+            ? 24
+            : (([UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad) ? 24 : 12);
+        BOOL trimmedRestore = availableRecordCount > restoreLimit;
+        if (trimmedRestore) {
+            records = [records subarrayWithRange:NSMakeRange(availableRecordCount - restoreLimit, restoreLimit)];
+        }
+        CFAbsoluteTime conversionStart = CFAbsoluteTimeGetCurrent();
+        CFAbsoluteTime slowestConversion = 0.0;
+        NSDictionary *slowestJSON = nil;
+        NSUInteger convertedCount = 0;
         if ([records isKindOfClass:[NSArray class]]) {
             for (NSDictionary *record in records) {
+                CFAbsoluteTime oneStart = CFAbsoluteTimeGetCurrent();
                 DCMessage *message = [self messageFromPersistentRecord:record];
-                if (message) [window.messages addObject:message];
+                CFAbsoluteTime oneElapsed = CFAbsoluteTimeGetCurrent() - oneStart;
+                if (oneElapsed > slowestConversion) {
+                    slowestConversion = oneElapsed;
+                    id candidateJSON = [record objectForKey:@"json"];
+                    slowestJSON = [candidateJSON isKindOfClass:[NSDictionary class]]
+                        ? candidateJSON : nil;
+                }
+                if (message) {
+                    [window.messages addObject:message];
+                    convertedCount++;
+                }
             }
         }
+        CFAbsoluteTime conversionElapsed = CFAbsoluteTimeGetCurrent() - conversionStart;
         if (window.messages.count == 0) return nil;
 
         id value = [root objectForKey:@"atPresentTime"];
@@ -422,6 +593,47 @@ static const NSUInteger DCMessageWindowMessageLimit = 80;
         value = [root objectForKey:@"hasSavedContentOffset"];
         if ([value respondsToSelector:@selector(boolValue)])
             window.hasSavedContentOffset = [value boolValue];
+
+        if (trimmedRestore) {
+            // The file may retain a deeper snapshot, but only the hot tail is
+            // hydrated. Older history will come back through normal proximity
+            // loading, so a saved pixel offset into the old 80-row window is no
+            // longer meaningful.
+            window.hasMoreBefore = YES;
+            window.hasSavedContentOffset = NO;
+            window.savedContentOffsetY = 0.0f;
+        }
+
+        CFAbsoluteTime restoreElapsed = CFAbsoluteTimeGetCurrent() - restoreStart;
+        double averageMS = convertedCount
+            ? (conversionElapsed * 1000.0 / (double)convertedCount)
+            : 0.0;
+        NSString *slowestID = [[slowestJSON objectForKey:@"id"] isKindOfClass:[NSString class]]
+            ? [slowestJSON objectForKey:@"id"] : @"?";
+        NSString *slowestContent = [[slowestJSON objectForKey:@"content"] isKindOfClass:[NSString class]]
+            ? [slowestJSON objectForKey:@"content"] : @"";
+        NSArray *slowestEmbeds = [[slowestJSON objectForKey:@"embeds"] isKindOfClass:[NSArray class]]
+            ? [slowestJSON objectForKey:@"embeds"] : nil;
+        NSArray *slowestAttachments = [[slowestJSON objectForKey:@"attachments"] isKindOfClass:[NSArray class]]
+            ? [slowestJSON objectForKey:@"attachments"] : nil;
+        NSArray *slowestStickers = [[slowestJSON objectForKey:@"sticker_items"] isKindOfClass:[NSArray class]]
+            ? [slowestJSON objectForKey:@"sticker_items"] : nil;
+
+        NSLog(@"[ColdStartPerf] Message cache detail %@ unarchive %.3fs, convert %.3fs (%lu/%lu hydrated, avg %.1fms, max %.1fms id %@ text %lu embeds %lu attachments %lu stickers %lu), bookkeeping %.3fs, total %.3fs",
+              channelSnowflake,
+              unarchiveElapsed,
+              conversionElapsed,
+              (unsigned long)convertedCount,
+              (unsigned long)availableRecordCount,
+              averageMS,
+              slowestConversion * 1000.0,
+              slowestID,
+              (unsigned long)slowestContent.length,
+              (unsigned long)slowestEmbeds.count,
+              (unsigned long)slowestAttachments.count,
+              (unsigned long)slowestStickers.count,
+              MAX(0.0, restoreElapsed - unarchiveElapsed - conversionElapsed),
+              restoreElapsed);
 
         return window;
     }
@@ -734,6 +946,7 @@ static const NSInteger DCGatewayCheckpointVersion = 1;
         NSData *pngData = [record objectForKey:@"png"];
         if (![storedKey isEqualToString:cacheKey] ||
             ![pngData isKindOfClass:[NSData class]]) return nil;
+
         return [UIImage imageWithData:pngData];
     }
     @catch (NSException *e) {
@@ -875,6 +1088,7 @@ static const NSInteger DCUserCacheVersion = 1;
 
     dispatch_async(self.cacheQueue, ^{
         @autoreleasepool {
+            CFAbsoluteTime diskStart = CFAbsoluteTimeGetCurrent();
             @try {
                 NSMutableDictionary *records = [NSMutableDictionary dictionaryWithCapacity:snapshot.count];
                 for (NSString *snowflake in snapshot) {
@@ -891,6 +1105,11 @@ static const NSInteger DCUserCacheVersion = 1;
                 NSData *data = [NSKeyedArchiver archivedDataWithRootObject:root];
                 if (![data writeToFile:path atomically:YES]) {
                     NSLog(@"[DCCacheManager] User cache save failed writing %@", path);
+                }
+                NSTimeInterval diskTime = CFAbsoluteTimeGetCurrent() - diskStart;
+                if (diskTime >= 0.050) {
+                    NSLog(@"[CachePerf] user disk save %lu users %.3fs",
+                          (unsigned long)snapshot.count, diskTime);
                 }
             }
             @catch (NSException *e) {

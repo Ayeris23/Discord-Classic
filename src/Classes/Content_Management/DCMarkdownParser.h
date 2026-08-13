@@ -38,6 +38,9 @@ typedef NS_ENUM(NSInteger, DCMarkdownBackgroundStyle) {
 // Primary parse method — returns CoreText-compatible attributed string
 - (NSAttributedString *)attributedStringFromMarkdown:(NSString *)markdown;
 
+// Precompile reusable regex/data-detector machinery on a low-priority queue.
+- (void)prewarmReusableMatchers;
+
 // Convenience variant for compact contexts (e.g. referenced message labels).
 // Fonts are capped at maxFontSize, all text and accent colors are overridden
 // with color, and minimumLineHeight is zeroed so CoreText uses natural metrics.

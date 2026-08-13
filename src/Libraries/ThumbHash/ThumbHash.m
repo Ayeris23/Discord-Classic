@@ -7,13 +7,35 @@ static inline float clamp(float value, float minVal, float maxVal) {
     return fminf(fmaxf(value, minVal), maxVal);
 }
 
+static int DCThumbHashACCount(int nx, int ny) {
+    int count = 0;
+    for (int cy = 0; cy < ny; cy++) {
+        int cx = cy > 0 ? 0 : 1;
+        while (cx * ny < nx * (ny - cy)) {
+            count++;
+            cx++;
+        }
+    }
+    return count;
+}
+
 typedef struct {
     int width;
     int height;
-    __unsafe_unretained NSData *rgba;
+    /*
+     * CF ownership is explicit here.  Do not put an Objective-C object in an
+     * __unsafe_unretained struct field: returning the struct lets ARC release
+     * the temporary object before thumbHashToImage() can consume it.
+     */
+    CFDataRef rgba;
 } ThumbHashResult;
 
 ThumbHashResult thumbHashToRGBA(NSData *hash) {
+    ThumbHashResult emptyResult = {0, 0, NULL};
+    if (![hash isKindOfClass:[NSData class]] || hash.length < 5) {
+        return emptyResult;
+    }
+
     const uint8_t *bytes = hash.bytes;
     
     uint32_t h0 = bytes[0];
@@ -53,7 +75,8 @@ ThumbHashResult thumbHashToRGBA(NSData *hash) {
     
     float a_dc = 1.0f;
     float a_scale = 1.0f;
-    
+
+    if (hasAlpha && hash.length < 6) return emptyResult;
     if (hasAlpha) {
         uint8_t ia_dc = bytes[5] & 15;
         uint8_t ia_scale = bytes[5] >> 4;
@@ -62,6 +85,16 @@ ThumbHashResult thumbHashToRGBA(NSData *hash) {
     }
     
     int ac_start = hasAlpha ? 6 : 5;
+
+    int totalACNibbles =
+        DCThumbHashACCount(lx, ly) +
+        DCThumbHashACCount(3, 3) +
+        DCThumbHashACCount(3, 3) +
+        (hasAlpha ? DCThumbHashACCount(5, 5) : 0);
+    NSUInteger requiredBytes =
+        (NSUInteger)ac_start + (NSUInteger)((totalACNibbles + 1) / 2);
+    if (hash.length < requiredBytes) return emptyResult;
+
     __block int ac_index = 0;
     
     NSMutableArray *(^decodeChannel)(int, int, float) = ^(int nx, int ny, float scale) {
@@ -166,10 +199,13 @@ ThumbHashResult thumbHashToRGBA(NSData *hash) {
     free(fx);
     free(fy);
 
-    ThumbHashResult result;
+    ThumbHashResult result = {0, 0, NULL};
     result.width = w;
     result.height = h;
-    result.rgba = [rgba copy];
+
+    // Hold one CF retain across the C-struct return boundary; the consumer releases it.
+    result.rgba = (__bridge CFDataRef)rgba;
+    if (result.rgba) CFRetain(result.rgba);
     return result;
 }
 
@@ -177,7 +213,17 @@ UIImage *thumbHashToImage(NSData *hash) {
     ThumbHashResult result = thumbHashToRGBA(hash);
     int w = result.width;
     int h = result.height;
-    NSMutableData *rgbaData = [result.rgba mutableCopy];
+    if (w <= 0 || h <= 0 || !result.rgba) {
+        if (result.rgba) CFRelease(result.rgba);
+        return nil;
+    }
+
+    CFMutableDataRef mutableRGBA =
+        CFDataCreateMutableCopy(kCFAllocatorDefault, 0, result.rgba);
+    CFRelease(result.rgba);
+    if (!mutableRGBA) return nil;
+
+    NSMutableData *rgbaData = (__bridge_transfer NSMutableData *)mutableRGBA;
     uint8_t *rgba = (uint8_t *)rgbaData.mutableBytes;
     
     int n = w * h;

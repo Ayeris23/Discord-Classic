@@ -28,8 +28,10 @@
 // Whether it is muted
 @property (assign, nonatomic) BOOL muted;
 
-// The guild's icon
+// Raw guild icon used by folder composites and non-menu views.
 @property (strong, nonatomic) UIImage* icon;
+// Cached 48pt main-menu tile.
+@property (strong, nonatomic) UIImage *compositedIcon;
 // Discord asset hashes are durable version identifiers. iconURL remains for
 // compatibility with the existing cold-start SDWebImage hydration path.
 @property (strong, nonatomic) NSString *iconID;

@@ -28,6 +28,15 @@ typedef NS_ENUM(NSInteger, DCAssetContext) {
 // --- DM Icon processing ---
 + (UIImage *)processedIcon:(UIImage *)image context:(DCAssetContext)context;
 
+// --- Guild Icon processing ---
+// Produces the final 48pt main-menu tile: GuildIconBase chrome with a
+// 40pt rounded guild source centered inside it. Results are cached on the
+// source UIImage so shared default icons also share one finished composite.
++ (UIImage *)processedGuildIcon:(UIImage *)image;
+
+// Produces and caches the 12pt rounded mini-guild tile used by folder overlays.
++ (UIImage *)processedFolderMiniGuildIcon:(UIImage *)image;
+
 // --- Generic image processing ---
 + (UIImage *)roundedImage:(UIImage *)image size:(CGFloat)size;
 

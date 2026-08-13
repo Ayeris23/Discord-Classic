@@ -135,11 +135,6 @@
                                            selector:@selector(updateStatusForUser:)
                                                name:@"USER_PRESENCE_UPDATED"
                                              object:nil];
-    [NSNotificationCenter.defaultCenter addObserver:self
-                                           selector:@selector(handleReady)
-                                               name:@"MENTION_COUNT_UPDATED"
-                                             object:nil];
-
     // these are resource intensive, do not use whenever possible
     [NSNotificationCenter.defaultCenter addObserver:self
                                            selector:@selector(handleMessageAck:)
@@ -225,9 +220,7 @@
     }
 }
 
-// Cold-launch fallback. The normal Phase 5 path is restored by the app
-// delegate before first presentation using the storyboard's chat identifier.
-// This remains only for a cache miss where READY later discovers the channel.
+// Fallback when the saved chat is not available until live state arrives.
 - (void)attemptColdChatRestoreIfNeeded {
     if (!self.shouldAttemptColdChatRestore) return;
 
@@ -266,18 +259,16 @@
     self.shouldAttemptColdChatRestore = NO;
 }
 
-// block that handles what the app does if you open it via a push ntoification
+// Handle channel navigation from push notifications.
 
 - (void)handleNotificationTap:(NSNotification *)notification {
     NSString *channelId = notification.userInfo[@"channelId"];
     if (channelId) {
-        // NSLog(@"Navigating to channel with ID: %@", channelId);
         [self navigateToChannelWithId:channelId];
     }
 }
 
 - (void)exitedChatController {
-    // NSLog(@"EXITING CHAT VIEW");
     self.selectedChannel = nil;
 }
 
@@ -287,11 +278,9 @@
             if (![channel.snowflake isEqualToString:channelId]) {
                 continue;
             }
-            // NSLog(@"channel id: %@", channelId);
             if (self.selectedChannel &&
                 [self.selectedChannel.snowflake
                     isEqualToString:channelId]) {
-                // NSLog(@"ok");
                 return;
             }
             self.selectedGuild                                  = guild;
@@ -418,6 +407,11 @@
     if (guild.snowflake.length)
         [self.folderIconHydrationRequests removeObject:guild.snowflake];
 
+    // Hidden menu tables refresh from canonical state when they become visible again.
+    if (!self.isViewLoaded || self.view.window == nil) {
+        return;
+    }
+
     // Keep the selected-guild chrome synchronized with surgical GUILD_UPDATE
     // events without needing a full READY-style table rebuild.
     if (self.selectedGuild == guild ||
@@ -457,7 +451,8 @@
     NSUInteger folderIdx = [self.displayGuilds
         indexOfObjectPassingTest:^BOOL(DCGuildFolder *folder, NSUInteger idx, BOOL *stop) {
             return [folder isKindOfClass:[DCGuildFolder class]]
-                && [folder.guildIds indexOfObject:guild.snowflake] < 4;
+                && guild.snowflake.length
+                && [folder.guildIds containsObject:guild.snowflake];
         }];
     if (folderIdx != NSNotFound) {
         [indexPaths addObject:[NSIndexPath indexPathForRow:folderIdx inSection:0]];
@@ -468,7 +463,7 @@
         [indexPaths addObject:[NSIndexPath indexPathForRow:index inSection:0]];
     }
 
-    // Only touch the table if we actually have something to reload
+    // Reload only when at least one affected row is present.
     if (indexPaths.count == 0) {
         return;
     }
@@ -537,36 +532,104 @@
 
 - (void)handleMessageAck:(NSNotification *)notification {
     dispatch_async(dispatch_get_main_queue(), ^{
-        [self.guildTableView reloadData];
-        
-        // Only reload channel table if the message is in the currently displayed guild
-        NSString *channelId = notification.userInfo[@"channelId"];
-        if (channelId && self.selectedGuild) {
-            BOOL channelInSelectedGuild = NO;
-            for (DCChannel *channel in self.selectedGuild.channels) {
-                if ([channel.snowflake isEqualToString:channelId]) {
-                    channelInSelectedGuild = YES;
-                    break;
-                }
-            }
-            // Also reload if it's a DM channel list
-            DCChannel *incomingChannel = [DCServerCommunicator.sharedInstance.channels objectForKey:channelId];
-            BOOL isDMChannel = (incomingChannel && (incomingChannel.type == 1 || incomingChannel.type == 3));
+        // Avoid rendering hidden tables; viewWillAppear: refreshes them later.
+        if (!self.isViewLoaded || self.view.window == nil) {
+            return;
+        }
 
-            if (channelInSelectedGuild || isDMChannel) {
-                // Re-sort DM list if we're viewing Direct Messages
-                if ([self isDirectMessagesGuild:self.selectedGuild]) {
-                    [self.selectedGuild.channels sortUsingComparator:^NSComparisonResult(DCChannel *a, DCChannel *b) {
-                        NSString *idA = ([a.lastMessageId isKindOfClass:[NSString class]]) ? a.lastMessageId : @"0";
-                        NSString *idB = ([b.lastMessageId isKindOfClass:[NSString class]]) ? b.lastMessageId : @"0";
-                        return [idB localizedStandardCompare:idA];
-                    }];
-                }
-                [self.channelTableView reloadData];
-            }
-        } else {
-            // No channel info, reload both to be safe
+        NSString *channelId = notification.userInfo[@"channelId"];
+
+        // A channel-list refresh without an ID applies only to the visible channel pane.
+        if (![channelId isKindOfClass:[NSString class]] || channelId.length == 0) {
             [self.channelTableView reloadData];
+            return;
+        }
+
+        DCChannel *incomingChannel =
+            [DCServerCommunicator.sharedInstance.channels objectForKey:channelId];
+        DCGuild *affectedGuild = incomingChannel.parentGuild;
+
+        // Refresh the changed guild and any folder row that aggregates its state.
+        if (affectedGuild && self.displayGuilds &&
+            DCServerCommunicator.sharedInstance.guildsIsSorted) {
+            NSMutableArray *guildIndexPaths = [NSMutableArray array];
+
+            for (NSUInteger idx = 0; idx < self.displayGuilds.count; idx++) {
+                id item = [self.displayGuilds objectAtIndex:idx];
+                BOOL matchesAffectedGuild = NO;
+
+                if ([item isKindOfClass:[DCGuild class]]) {
+                    DCGuild *displayGuild = (DCGuild *)item;
+                    matchesAffectedGuild = (displayGuild == affectedGuild) ||
+                        (displayGuild.snowflake.length && affectedGuild.snowflake.length &&
+                         [displayGuild.snowflake isEqualToString:affectedGuild.snowflake]);
+                } else if ([item isKindOfClass:[DCGuildFolder class]] &&
+                           affectedGuild.snowflake.length) {
+                    DCGuildFolder *folder = (DCGuildFolder *)item;
+                    matchesAffectedGuild =
+                        [folder.guildIds containsObject:affectedGuild.snowflake];
+                }
+
+                if (matchesAffectedGuild) {
+                    [guildIndexPaths addObject:
+                        [NSIndexPath indexPathForRow:idx inSection:0]];
+                }
+            }
+
+            if (guildIndexPaths.count > 0 &&
+                self.displayGuilds.count ==
+                    (NSUInteger)[self.guildTableView numberOfRowsInSection:0]) {
+                [self.guildTableView reloadRowsAtIndexPaths:guildIndexPaths
+                                           withRowAnimation:UITableViewRowAnimationNone];
+            }
+        }
+
+        if (!incomingChannel || !self.selectedGuild) {
+            return;
+        }
+
+        BOOL viewingDMs = [self isDirectMessagesGuild:self.selectedGuild];
+        BOOL incomingIsDM = (incomingChannel.type == 1 || incomingChannel.type == 3);
+
+        if (viewingDMs && incomingIsDM) {
+            // DM ordering is recency-based, so acknowledgements can reorder rows.
+            [self.selectedGuild.channels
+                sortUsingComparator:^NSComparisonResult(DCChannel *a, DCChannel *b) {
+                    NSString *idA = ([a.lastMessageId isKindOfClass:[NSString class]])
+                        ? a.lastMessageId : @"0";
+                    NSString *idB = ([b.lastMessageId isKindOfClass:[NSString class]])
+                        ? b.lastMessageId : @"0";
+                    return [idB localizedStandardCompare:idA];
+                }];
+            [self.channelTableView reloadData];
+            return;
+        }
+
+        // Guild-channel acknowledgements only change row presentation.
+        BOOL belongsToSelectedGuild =
+            (incomingChannel.parentGuild == self.selectedGuild) ||
+            (incomingChannel.parentGuild.snowflake.length && self.selectedGuild.snowflake.length &&
+             [incomingChannel.parentGuild.snowflake
+                 isEqualToString:self.selectedGuild.snowflake]);
+        if (!belongsToSelectedGuild) {
+            return;
+        }
+
+        NSUInteger channelIndex = [self.selectedGuild.channels indexOfObject:incomingChannel];
+        if (channelIndex == NSNotFound) {
+            channelIndex = [self.selectedGuild.channels
+                indexOfObjectPassingTest:^BOOL(DCChannel *channel, NSUInteger idx, BOOL *stop) {
+                    return channel.snowflake.length &&
+                        [channel.snowflake isEqualToString:channelId];
+                }];
+        }
+
+        if (channelIndex != NSNotFound &&
+            channelIndex < (NSUInteger)[self.channelTableView numberOfRowsInSection:0]) {
+            NSIndexPath *indexPath =
+                [NSIndexPath indexPathForRow:channelIndex inSection:0];
+            [self.channelTableView reloadRowsAtIndexPaths:@[ indexPath ]
+                                         withRowAnimation:UITableViewRowAnimationNone];
         }
     });
 }
@@ -644,7 +707,6 @@
             id selectedGuild = [self.displayGuilds objectAtIndex:indexPath.row];
             [tableView deselectRowAtIndexPath:indexPath animated:YES];
             if ([selectedGuild isKindOfClass:[DCGuildFolder class]]) {
-                // NSLog(@"Folder selected: %@", selectedGuild);
                 DCGuildFolder *folder           = selectedGuild;
                 folder.opened                   = !folder.opened;
                 NSDictionary *constFolderDict   = [[NSUserDefaults standardUserDefaults]
@@ -665,7 +727,6 @@
                         NSAssert(idx != NSNotFound, @"Guild ID %@ not found", guildId);
                         DCGuild *guild = [DCServerCommunicator.sharedInstance.guilds objectAtIndex:idx];
                         NSAssert(guild != nil, @"Guild not found for ID %@", guildId);
-                        // NSLog(@"add index: %lu, name: %@", (unsigned long)curIdx, guild.name);
                         [self.displayGuilds insertObject:guild atIndex:curIdx];
                         [newIndexPaths addObject:[NSIndexPath indexPathForRow:curIdx++ inSection:0]];
                     }}
@@ -678,11 +739,6 @@
                         if (idx >= self.displayGuilds.count) {
                             break; // Prevent out of bounds
                         }
-                        // DCGuild *guild = [DCServerCommunicator.sharedInstance.guilds
-                        //     objectAtIndex:[DCServerCommunicator.sharedInstance.guilds indexOfObjectPassingTest:^BOOL(DCGuild *g, NSUInteger idx, BOOL *stop) {
-                        //         return [g.snowflake isEqualToString:folder.guildIds[i]];
-                        //     }]];
-                        // NSLog(@"remove index: %lu, name: %@", (unsigned long)(idx + i), guild.name);
                         [self.displayGuilds removeObjectAtIndex:idx];
                         [indexPathsToDelete addObject:[NSIndexPath indexPathForRow:idx + i inSection:0]];
                     }}
@@ -733,10 +789,6 @@
                 ackMessage:DCServerCommunicator.sharedInstance.selectedChannel
                                .lastMessageId];
             [DCServerCommunicator.sharedInstance.selectedChannel checkIfRead];
-
-            // Remove the blue indicator since the channel has been read
-            //[[self.channelTableView cellForRowAtIndexPath:indexPath]
-            // setAccessoryType:UITableViewCellAccessoryDisclosureIndicator];
             [tableView deselectRowAtIndexPath:indexPath animated:YES];
 
             if (self.experimentalMode) {
@@ -764,8 +816,6 @@
             } else {
                 [self performSegueWithIdentifier:@"guilds to chat" sender:self];
             }
-            //[tableView cellForRowAtIndexPath:indexPath].accessoryType =
-            // UITableViewCellAccessoryDisclosureIndicator;
         }
     }
 }
@@ -785,7 +835,7 @@
 - (NSString *)compositeCacheKeyForFolder:(DCGuildFolder *)folder {
     if (!folder) return nil;
     NSMutableArray *parts = [NSMutableArray arrayWithObject:
-        [NSString stringWithFormat:@"v1:%ld", (long)folder.id]];
+        [NSString stringWithFormat:@"%ld", (long)folder.id]];
     NSUInteger count = MIN((NSUInteger)4, folder.guildIds.count);
     for (NSUInteger i = 0; i < count; i++) {
         NSString *guildID = [folder.guildIds objectAtIndex:i];
@@ -802,30 +852,43 @@
 }
 
 - (UIImage *)compositeImageWithBaseImage:(UIImage *)baseImage icons:(NSArray *)icons {
-    CGSize size = baseImage.size;
+    // Compose GuildIconBase, the centered folder tile, then the 2x2 guild grid.
+    const CGFloat canvasSize = 48.0f;
+    const CGFloat folderSize = 40.0f;
+    const CGFloat folderInset = (canvasSize - folderSize) / 2.0f;
+    CGSize size = CGSizeMake(canvasSize, canvasSize);
+    CGRect folderRect = CGRectMake(folderInset, folderInset,
+                                   folderSize, folderSize);
 
-    // Begin image context
-    UIGraphicsBeginImageContextWithOptions(size, NO, 0.0);
+    UIGraphicsBeginImageContextWithOptions(size, NO, 0.0f);
 
-    // Draw base image first
-    [baseImage drawInRect:CGRectMake(0, 0, size.width, size.height)];
+    UIImage *folderFoundation = [DCContentManager processedGuildIcon:baseImage];
+    if (folderFoundation) {
+        [folderFoundation drawInRect:CGRectMake(0.0f, 0.0f,
+                                                canvasSize, canvasSize)];
+    }
 
-    // Define grid quarters (2x2 grid)
-    CGFloat quarterWidth  = size.width / 2.0;
-    CGFloat quarterHeight = size.height / 2.0;
+    // Lay the mini-icon grid inside the centered 40pt folder artwork.
+    CGFloat quarterWidth  = folderSize / 2.0f;
+    CGFloat quarterHeight = folderSize / 2.0f;
 
-    // Icon size relative to quarter
-    CGFloat iconScale   = 0.6; // icons are 60% of the quarter size
+    CGFloat iconScale   = 0.6f; // icons are 60% of each grid quarter
     CGFloat iconWidth   = quarterWidth * iconScale;
     CGFloat iconHeight  = quarterHeight * iconScale;
-    CGFloat iconPadding = 25.0; // icon centering
 
-    // Precompute grid quarter centers
+    // Scale the original mini-icon spacing to the 40pt folder artwork.
+    CGFloat iconPadding = folderSize * (25.0f / 448.0f);
+
+    CGFloat leftCenterX   = CGRectGetMinX(folderRect) + quarterWidth * 0.5f + iconPadding;
+    CGFloat rightCenterX  = CGRectGetMinX(folderRect) + quarterWidth * 1.5f - iconPadding;
+    CGFloat topCenterY    = CGRectGetMinY(folderRect) + quarterHeight * 0.5f + iconPadding;
+    CGFloat bottomCenterY = CGRectGetMinY(folderRect) + quarterHeight * 1.5f - iconPadding;
+
     CGPoint gridCenters[4] = {
-        CGPointMake(quarterWidth * 0.5 + iconPadding, quarterHeight * 0.5 + iconPadding), // Top-left
-        CGPointMake(quarterWidth * 1.5 - iconPadding, quarterHeight * 0.5 + iconPadding), // Top-right
-        CGPointMake(quarterWidth * 0.5 + iconPadding, quarterHeight * 1.5 - iconPadding), // Bottom-left
-        CGPointMake(quarterWidth * 1.5 - iconPadding, quarterHeight * 1.5 - iconPadding)  // Bottom-right
+        CGPointMake(leftCenterX,  topCenterY),
+        CGPointMake(rightCenterX, topCenterY),
+        CGPointMake(leftCenterX,  bottomCenterY),
+        CGPointMake(rightCenterX, bottomCenterY)
     };
 
     // Draw each icon centered in its grid quarter
@@ -837,22 +900,15 @@
         }
 
         UIImage *icon = iconObj;
+        UIImage *miniIcon = [DCContentManager processedFolderMiniGuildIcon:icon];
+        if (!miniIcon) continue;
 
-        // Compute rect so icon is centered in its quarter
+        // The source mini icon is already rounded and rasterized at device scale.
         CGPoint center = gridCenters[i];
-        CGRect rect    = CGRectMake(center.x - iconWidth / 2.0, center.y - iconHeight / 2.0, iconWidth, iconHeight);
-
-        CGContextRef context = UIGraphicsGetCurrentContext();
-        CGContextSaveGState(context);
-
-        // Clip with rounded corners
-        UIBezierPath *clipPath = [UIBezierPath bezierPathWithRoundedRect:rect
-                                                            cornerRadius:iconWidth / 6.0];
-        [clipPath addClip];
-
-        [icon drawInRect:rect];
-
-        CGContextRestoreGState(context);
+        CGRect rect = CGRectMake(center.x - iconWidth / 2.0f,
+                                 center.y - iconHeight / 2.0f,
+                                 iconWidth, iconHeight);
+        [miniIcon drawInRect:rect];
     }
 
     // Get final composite image
@@ -895,7 +951,8 @@
                 if (guildAtRowIndex.mentionCount > 0) {
                     cell.unreadMessages.hidden = NO;
                     CGSize badgeSize = [cell.mentionBadge sizeThatFits:CGSizeZero];
-                    CGRect avatarFrame = cell.guildAvatar.frame;
+                    // Badge positioning follows the centered 40pt icon content.
+                    CGRect avatarFrame = CGRectInset(cell.guildAvatar.frame, 4.0f, 4.0f);
                     cell.mentionBadge.frame = CGRectMake(
                         avatarFrame.origin.x + avatarFrame.size.width - badgeSize.width + 8,
                         avatarFrame.origin.y + avatarFrame.size.height - badgeSize.height + 8,
@@ -903,14 +960,9 @@
                     );
                 }
 
-                // Guild name and icon
-                if (guildAtRowIndex.icon) {
-                    cell.guildAvatar.image = guildAtRowIndex.icon;
-                }
-
-                cell.guildAvatar.layer.cornerRadius =
-                    cell.guildAvatar.frame.size.width / 6.0;
-                cell.guildAvatar.layer.masksToBounds = YES;
+                // The 48pt tile is precomposited when the guild icon changes.
+                cell.guildAvatar.image = guildAtRowIndex.compositedIcon
+                    ?: [UIImage imageNamed:@"GuildIconBase"];
             } else if ([objectAtRowIndex isKindOfClass:[DCGuildFolder class]]) {
                 DCGuildFolder *folderAtRowIndex = objectAtRowIndex;
                 
@@ -935,7 +987,8 @@
                 cell.mentionBadge.mentionCount = folderMentionCount;
                 if (folderMentionCount > 0) {
                     CGSize badgeSize = [cell.mentionBadge sizeThatFits:CGSizeZero];
-                    CGRect avatarFrame = cell.guildAvatar.frame;
+                    // Badge positioning follows the centered 40pt icon content.
+                    CGRect avatarFrame = CGRectInset(cell.guildAvatar.frame, 4.0f, 4.0f);
                     cell.mentionBadge.frame = CGRectMake(
                         avatarFrame.origin.x + avatarFrame.size.width - badgeSize.width + 8,
                         avatarFrame.origin.y + avatarFrame.size.height - badgeSize.height + 8,
@@ -1018,7 +1071,9 @@
                 if (!allSourcesReady || icons.count != expectedSources) {
                     folderAtRowIndex.icon = nil;
                     folderAtRowIndex.iconCacheKey = nil;
-                    cell.guildAvatar.image = folderIcon;
+                    // Show the folder foundation while mini icons hydrate.
+                    cell.guildAvatar.image = [DCContentManager processedGuildIcon:folderIcon]
+                        ?: [UIImage imageNamed:@"GuildIconBase"];
                     return cell;
                 }
 
@@ -1100,7 +1155,6 @@
                     DCUser *buddy = [channelAtRowIndex.users firstObject];
 
                     // Update the status image based on the buddy's status
-                    // DBGLOG(@"Buddy found for DM channel %@ with status: %ld", buddy.username, (long)buddy.status);
                     NSString *statusImageName =
                         [DCMenuViewController imageNameForStatus:buddy.status];
                     cell.statusImage.image =
