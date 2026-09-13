@@ -10,8 +10,10 @@
 #import <objc/NSObjCRuntime.h>
 #import <Foundation/Foundation.h>
 #import <MediaPlayer/MediaPlayer.h>
+#import <UIKit/UIKit.h>
 
 @class DCMessage;
+@class DCChannel;
 @class DCGuild;
 @class DCUser;
 @class DCEmoji;
@@ -102,12 +104,18 @@ typedef NSString DCSnowflake;
 
 + (DCMessage *)convertJsonMessage:(NSDictionary *)jsonMessage;
 + (DCMessage *)convertJsonMessage:(NSDictionary *)jsonMessage deferLegacyLayout:(BOOL)deferLegacyLayout;
++ (DCMessage *)convertJsonMessage:(NSDictionary *)jsonMessage
+                 deferLegacyLayout:(BOOL)deferLegacyLayout
+                           channel:(DCChannel *)channel;
 + (DCGuild *)convertJsonGuild:(NSDictionary *)jsonGuild withMembers:(NSArray *)members;
 + (DCUser *)convertJsonUser:(NSDictionary *)jsonUser cache:(BOOL)cache;
 + (DCEmoji *)convertJsonEmoji:(NSDictionary *)jsonEmoji cache:(BOOL)cache;
 + (DCRole *)convertJsonRole:(NSDictionary *)jsonRole cache:(BOOL)cache;
 + (NSString *)parseMessage:(NSString *)messageString withGuild:(DCGuild *)guild;
 + (void)getUserAvatar:(DCUser *)user;
++ (UIImage *)cachedUserAvatar:(DCUser *)user inGuild:(DCGuild *)guild;
++ (void)getUserAvatar:(DCUser *)user inGuild:(DCGuild *)guild;
++ (void)purgeGuildAvatarCache;
 
 + (void)joinGuild:(NSString *)inviteCode;
 @end

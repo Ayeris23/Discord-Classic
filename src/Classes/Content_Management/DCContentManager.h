@@ -24,6 +24,9 @@ typedef NS_ENUM(NSInteger, DCAssetContext) {
 
 // --- Avatar processing ---
 + (UIImage *)processedAvatarForUser:(DCUser *)user context:(DCAssetContext)context;
++ (UIImage *)processedAvatarImage:(UIImage *)avatar
+                       decoration:(UIImage *)decoration
+                          context:(DCAssetContext)context;
 
 // --- DM Icon processing ---
 + (UIImage *)processedIcon:(UIImage *)image context:(DCAssetContext)context;

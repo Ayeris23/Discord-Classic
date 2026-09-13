@@ -9,6 +9,45 @@
 #import "SDWebImageManager.h"
 #import <objc/message.h>
 
+static BOOL SDDiscordSignedMediaHost(NSString *host) {
+    if (![host isKindOfClass:[NSString class]] || host.length == 0) return NO;
+    NSString *lower = [host lowercaseString];
+    return [lower hasSuffix:@"discordapp.net"] ||
+           [lower hasSuffix:@"discordapp.com"] ||
+           [lower hasSuffix:@"discord.com"];
+}
+
+static BOOL SDDiscordVolatileQueryKey(NSString *key) {
+    NSString *lower = [key lowercaseString];
+    return [lower isEqualToString:@"ex"] ||
+           [lower isEqualToString:@"is"] ||
+           [lower isEqualToString:@"hm"];
+}
+
+static NSString *SDStableCacheKeyForURL(NSURL *url) {
+    if (!url) return nil;
+    if (!SDDiscordSignedMediaHost(url.host)) return url.absoluteString;
+
+    NSString *absolute = url.absoluteString;
+    NSRange question = [absolute rangeOfString:@"?"];
+    if (question.location == NSNotFound) return absolute;
+
+    NSString *base = [absolute substringToIndex:question.location];
+    NSString *query = [absolute substringFromIndex:question.location + 1];
+    NSMutableArray *parts = [NSMutableArray array];
+    for (NSString *part in [query componentsSeparatedByString:@"&"]) {
+        if (part.length == 0) continue;
+        NSRange equals = [part rangeOfString:@"="];
+        NSString *key = equals.location == NSNotFound
+            ? part : [part substringToIndex:equals.location];
+        if (SDDiscordVolatileQueryKey(key)) continue;
+        [parts addObject:part];
+    }
+    return parts.count
+        ? [NSString stringWithFormat:@"%@?%@", base, [parts componentsJoinedByString:@"&"]]
+        : base;
+}
+
 @interface SDWebImageCombinedOperation : NSObject <SDWebImageOperation>
 
 @property (assign, nonatomic, getter = isCancelled) BOOL cancelled;
@@ -55,9 +94,7 @@
     if (self.cacheKeyFilter) {
         return self.cacheKeyFilter(url);
     }
-    else {
-        return [url absoluteString];
-    }
+    return SDStableCacheKeyForURL(url);
 }
 
 - (BOOL)cachedImageExistsForURL:(NSURL *)url {

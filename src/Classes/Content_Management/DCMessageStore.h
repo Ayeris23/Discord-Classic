@@ -16,7 +16,7 @@
 // dedup + apply on the main thread, or a full replacement set when the gap
 // was too large to bridge incrementally.
 @interface DCMessageDelta : NSObject
-@property (nonatomic, strong) NSArray *candidateMessages;   // forward-fetched, pre-dedup
+@property (nonatomic, strong) NSArray *candidateMessages;   // validated/sorted; caller dedups vs. window
 @property (nonatomic, assign) BOOL requiresFullReload;      // cap-fallback / re-anchor
 @property (nonatomic, strong) NSArray *replacementMessages; // full set when reloading
 @end
@@ -50,8 +50,9 @@
                                   afterMessage:(DCMessage *)anchor;
 
 // Loads up to `limit` messages older than `anchor` (pass nil for the newest
-// page). Returns them grouped + ascending, same as a cold load, and updates
-// the channel window's hasMoreBefore. Synchronous network — call from a
+// page). Results are channel-validated, anchor-validated, deduplicated, and
+// sorted oldest -> newest. Window state is committed by the controller only
+// after its generation/channel checks pass. Synchronous network — call from a
 // background queue.
 - (NSArray *)loadBeforeForChannel:(DCChannel *)channel
                     beforeMessage:(DCMessage *)anchor

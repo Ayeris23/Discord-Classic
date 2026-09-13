@@ -360,7 +360,7 @@ Use only as a last resort.</string>
                         <outlet property="sendButton" destination="k8d-r2-ten" id="VTk-yd-u4e"/>
                         <outlet property="toolbar" destination="Rxb-7X-dPF" id="dcn-r4-zTs"/>
                         <outlet property="toolbarBG" destination="DER-N4-E2j" id="HC6-SI-Xio"/>
-                        <segue destination="5VA-qi-8ou" kind="modal" identifier="Chat to Gallery" id="2j5-iw-4f9"/>
+                        <segue destination="5VA-qi-8ou" kind="custom" identifier="Chat to Gallery" customClass="DCImageOverlaySegue" id="2j5-iw-4f9"/>
                         <segue destination="FDc-Jq-bZ4" kind="modal" identifier="chat to contact" id="I69-w0-oGL"/>
                     </connections>
                 </viewController>
@@ -1698,7 +1698,7 @@ Use only as a last resort.</string>
                         <outlet property="sendButton" destination="OiF-E7-eLf" id="j1K-Uh-chB"/>
                         <outlet property="toolbar" destination="rVG-oX-2mk" id="BFe-fL-40j"/>
                         <outlet property="toolbarBG" destination="bnd-60-fNj" id="A76-He-Y5k"/>
-                        <segue destination="5VA-qi-8ou" kind="modal" identifier="Chat to Gallery" id="VIU-Jg-26X"/>
+                        <segue destination="5VA-qi-8ou" kind="custom" identifier="Chat to Gallery" customClass="DCImageOverlaySegue" id="VIU-Jg-26X"/>
                         <segue destination="FDc-Jq-bZ4" kind="modal" identifier="chat to contact" id="lt1-BL-bem"/>
                     </connections>
                 </viewController>
@@ -1866,8 +1866,10 @@ Use only as a last resort.</string>
                     </tableView>
                     <navigationItem key="navigationItem" title="Settings" id="Dn2-fc-aGQ">
                         <barButtonItem key="backBarButtonItem" title="Back" id="2rx-Tr-ohc"/>
+                        <barButtonItem key="rightBarButtonItem" title="Clear Cache" id="tFi-97-oMF"/>
                     </navigationItem>
                     <connections>
+                        <outlet property="clearCacheButton" destination="tFi-97-oMF" id="yVU-Ec-ao1"/>
                         <outlet property="dataSaverToggle" destination="NxR-dk-Frf" id="2Z0-2l-vOg"/>
                         <outlet property="experimentalToggle" destination="cSd-eM-hWp" id="tsx-PF-9dH"/>
                         <outlet property="tokenInputField" destination="fQO-8f-L95" id="0xi-Kt-KnV"/>

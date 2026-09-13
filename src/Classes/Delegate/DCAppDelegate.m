@@ -23,10 +23,39 @@
 #import "DCMenuViewController.h"
 #import "DCChatViewController.h"
 #import "DCTools.h"
+#import "DCImageViewController.h"
+#import <AVFoundation/AVFoundation.h>
+#import <AudioToolbox/AudioSession.h>
 
 @interface DCAppDelegate ()
 @property (assign, nonatomic) BOOL shouldReload;
 @end
+
+static void DCConfigureMediaAudioSession(void) {
+    AVAudioSession *session = [AVAudioSession sharedInstance];
+    NSError *error = nil;
+
+    if ([session respondsToSelector:@selector(setCategory:withOptions:error:)]) {
+        [session setCategory:AVAudioSessionCategoryPlayback
+                 withOptions:AVAudioSessionCategoryOptionMixWithOthers
+                       error:&error];
+    } else {
+        [session setCategory:AVAudioSessionCategoryPlayback error:&error];
+
+        UInt32 allowMixing = 1;
+        OSStatus status = AudioSessionSetProperty(
+            kAudioSessionProperty_OverrideCategoryMixWithOthers,
+            sizeof(allowMixing),
+            &allowMixing);
+        if (status != noErr) {
+            NSLog(@"[Audio] Could not enable media mixing: %ld", (long)status);
+        }
+    }
+
+    if (error) {
+        NSLog(@"[Audio] Could not configure media audio session: %@", error);
+    }
+}
 
 static UIImage *DCDefaultPrivateChannelIcon(DCChannel *channel) {
     if (!channel.snowflake.length) return nil;
@@ -88,6 +117,22 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
 }
 
 @implementation DCAppDelegate
+
+- (NSUInteger)application:(UIApplication *)application
+    supportedInterfaceOrientationsForWindow:(UIWindow *)window {
+    if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
+        return UIInterfaceOrientationMaskAllButUpsideDown;
+    }
+
+    // While the image viewer is active, permit the whole phone interface to
+    // follow UIKit into landscape. Dismissal switches this back to portrait-only
+    // and explicitly asks UIKit to re-evaluate the restored root controller.
+    if ([DCImageViewController isImageViewerActive]) {
+        return UIInterfaceOrientationMaskAllButUpsideDown;
+    }
+
+    return UIInterfaceOrientationMaskPortrait;
+}
 
 // Restore the last server/DM list from the already-decoded cached guild graph
 // before the menu is ever presented. A missing saved snowflake means DMs.
@@ -310,6 +355,8 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
 
 - (BOOL)application:(UIApplication *)application
     didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
+    DCConfigureMediaAudioSession();
+
     // App version reporting
     NSString *version = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
     [[NSUserDefaults standardUserDefaults] setObject:[NSString stringWithFormat:@"%@", version]
@@ -442,7 +489,11 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
                     cachedSelf.username = cachedUserInfo.username;
                     cachedSelf.globalName = cachedUserInfo.globalName;
                     cachedSelf.avatarID = cachedUserInfo.avatar;
+                    cachedSelf.avatarDecorationID = cachedUserInfo.avatarDecorationID;
+                    cachedSelf.discriminator = cachedUserInfo.discriminator;
                     cachedSelf.guildNicknames = [NSMutableDictionary dictionary];
+                    cachedSelf.guildAvatarIDs = [NSMutableDictionary dictionary];
+                    cachedSelf.guildAvatarDecorationIDs = [NSMutableDictionary dictionary];
                     cachedSelf.status = DCUserStatusOffline;
                     [DCServerCommunicator.sharedInstance
                         mergeCachedUsers:@{ cachedSelf.snowflake : cachedSelf }];
@@ -772,6 +823,7 @@ didFailToRegisterForRemoteNotificationsWithError:(NSError *)error {
 
 - (void)applicationDidBecomeActive:(UIApplication *)application {
     [[NSUserDefaults standardUserDefaults] synchronize];
+    DCConfigureMediaAudioSession();
 }
 
 
@@ -783,6 +835,7 @@ didFailToRegisterForRemoteNotificationsWithError:(NSError *)error {
     NSLog(@"Memory warning received, clearing image cache!");
     [[DCResourceManager sharedManager] noteMemoryWarning];
     [SDWebImageManager.sharedManager.imageCache clearMemory];
+    [DCTools purgeGuildAvatarCache];
     [[DCChatMediaManager sharedManager] handleMemoryWarning];
 }
 

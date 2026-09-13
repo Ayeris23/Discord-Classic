@@ -41,7 +41,14 @@
 
 + (UIImage *)processedAvatarForUser:(DCUser *)user context:(DCAssetContext)context {
     if (!user) return nil;
+    return [self processedAvatarImage:user.rawProfileImage
+                           decoration:user.avatarDecoration
+                              context:context];
+}
 
++ (UIImage *)processedAvatarImage:(UIImage *)avatar
+                       decoration:(UIImage *)decoration
+                          context:(DCAssetContext)context {
     CGFloat avatarSize, canvasSize;
     CGFloat chromeWidth, chromeHeight;
     NSString *chromeName;
@@ -76,16 +83,16 @@
 
     UIGraphicsBeginImageContextWithOptions(CGSizeMake(canvasSize, canvasSize), NO, [UIScreen mainScreen].scale);
 
-    UIImage *rounded = [self roundedImage:user.rawProfileImage size:avatarSize];
+    UIImage *rounded = [self roundedImage:avatar size:avatarSize];
     if (rounded) {
         [rounded drawInRect:CGRectMake(padding, padding, avatarSize, avatarSize)];
     }
 
     if (includeDecoration
-        && user.avatarDecoration
-        && [user.avatarDecoration isKindOfClass:[UIImage class]]
-        && user.avatarDecoration.size.width > 0) {
-        [user.avatarDecoration drawInRect:CGRectMake(0, 0, canvasSize, canvasSize)];
+        && decoration
+        && [decoration isKindOfClass:[UIImage class]]
+        && decoration.size.width > 0) {
+        [decoration drawInRect:CGRectMake(0, 0, canvasSize, canvasSize)];
     }
 
     UIImage *chrome = [UIImage imageNamed:chromeName];

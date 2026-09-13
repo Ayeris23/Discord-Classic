@@ -9,6 +9,7 @@
 #import "DCViewController.h"
 #import "DCGuildListViewController.h"
 #import "DCServerCommunicator.h"
+#import "DCImageViewController.h"
 
 @implementation DCViewController
 
@@ -17,7 +18,8 @@
 }
 
 - (BOOL)shouldAutorotateToInterfaceOrientation:(UIInterfaceOrientation)interfaceOrientation {
-    if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
+    if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad ||
+        [DCImageViewController isImageViewerActive]) {
         return (interfaceOrientation != UIInterfaceOrientationPortraitUpsideDown);
     }
     return (interfaceOrientation == UIInterfaceOrientationPortrait);
@@ -28,7 +30,8 @@
 }
 
 - (NSUInteger)supportedInterfaceOrientations {
-    if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
+    if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad ||
+        [DCImageViewController isImageViewerActive]) {
         return UIInterfaceOrientationMaskAllButUpsideDown;
     }
     return UIInterfaceOrientationMaskPortrait;

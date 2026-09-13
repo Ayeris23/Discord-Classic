@@ -6,15 +6,11 @@
 //  Copyright (c) 2026 bag.xml. All rights reserved.
 //
 
-#import <UIKit/UIKit.h>
+#import "UILazyImageView.h"
 
-@interface DCChatGifAttachment : UIView
-@property (weak, nonatomic) IBOutlet UIImageView *gifThumbnail;
-@property (weak, nonatomic) IBOutlet UIImageView *gifBadge;
+@interface DCChatGifAttachment : UILazyImageView
 @property (strong, nonatomic) NSURL *gifURL;
-@property (strong, nonatomic) NSURL *thumbnailURL;
-@property (strong, nonatomic) UIImage *staticThumbnail;
-@property (nonatomic) BOOL isLoading;
+@property (assign, nonatomic, getter=isVideoBacked) BOOL videoBacked;
 - (void)stopPlayback;
 - (void)prepareForDisplay;
 - (void)prepareForDisplayAllowLoading:(BOOL)allowLoading;

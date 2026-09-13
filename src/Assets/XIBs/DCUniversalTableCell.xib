@@ -50,18 +50,6 @@
 								<bool key="IBUIOpaque">NO</bool>
 								<string key="targetRuntimeIdentifier">IBCocoaTouchFramework</string>
 							</object>
-							<object class="IBUIImageView" id="256396676">
-								<reference key="NSNextResponder" ref="494805391"/>
-								<int key="NSvFlags">290</int>
-								<string key="NSFrameSize">{321, 2}</string>
-								<reference key="NSSuperview" ref="494805391"/>
-								<reference key="NSWindow"/>
-								<reference key="NSNextKeyView" ref="245748541"/>
-								<string key="NSReuseIdentifierKey">_NS:9</string>
-								<string key="NSHuggingPriority">{251, 251}</string>
-								<bool key="IBUIUserInteractionEnabled">NO</bool>
-								<string key="targetRuntimeIdentifier">IBCocoaTouchFramework</string>
-							</object>
 							<object class="IBUIView" id="245748541">
 								<reference key="NSNextResponder" ref="494805391"/>
 								<int key="NSvFlags">290</int>
@@ -105,7 +93,7 @@
 						<string key="NSFrameSize">{320, 39}</string>
 						<reference key="NSSuperview" ref="116778014"/>
 						<reference key="NSWindow"/>
-						<reference key="NSNextKeyView" ref="256396676"/>
+						<reference key="NSNextKeyView"/>
 						<object class="NSColor" key="IBUIBackgroundColor">
 							<int key="NSColorSpace">3</int>
 							<bytes key="NSWhite">MCAwAA</bytes>
@@ -147,19 +135,27 @@
 				</object>
 				<object class="IBConnectionRecord">
 					<object class="IBCocoaTouchOutletConnection" key="connection">
-						<string key="label">separatorImageView</string>
-						<reference key="source" ref="116778014"/>
-						<reference key="destination" ref="256396676"/>
-					</object>
-					<string key="id">msa-mf-xSY</string>
-				</object>
-				<object class="IBConnectionRecord">
-					<object class="IBCocoaTouchOutletConnection" key="connection">
 						<string key="label">contentTextView</string>
 						<reference key="source" ref="116778014"/>
 						<reference key="destination" ref="673713486"/>
 					</object>
 					<string key="id">6Bg-u7-sIp</string>
+				</object>
+				<object class="IBConnectionRecord">
+					<object class="IBCocoaTouchOutletConnection" key="connection">
+						<string key="label">separatorLow</string>
+						<reference key="source" ref="116778014"/>
+						<reference key="destination" ref="245748541"/>
+					</object>
+					<string key="id">PKh-zh-2bC</string>
+				</object>
+				<object class="IBConnectionRecord">
+					<object class="IBCocoaTouchOutletConnection" key="connection">
+						<string key="label">separatorHigh</string>
+						<reference key="source" ref="116778014"/>
+						<reference key="destination" ref="223572171"/>
+					</object>
+					<string key="id">CGR-jy-I7O</string>
 				</object>
 			</array>
 			<object class="IBMutableOrderedSet" key="objectRecords">
@@ -185,18 +181,12 @@
 						<string key="id">kE3-kD-wrQ</string>
 						<reference key="object" ref="116778014"/>
 						<array class="NSMutableArray" key="children">
-							<reference ref="256396676"/>
 							<reference ref="1025506783"/>
 							<reference ref="245748541"/>
 							<reference ref="223572171"/>
 							<reference ref="673713486"/>
 						</array>
 						<reference key="parent" ref="0"/>
-					</object>
-					<object class="IBObjectRecord">
-						<string key="id">S4P-Hk-FRv</string>
-						<reference key="object" ref="256396676"/>
-						<reference key="parent" ref="116778014"/>
 					</object>
 					<object class="IBObjectRecord">
 						<string key="id">VFQ-Sx-FLN</string>
@@ -232,7 +222,6 @@
 				<string key="9TN-xY-Pjk.IBPluginDependency">com.apple.InterfaceBuilder.IBCocoaTouchPlugin</string>
 				<string key="Ob8-df-yLA.CustomClassName">DTAttributedLabel</string>
 				<string key="Ob8-df-yLA.IBPluginDependency">com.apple.InterfaceBuilder.IBCocoaTouchPlugin</string>
-				<string key="S4P-Hk-FRv.IBPluginDependency">com.apple.InterfaceBuilder.IBCocoaTouchPlugin</string>
 				<string key="VFQ-Sx-FLN.IBPluginDependency">com.apple.InterfaceBuilder.IBCocoaTouchPlugin</string>
 				<string key="gpE-49-adJ.IBPluginDependency">com.apple.InterfaceBuilder.IBCocoaTouchPlugin</string>
 				<string key="kE3-kD-wrQ.CustomClassName">DCChatTableCell</string>
@@ -258,7 +247,8 @@
 						<string key="referencedAuthorLabel">UILabel</string>
 						<string key="referencedMessage">DTAttributedLabel</string>
 						<string key="referencedProfileImage">UIImageView</string>
-						<string key="separatorImageView">UIImageView</string>
+						<string key="separatorHigh">UIView</string>
+						<string key="separatorLow">UIView</string>
 						<string key="timestampLabel">UILabel</string>
 						<string key="universalImageView">UIImageView</string>
 					</dictionary>
@@ -291,9 +281,13 @@
 							<string key="name">referencedProfileImage</string>
 							<string key="candidateClassName">UIImageView</string>
 						</object>
-						<object class="IBToOneOutletInfo" key="separatorImageView">
-							<string key="name">separatorImageView</string>
-							<string key="candidateClassName">UIImageView</string>
+						<object class="IBToOneOutletInfo" key="separatorHigh">
+							<string key="name">separatorHigh</string>
+							<string key="candidateClassName">UIView</string>
+						</object>
+						<object class="IBToOneOutletInfo" key="separatorLow">
+							<string key="name">separatorLow</string>
+							<string key="candidateClassName">UIView</string>
 						</object>
 						<object class="IBToOneOutletInfo" key="timestampLabel">
 							<string key="name">timestampLabel</string>
@@ -347,7 +341,7 @@
 		</object>
 		<object class="NSMutableDictionary" key="IBDocument.PluginDeclaredDependencyDefaults">
 			<string key="NS.key.0">com.apple.InterfaceBuilder.CocoaTouchPlugin.iPhoneOS</string>
-			<real value="1296" key="NS.object.0"/>
+			<real value="1280" key="NS.object.0"/>
 		</object>
 		<object class="NSMutableDictionary" key="IBDocument.PluginDeclaredDevelopmentDependencies">
 			<string key="NS.key.0">com.apple.InterfaceBuilder.CocoaTouchPlugin.InterfaceBuilder3</string>

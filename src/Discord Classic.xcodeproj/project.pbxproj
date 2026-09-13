@@ -107,8 +107,6 @@
 		2F1120DC2F4E913F00159D64 /* newMessages.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F11202C2F4E913F00159D64 /* newMessages.png */; };
 		2F1120DD2F4E913F00159D64 /* newMessages@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F11202D2F4E913F00159D64 /* newMessages@2x.png */; };
 		2F1120DE2F4E913F00159D64 /* Icon.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F11202E2F4E913F00159D64 /* Icon.png */; };
-		2F1120DF2F4E913F00159D64 /* inputField.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F11202F2F4E913F00159D64 /* inputField.png */; };
-		2F1120E02F4E913F00159D64 /* inputField@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F1120302F4E913F00159D64 /* inputField@2x.png */; };
 		2F1120E12F4E913F00159D64 /* Default-568h@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F1120322F4E913F00159D64 /* Default-568h@2x.png */; };
 		2F1120E22F4E913F00159D64 /* TestCallEmbed.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F1120342F4E913F00159D64 /* TestCallEmbed.png */; };
 		2F1120E32F4E913F00159D64 /* border.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F1120362F4E913F00159D64 /* border.png */; };
@@ -408,6 +406,16 @@
 		2F32F3DD3029AFC3003BF841 /* DCChatMediaManager.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F32F3DC3029AFC3003BF841 /* DCChatMediaManager.m */; };
 		2F32F3DF302B0009003BF841 /* folder@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F32F3DE302B0009003BF841 /* folder@2x.png */; };
 		2F32F3E1302D5903003BF841 /* GuildIconBase@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F32F3E0302D5903003BF841 /* GuildIconBase@2x.png */; };
+		2F32F3E430551A80003BF841 /* DCContentPurgeManager.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F32F3E330551A80003BF841 /* DCContentPurgeManager.m */; };
+		2F32F3E730552BB2003BF841 /* DCImageOverlaySegue.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F32F3E630552BB2003BF841 /* DCImageOverlaySegue.m */; };
+		2F32F3EA3055E90C003BF841 /* DCImageMessageOverlayView.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F32F3E93055E90C003BF841 /* DCImageMessageOverlayView.m */; };
+		2F32F3EF305635BA003BF841 /* Down.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F32F3EB305635BA003BF841 /* Down.png */; };
+		2F32F3F0305635BA003BF841 /* Down@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F32F3EC305635BA003BF841 /* Down@2x.png */; };
+		2F32F3F1305635BA003BF841 /* DownPressed.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F32F3ED305635BA003BF841 /* DownPressed.png */; };
+		2F32F3F2305635BA003BF841 /* DownPressed@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F32F3EE305635BA003BF841 /* DownPressed@2x.png */; };
+		2F32F3F530563633003BF841 /* SendMessageButton-Disabled.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F32F3F330563633003BF841 /* SendMessageButton-Disabled.png */; };
+		2F32F3F630563633003BF841 /* SendMessageButton-Disabled@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F32F3F430563633003BF841 /* SendMessageButton-Disabled@2x.png */; };
+		2F32F3F830565B19003BF841 /* AudioToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2F32F3F730565B19003BF841 /* AudioToolbox.framework */; };
 		2F7424082F70DA7E00FAF3D9 /* Settings.bundle in Resources */ = {isa = PBXBuildFile; fileRef = 2F7424072F70DA7E00FAF3D9 /* Settings.bundle */; };
 		2F74240A2F70E51B00FAF3D9 /* Storyboard-7.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 2F7424092F70E51B00FAF3D9 /* Storyboard-7.storyboard */; };
 		2F74240D2F7771D600FAF3D9 /* Badge.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F74240B2F7771D600FAF3D9 /* Badge.png */; };
@@ -652,8 +660,6 @@
 		2F11202C2F4E913F00159D64 /* newMessages.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = newMessages.png; sourceTree = "<group>"; };
 		2F11202D2F4E913F00159D64 /* newMessages@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "newMessages@2x.png"; sourceTree = "<group>"; };
 		2F11202E2F4E913F00159D64 /* Icon.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = Icon.png; sourceTree = "<group>"; };
-		2F11202F2F4E913F00159D64 /* inputField.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = inputField.png; sourceTree = "<group>"; };
-		2F1120302F4E913F00159D64 /* inputField@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "inputField@2x.png"; sourceTree = "<group>"; };
 		2F1120322F4E913F00159D64 /* Default-568h@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Default-568h@2x.png"; sourceTree = "<group>"; };
 		2F1120342F4E913F00159D64 /* TestCallEmbed.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = TestCallEmbed.png; sourceTree = "<group>"; };
 		2F1120362F4E913F00159D64 /* border.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = border.png; sourceTree = "<group>"; };
@@ -1095,6 +1101,19 @@
 		2F32F3DC3029AFC3003BF841 /* DCChatMediaManager.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCChatMediaManager.m; sourceTree = "<group>"; };
 		2F32F3DE302B0009003BF841 /* folder@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "folder@2x.png"; sourceTree = "<group>"; };
 		2F32F3E0302D5903003BF841 /* GuildIconBase@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "GuildIconBase@2x.png"; sourceTree = "<group>"; };
+		2F32F3E230551A80003BF841 /* DCContentPurgeManager.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCContentPurgeManager.h; sourceTree = "<group>"; };
+		2F32F3E330551A80003BF841 /* DCContentPurgeManager.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCContentPurgeManager.m; sourceTree = "<group>"; };
+		2F32F3E530552BB2003BF841 /* DCImageOverlaySegue.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCImageOverlaySegue.h; sourceTree = "<group>"; };
+		2F32F3E630552BB2003BF841 /* DCImageOverlaySegue.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCImageOverlaySegue.m; sourceTree = "<group>"; };
+		2F32F3E83055E90C003BF841 /* DCImageMessageOverlayView.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCImageMessageOverlayView.h; sourceTree = "<group>"; };
+		2F32F3E93055E90C003BF841 /* DCImageMessageOverlayView.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCImageMessageOverlayView.m; sourceTree = "<group>"; };
+		2F32F3EB305635BA003BF841 /* Down.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = Down.png; sourceTree = "<group>"; };
+		2F32F3EC305635BA003BF841 /* Down@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Down@2x.png"; sourceTree = "<group>"; };
+		2F32F3ED305635BA003BF841 /* DownPressed.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = DownPressed.png; sourceTree = "<group>"; };
+		2F32F3EE305635BA003BF841 /* DownPressed@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "DownPressed@2x.png"; sourceTree = "<group>"; };
+		2F32F3F330563633003BF841 /* SendMessageButton-Disabled.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "SendMessageButton-Disabled.png"; sourceTree = "<group>"; };
+		2F32F3F430563633003BF841 /* SendMessageButton-Disabled@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "SendMessageButton-Disabled@2x.png"; sourceTree = "<group>"; };
+		2F32F3F730565B19003BF841 /* AudioToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioToolbox.framework; path = System/Library/Frameworks/AudioToolbox.framework; sourceTree = SDKROOT; };
 		2F7424072F70DA7E00FAF3D9 /* Settings.bundle */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.plug-in"; path = Settings.bundle; sourceTree = "<group>"; };
 		2F7424092F70E51B00FAF3D9 /* Storyboard-7.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; path = "Storyboard-7.storyboard"; sourceTree = "<group>"; };
 		2F74240B2F7771D600FAF3D9 /* Badge.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = Badge.png; sourceTree = "<group>"; };
@@ -1363,6 +1382,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				2F32F3F830565B19003BF841 /* AudioToolbox.framework in Frameworks */,
 				2F97F5592FC3F6FD00A645B1 /* libz.dylib in Frameworks */,
 				2FFA39962F987D5900E67A40 /* libxml2.dylib in Frameworks */,
 				2FFA39942F987C9000E67A40 /* CoreText.framework in Frameworks */,
@@ -1401,6 +1421,7 @@
 		09C6B923204A0F54007EAC26 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				2F32F3F730565B19003BF841 /* AudioToolbox.framework */,
 				2F97F5582FC3F6FD00A645B1 /* libz.dylib */,
 				2FFA39952F987D5900E67A40 /* libxml2.dylib */,
 				2FFA39932F987C9000E67A40 /* CoreText.framework */,
@@ -1474,8 +1495,6 @@
 				2F1120282F4E913F00159D64 /* Group_111.png */,
 				2F1120292F4E913F00159D64 /* Guild_Cell */,
 				2F11202E2F4E913F00159D64 /* Icon.png */,
-				2F11202F2F4E913F00159D64 /* inputField.png */,
-				2F1120302F4E913F00159D64 /* inputField@2x.png */,
 				2F1120312F4E913F00159D64 /* Launch_Images */,
 				2F1120332F4E913F00159D64 /* Missed_Call */,
 				2F1120352F4E913F00159D64 /* New */,
@@ -1555,6 +1574,12 @@
 		2F111FEC2F4E913F00159D64 /* Buttons */ = {
 			isa = PBXGroup;
 			children = (
+				2F32F3F330563633003BF841 /* SendMessageButton-Disabled.png */,
+				2F32F3F430563633003BF841 /* SendMessageButton-Disabled@2x.png */,
+				2F32F3EB305635BA003BF841 /* Down.png */,
+				2F32F3EC305635BA003BF841 /* Down@2x.png */,
+				2F32F3ED305635BA003BF841 /* DownPressed.png */,
+				2F32F3EE305635BA003BF841 /* DownPressed@2x.png */,
 				2F1DF66E2F52C97F009C44CE /* CameraButton.png */,
 				2F1DF66F2F52C97F009C44CE /* CameraButton@2x.png */,
 				2F1DF6702F52C97F009C44CE /* CameraButtonPressed.png */,
@@ -2416,6 +2441,10 @@
 		2F1123492F4EB0AD00159D64 /* Image_viewer */ = {
 			isa = PBXGroup;
 			children = (
+				2F32F3E83055E90C003BF841 /* DCImageMessageOverlayView.h */,
+				2F32F3E93055E90C003BF841 /* DCImageMessageOverlayView.m */,
+				2F32F3E530552BB2003BF841 /* DCImageOverlaySegue.h */,
+				2F32F3E630552BB2003BF841 /* DCImageOverlaySegue.m */,
 				2F11234A2F4EB0AD00159D64 /* DCImageViewController.h */,
 				2F11234B2F4EB0AD00159D64 /* DCImageViewController.m */,
 			);
@@ -2490,6 +2519,8 @@
 		2FD079AF2F6E79650021205C /* Content_Management */ = {
 			isa = PBXGroup;
 			children = (
+				2F32F3E230551A80003BF841 /* DCContentPurgeManager.h */,
+				2F32F3E330551A80003BF841 /* DCContentPurgeManager.m */,
 				2F32F3DB3029AFC3003BF841 /* DCChatMediaManager.h */,
 				2F32F3DC3029AFC3003BF841 /* DCChatMediaManager.m */,
 				2F32F3D830299540003BF841 /* DCResourceManager.h */,
@@ -2892,7 +2923,6 @@
 				2F1120CD2F4E913F00159D64 /* U-Add@2x.png in Resources */,
 				2F1121052F4E913F00159D64 /* bag-xml.png in Resources */,
 				2F1120862F4E913F00159D64 /* Images.xcassets in Resources */,
-				2F1120DF2F4E913F00159D64 /* inputField.png in Resources */,
 				2F1120BB2F4E913F00159D64 /* C-Web@2x.png in Resources */,
 				2F1DF6832F537FBE009C44CE /* BarButtonDone@2x.png in Resources */,
 				2F1DF6762F52C97F009C44CE /* CameraButton.png in Resources */,
@@ -2925,7 +2955,6 @@
 				2F0FFB2B2F4EC89100EE361F /* asu_pid.entitlements in Resources */,
 				2F11209F2F4E913F00159D64 /* NavigationButton@2x.png in Resources */,
 				2F11208B2F4E913F00159D64 /* Border.png in Resources */,
-				2F1120E02F4E913F00159D64 /* inputField@2x.png in Resources */,
 				2F1120E82F4E913F00159D64 /* oldDiscord.png in Resources */,
 				2F1DF67A2F52C97F009C44CE /* SendMessageButton.png in Resources */,
 				2F1122542F4EA03000159D64 /* FontAwesome.ttf in Resources */,
@@ -2936,6 +2965,7 @@
 				2F1120FC2F4E913F00159D64 /* absent@2x.png in Resources */,
 				2F1120982F4E913F00159D64 /* Sidebar_glyph.png in Resources */,
 				2F1120F22F4E913F00159D64 /* PLVideoOverlayPlayDown@2x.png in Resources */,
+				2F32F3F2305635BA003BF841 /* DownPressed@2x.png in Resources */,
 				2F1120CB2F4E913F00159D64 /* DefaultAvatar5@2x.png in Resources */,
 				2F1121232F4E913F00159D64 /* DCUniversalTableCell.xib in Resources */,
 				2F11208A2F4E913F00159D64 /* bannerTopShadow@2x.png in Resources */,
@@ -2973,6 +3003,7 @@
 				2F1120B02F4E913F00159D64 /* C-Reddit.png in Resources */,
 				2F1DF6822F537FBE009C44CE /* BarButtonDone.png in Resources */,
 				2F1DF67D2F52C97F009C44CE /* SendMessageButtonPressed@2x.png in Resources */,
+				2F32F3F630563633003BF841 /* SendMessageButton-Disabled@2x.png in Resources */,
 				2F1120CA2F4E913F00159D64 /* DefaultAvatar5.png in Resources */,
 				2F1121042F4E913F00159D64 /* DirectMessages@2x.png in Resources */,
 				2F1120872F4E913F00159D64 /* bannerBottomShadow.png in Resources */,
@@ -2980,6 +3011,7 @@
 				2FFA38C72F95E11500E67A40 /* icon40-ios7.png in Resources */,
 				2F1120FA2F4E913F00159D64 /* sinkInMask@2x.png in Resources */,
 				2F1120E32F4E913F00159D64 /* border.png in Resources */,
+				2F32F3F0305635BA003BF841 /* Down@2x.png in Resources */,
 				2F11238A2F4EB15F00159D64 /* InfoPlist.strings in Resources */,
 				2F1120E92F4E913F00159D64 /* oldDiscord@2x.png in Resources */,
 				2F1120D22F4E913F00159D64 /* U-Pin.png in Resources */,
@@ -2998,6 +3030,7 @@
 				2F1120BA2F4E913F00159D64 /* C-Web.png in Resources */,
 				2F1120EF2F4E913F00159D64 /* PLVideoOverlayPlay.png in Resources */,
 				2F1120C32F4E913F00159D64 /* DefaultAvatar1@2x.png in Resources */,
+				2F32F3EF305635BA003BF841 /* Down.png in Resources */,
 				2F1120C62F4E913F00159D64 /* DefaultAvatar3.png in Resources */,
 				2F1120F12F4E913F00159D64 /* PLVideoOverlayPlayDown.png in Resources */,
 				2F1120B92F4E913F00159D64 /* C-Twitter@2x.png in Resources */,
@@ -3023,6 +3056,7 @@
 				2F11208F2F4E913F00159D64 /* addbarglyph.png in Resources */,
 				2F1120EA2F4E913F00159D64 /* Sar_izmeli_Mehmet_Aa.mp3 in Resources */,
 				2F1120ED2F4E913F00159D64 /* TopLogo@2x.png in Resources */,
+				2F32F3F530563633003BF841 /* SendMessageButton-Disabled.png in Resources */,
 				2F1120EB2F4E913F00159D64 /* ServerBanner.png in Resources */,
 				2F1120AB2F4E913F00159D64 /* C-BlueSky@2x.png in Resources */,
 				2F1120B22F4E913F00159D64 /* C-Spotify.png in Resources */,
@@ -3075,6 +3109,7 @@
 				2F11210C2F4E913F00159D64 /* Discord.png in Resources */,
 				2F1120B32F4E913F00159D64 /* C-Spotify@2x.png in Resources */,
 				2F1120E12F4E913F00159D64 /* Default-568h@2x.png in Resources */,
+				2F32F3F1305635BA003BF841 /* DownPressed.png in Resources */,
 				2F1120882F4E913F00159D64 /* bannerBottomShadow@2x.png in Resources */,
 				2F1120C12F4E913F00159D64 /* DefaultAvatar0@2x.png in Resources */,
 				2F1DF6772F52C97F009C44CE /* CameraButton@2x.png in Resources */,
@@ -3391,10 +3426,12 @@
 				2F1122692F4EA03000159D64 /* sharpyuv_sse2.c in Sources */,
 				2FFA39672F987C2C00E67A40 /* DTCoreTextParagraphStyle.m in Sources */,
 				2F1122932F4EA03000159D64 /* enc_sse41.c in Sources */,
+				2F32F3E430551A80003BF841 /* DCContentPurgeManager.m in Sources */,
 				2F1122672F4EA03000159D64 /* sharpyuv_gamma.c in Sources */,
 				2FFA39792F987C2C00E67A40 /* DTStylesheetHTMLElement.m in Sources */,
 				2FFA396E2F987C2C00E67A40 /* DTHTMLElement.m in Sources */,
 				2FFA3A652F98879E00E67A40 /* NSURL+DTAppLinks.m in Sources */,
+				2F32F3EA3055E90C003BF841 /* DCImageMessageOverlayView.m in Sources */,
 				2FFA395E2F987C2C00E67A40 /* DTCoreTextFontCollection.m in Sources */,
 				2FFA395F2F987C2C00E67A40 /* DTCoreTextFontDescriptor.m in Sources */,
 				2FFA3A712F98879E00E67A40 /* NSString+DTURLEncoding.m in Sources */,
@@ -3437,6 +3474,7 @@
 				2F1122F92F4EA03000159D64 /* TRMalleableFrameView.m in Sources */,
 				2F11228F2F4EA03000159D64 /* enc_mips_dsp_r2.c in Sources */,
 				2F97F5572FC2658E00A645B1 /* DCMarkdownParser.m in Sources */,
+				2F32F3E730552BB2003BF841 /* DCImageOverlaySegue.m in Sources */,
 				2F97F5642FDFC1F400A645B1 /* DCMessageLayout.m in Sources */,
 				2F11226A2F4EA03000159D64 /* alpha_dec.c in Sources */,
 				2F1123632F4EB0AD00159D64 /* DCMessage.m in Sources */,

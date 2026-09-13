@@ -268,6 +268,7 @@ typedef NS_ENUM(uint64_t, DCGatewayCapabilities) {
 - (BOOL)restorePersistedGatewaySessionIfPossible;
 - (void)persistDurableGatewayStateWithCompletion:(void (^)(BOOL success))completion;
 - (void)prepareForLogout;
+- (void)prepareForContentPurgeWithCompletion:(void (^)(void))completion;
 - (void)performLogout;
 - (void)sendHeartbeat:(NSTimer*)timer;
 - (void)sendJSON:(NSDictionary*)dictionary;
@@ -290,6 +291,10 @@ typedef NS_ENUM(uint64_t, DCGatewayCapabilities) {
 - (void)setEmoji:(DCEmoji *)emoji forSnowflake:(NSString *)snowflake;
 - (void)registerPushToken:(NSString *)token;
 - (void)requestMemberChunkForUserIds:(NSArray *)userIds inGuild:(NSString *)guildId;
+- (void)applyGuildProfileFromMember:(NSDictionary *)member
+                             toUser:(DCUser *)user
+                            guildID:(NSString *)guildID
+                      authoritative:(BOOL)authoritative;
 
 // Shared networking helpers
 + (NSString *)superPropertiesBase64;

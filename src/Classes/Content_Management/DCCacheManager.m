@@ -11,6 +11,7 @@
 #import "DTCoreTextLayoutFrame.h"
 #import "DCUser.h"
 #import "DCMessage.h"
+#import "DCChannel.h"
 #import "DCChannelWindow.h"
 #import "DCServerCommunicator.h"
 #import "DCTools.h"
@@ -28,6 +29,22 @@
 @property (nonatomic, assign) dispatch_queue_t cacheQueue;
 @property (nonatomic, assign) dispatch_queue_t layoutCacheQueue;
 @end
+
+static NSComparisonResult DCCacheCompareSnowflakes(NSString *left, NSString *right) {
+    if (left.length < right.length) return NSOrderedAscending;
+    if (left.length > right.length) return NSOrderedDescending;
+    return [left compare:right options:NSLiteralSearch];
+}
+
+static NSString *DCCacheMessageIDFromJSON(NSDictionary *json) {
+    id value = [json objectForKey:@"id"];
+    return [value isKindOfClass:[NSString class]] ? value : nil;
+}
+
+static NSString *DCCacheChannelIDFromJSON(NSDictionary *json) {
+    id value = [json objectForKey:@"channel_id"];
+    return [value isKindOfClass:[NSString class]] ? value : nil;
+}
 
 @implementation DCCacheManager
 
@@ -396,7 +413,8 @@ static const NSUInteger DCMessageWindowMessageLimit = 80;
         nil];
 }
 
-- (DCMessage *)messageFromPersistentRecord:(NSDictionary *)record {
+- (DCMessage *)messageFromPersistentRecord:(NSDictionary *)record
+                                      channel:(DCChannel *)channel {
     if (![record isKindOfClass:[NSDictionary class]]) return nil;
 
     NSDictionary *json = [record objectForKey:@"json"];
@@ -404,7 +422,9 @@ static const NSUInteger DCMessageWindowMessageLimit = 80;
 
     __block DCMessage *message = nil;
     void (^convert)(void) = ^{
-        message = [DCTools convertJsonMessage:json];
+        message = [DCTools convertJsonMessage:json
+                             deferLegacyLayout:NO
+                                       channel:channel];
     };
 
     // convertJsonMessage builds UIKit/DTCoreText state and attachment XIBs. Use
@@ -428,17 +448,38 @@ static const NSUInteger DCMessageWindowMessageLimit = 80;
 - (NSDictionary *)persistentRecordForMessageWindow:(DCChannelWindow *)window {
     if (!window.channelSnowflake.length) return nil;
 
-    NSArray *messages = window.messages;
-    if (messages.count > DCMessageWindowMessageLimit) {
-        messages = [messages subarrayWithRange:
-            NSMakeRange(messages.count - DCMessageWindowMessageLimit,
-                        DCMessageWindowMessageLimit)];
+    NSMutableDictionary *recordsBySnowflake = [NSMutableDictionary dictionary];
+    for (DCMessage *message in window.messages) {
+        NSDictionary *record = [self persistentRecordForMessage:message];
+        NSDictionary *json = [record objectForKey:@"json"];
+        if (![json isKindOfClass:[NSDictionary class]]) continue;
+
+        NSString *messageID = DCCacheMessageIDFromJSON(json);
+        if (!messageID.length) continue;
+
+        NSString *sourceChannelID = DCCacheChannelIDFromJSON(json);
+        if (sourceChannelID.length &&
+            ![sourceChannelID isEqualToString:window.channelSnowflake]) {
+            NSLog(@"[DCCacheManager] Refusing to persist message %@ from channel %@ in window %@",
+                  messageID, sourceChannelID, window.channelSnowflake);
+            continue;
+        }
+
+        [recordsBySnowflake setObject:record forKey:messageID];
     }
 
-    NSMutableArray *records = [NSMutableArray arrayWithCapacity:messages.count];
-    for (DCMessage *message in messages) {
-        NSDictionary *record = [self persistentRecordForMessage:message];
-        if (record) [records addObject:record];
+    NSArray *records = [[recordsBySnowflake allValues]
+        sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *left, NSDictionary *right) {
+            NSDictionary *leftJSON = [left objectForKey:@"json"];
+            NSDictionary *rightJSON = [right objectForKey:@"json"];
+            return DCCacheCompareSnowflakes(DCCacheMessageIDFromJSON(leftJSON),
+                                             DCCacheMessageIDFromJSON(rightJSON));
+        }];
+
+    if (records.count > DCMessageWindowMessageLimit) {
+        records = [records subarrayWithRange:
+            NSMakeRange(records.count - DCMessageWindowMessageLimit,
+                        DCMessageWindowMessageLimit)];
     }
 
     return @{
@@ -491,6 +532,11 @@ static const NSUInteger DCMessageWindowMessageLimit = 80;
     NSDictionary *root = [self persistentRecordForMessageWindow:window];
     NSString *path = [self messageWindowCachePathForChannel:window.channelSnowflake];
     if (!root || !path) return;
+    NSArray *records = [root objectForKey:@"messages"];
+    if (![records isKindOfClass:[NSArray class]] || records.count == 0) {
+        [self invalidateMessageWindowForChannel:window.channelSnowflake];
+        return;
+    }
 
     dispatch_async(self.cacheQueue, ^{
         @autoreleasepool {
@@ -543,10 +589,51 @@ static const NSUInteger DCMessageWindowMessageLimit = 80;
             return nil;
         }
 
+        NSString *storedChannelID = [root objectForKey:@"channelID"];
+        if (![storedChannelID isKindOfClass:[NSString class]] ||
+            ![storedChannelID isEqualToString:channelSnowflake]) {
+            NSLog(@"[DCCacheManager] Message window %@ had mismatched channel identity %@",
+                  channelSnowflake, storedChannelID);
+            [self invalidateMessageWindowForChannel:channelSnowflake];
+            return nil;
+        }
+
         DCChannelWindow *window = [[DCChannelWindow alloc]
             initWithChannelSnowflake:channelSnowflake];
-        NSArray *records = [root objectForKey:@"messages"];
-        NSUInteger availableRecordCount = [records isKindOfClass:[NSArray class]] ? records.count : 0;
+
+        NSArray *rawRecords = [root objectForKey:@"messages"];
+        if (![rawRecords isKindOfClass:[NSArray class]]) {
+            rawRecords = [NSArray array];
+        }
+        NSUInteger rawRecordCount = rawRecords.count;
+        NSMutableDictionary *recordsBySnowflake = [NSMutableDictionary dictionary];
+        for (NSDictionary *record in rawRecords) {
+            if (![record isKindOfClass:[NSDictionary class]]) continue;
+            NSDictionary *json = [record objectForKey:@"json"];
+            if (![json isKindOfClass:[NSDictionary class]]) continue;
+
+            NSString *messageID = DCCacheMessageIDFromJSON(json);
+            if (!messageID.length) continue;
+
+            NSString *sourceChannelID = DCCacheChannelIDFromJSON(json);
+            if (sourceChannelID.length &&
+                ![sourceChannelID isEqualToString:channelSnowflake]) {
+                NSLog(@"[DCCacheManager] Dropping cached message %@ from channel %@ while restoring %@",
+                      messageID, sourceChannelID, channelSnowflake);
+                continue;
+            }
+
+            [recordsBySnowflake setObject:record forKey:messageID];
+        }
+
+        NSArray *records = [[recordsBySnowflake allValues]
+            sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *left, NSDictionary *right) {
+                return DCCacheCompareSnowflakes(
+                    DCCacheMessageIDFromJSON([left objectForKey:@"json"]),
+                    DCCacheMessageIDFromJSON([right objectForKey:@"json"]));
+            }];
+
+        NSUInteger availableRecordCount = records.count;
         NSUInteger restoreLimit = [DCTools isOriginalIPad]
             ? 24
             : (([UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad) ? 24 : 12);
@@ -554,6 +641,30 @@ static const NSUInteger DCMessageWindowMessageLimit = 80;
         if (trimmedRestore) {
             records = [records subarrayWithRange:NSMakeRange(availableRecordCount - restoreLimit, restoreLimit)];
         }
+
+        DCChannel *contextChannel =
+            [DCServerCommunicator.sharedInstance.channels objectForKey:channelSnowflake];
+        if (!contextChannel &&
+            [DCServerCommunicator.sharedInstance.selectedChannel.snowflake
+                isEqualToString:channelSnowflake]) {
+            contextChannel = DCServerCommunicator.sharedInstance.selectedChannel;
+        }
+        if (!contextChannel) {
+            /*
+             * READY may not have rebuilt the canonical channel table yet. A
+             * minimal channel object is safer than allowing cached messages
+             * to inherit rendering context from some other selected channel.
+             */
+            contextChannel = [DCChannel new];
+            contextChannel.snowflake = channelSnowflake;
+        }
+        if (availableRecordCount != rawRecordCount) {
+            NSLog(@"[DCCacheManager] Repaired message window %@ records %lu -> %lu",
+                  channelSnowflake,
+                  (unsigned long)rawRecordCount,
+                  (unsigned long)availableRecordCount);
+        }
+
         CFAbsoluteTime conversionStart = CFAbsoluteTimeGetCurrent();
         CFAbsoluteTime slowestConversion = 0.0;
         NSDictionary *slowestJSON = nil;
@@ -561,7 +672,8 @@ static const NSUInteger DCMessageWindowMessageLimit = 80;
         if ([records isKindOfClass:[NSArray class]]) {
             for (NSDictionary *record in records) {
                 CFAbsoluteTime oneStart = CFAbsoluteTimeGetCurrent();
-                DCMessage *message = [self messageFromPersistentRecord:record];
+                DCMessage *message = [self messageFromPersistentRecord:record
+                                                            channel:contextChannel];
                 CFAbsoluteTime oneElapsed = CFAbsoluteTimeGetCurrent() - oneStart;
                 if (oneElapsed > slowestConversion) {
                     slowestConversion = oneElapsed;
@@ -576,7 +688,10 @@ static const NSUInteger DCMessageWindowMessageLimit = 80;
             }
         }
         CFAbsoluteTime conversionElapsed = CFAbsoluteTimeGetCurrent() - conversionStart;
-        if (window.messages.count == 0) return nil;
+        if (window.messages.count == 0) {
+            [self invalidateMessageWindowForChannel:channelSnowflake];
+            return nil;
+        }
 
         id value = [root objectForKey:@"atPresentTime"];
         if ([value respondsToSelector:@selector(boolValue)])
@@ -1025,6 +1140,12 @@ static const NSInteger DCUserCacheVersion = 1;
     if (user.guildNicknames.count)
         [record setObject:[NSDictionary dictionaryWithDictionary:user.guildNicknames]
                    forKey:@"guildNicknames"];
+    if (user.guildAvatarIDs.count)
+        [record setObject:[NSDictionary dictionaryWithDictionary:user.guildAvatarIDs]
+                   forKey:@"guildAvatarIDs"];
+    if (user.guildAvatarDecorationIDs.count)
+        [record setObject:[NSDictionary dictionaryWithDictionary:user.guildAvatarDecorationIDs]
+                   forKey:@"guildAvatarDecorationIDs"];
 
     [record setObject:[NSNumber numberWithInteger:user.discriminator]
                forKey:@"discriminator"];
@@ -1063,6 +1184,18 @@ static const NSInteger DCUserCacheVersion = 1;
         user.guildNicknames = [value mutableCopy];
     else
         user.guildNicknames = [NSMutableDictionary dictionary];
+
+    value = [record objectForKey:@"guildAvatarIDs"];
+    if ([value isKindOfClass:[NSDictionary class]])
+        user.guildAvatarIDs = [value mutableCopy];
+    else
+        user.guildAvatarIDs = [NSMutableDictionary dictionary];
+
+    value = [record objectForKey:@"guildAvatarDecorationIDs"];
+    if ([value isKindOfClass:[NSDictionary class]])
+        user.guildAvatarDecorationIDs = [value mutableCopy];
+    else
+        user.guildAvatarDecorationIDs = [NSMutableDictionary dictionary];
 
     value = [record objectForKey:@"discriminator"];
     if ([value respondsToSelector:@selector(integerValue)])
@@ -1197,5 +1330,10 @@ static const NSInteger DCUserCacheVersion = 1;
         [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
         return nil;
     }
+}
+
+- (void)invalidateUserInfoCache {
+    NSString *path = [self userInfoCachePath];
+    [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
 }
 @end

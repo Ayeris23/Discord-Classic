@@ -12,6 +12,7 @@
 #include <Foundation/NSObjCRuntime.h>
 #include <UIKit/UIKit.h>
 #include <dispatch/dispatch.h>
+#import <QuartzCore/QuartzCore.h>
 #include <objc/NSObjCRuntime.h>
 #include "DCGuild.h"
 #include "DCGuildFolder.h"
@@ -27,6 +28,8 @@
 @property (assign, nonatomic) BOOL shouldAttemptColdChatRestore;
 @property (assign, nonatomic) BOOL coldChatRestoreAlreadyHandled;
 @property (strong, nonatomic) NSMutableSet *folderIconHydrationRequests;
+@property (assign, nonatomic) BOOL guildFolderAnimationInProgress;
+@property (assign, nonatomic) BOOL guildTableReloadPending;
 @end
 
 @implementation DCMenuViewController
@@ -34,6 +37,148 @@
 - (BOOL)isDirectMessagesGuild:(DCGuild *)guild {
     return guild && guild.snowflake == nil &&
            [guild.name isEqualToString:@"Direct Messages"];
+}
+
+- (void)activateSelectedChannelInExperimentalMode {
+    if (!self.experimentalMode) return;
+
+    UIViewController *contentController =
+        self.slideMenuController.contentViewController;
+    DCChatViewController *chatViewController = nil;
+
+    if ([contentController isKindOfClass:[UINavigationController class]]) {
+        UINavigationController *navigationController =
+            (UINavigationController *)contentController;
+        UIViewController *rootController =
+            navigationController.viewControllers.count > 0
+                ? [navigationController.viewControllers objectAtIndex:0]
+                : nil;
+        if ([rootController isKindOfClass:[DCChatViewController class]]) {
+            chatViewController = (DCChatViewController *)rootController;
+        }
+    } else if ([contentController isKindOfClass:[DCChatViewController class]]) {
+        chatViewController = (DCChatViewController *)contentController;
+    }
+
+    if (!chatViewController) {
+        DBGLOG(@"[Experimental] Chat content controller is not available yet");
+        return;
+    }
+
+    [chatViewController activateSelectedChannel];
+    [NSNotificationCenter.defaultCenter
+        postNotificationName:@"GuildMemberListUpdated"
+                      object:nil];
+    [self.slideMenuController hideMenu:YES];
+}
+
+- (void)rebuildDisplayGuildsIfNeeded {
+    assertMainThread();
+
+    DCServerCommunicator *communicator = DCServerCommunicator.sharedInstance;
+    if (!communicator.guilds) {
+        self.displayGuilds = [NSMutableArray array];
+        return;
+    }
+    if (communicator.guildsIsSorted && self.displayGuilds) {
+        return;
+    }
+
+    NSMutableArray *cached = communicator.cachedDisplayLayout;
+    if (cached.count) {
+        self.displayGuilds = cached;
+        communicator.cachedDisplayLayout = nil;
+        communicator.guildsIsSorted = YES;
+        return;
+    }
+
+    NSArray *guildPositions = communicator.currentUserInfo.guildPositions ?: @[];
+    NSArray *guildFolders = communicator.currentUserInfo.guildFolders ?: @[];
+    NSUInteger guildCount = guildPositions.count + 1;
+    NSMutableArray *sortedGuilds = [NSMutableArray arrayWithCapacity:guildCount];
+    NSNull *nullObject = [NSNull null];
+    for (NSUInteger i = 0; i < guildCount; i++) {
+        [sortedGuilds addObject:nullObject];
+    }
+
+    for (DCGuild *guild in communicator.guilds) {
+        NSUInteger index = [guildPositions indexOfObject:guild.snowflake];
+        if (index != NSNotFound) {
+            [sortedGuilds insertObject:guild atIndex:index + 1];
+        } else if ([[sortedGuilds objectAtIndex:0] isEqual:nullObject]) {
+            [sortedGuilds insertObject:guild atIndex:0];
+        } else {
+            [sortedGuilds addObject:guild];
+        }
+    }
+    [sortedGuilds removeObjectIdenticalTo:nullObject];
+    if (sortedGuilds.count == 0) {
+        self.displayGuilds = [NSMutableArray array];
+        communicator.guildsIsSorted = YES;
+        return;
+    }
+
+    communicator.guilds = sortedGuilds;
+    sortedGuilds = [NSMutableArray arrayWithObject:[communicator.guilds objectAtIndex:0]];
+    NSMutableSet *handledGuildIds = [NSMutableSet set];
+
+    for (DCGuildFolder *folder in guildFolders) {
+        if (folder.id) {
+            [sortedGuilds addObject:folder];
+        }
+        if (folder.opened) {
+            NSArray *folderGuilds = [[communicator.guilds
+                filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(DCGuild *guild, NSDictionary *bindings) {
+                    return [folder.guildIds containsObject:guild.snowflake];
+                }]]
+                sortedArrayUsingComparator:^NSComparisonResult(DCGuild *a, DCGuild *b) {
+                    NSUInteger index1 = [folder.guildIds indexOfObject:a.snowflake];
+                    NSUInteger index2 = [folder.guildIds indexOfObject:b.snowflake];
+                    if (index1 < index2) return NSOrderedAscending;
+                    if (index1 > index2) return NSOrderedDescending;
+                    return NSOrderedSame;
+                }];
+            [sortedGuilds addObjectsFromArray:folderGuilds];
+        }
+        [handledGuildIds addObjectsFromArray:folder.guildIds];
+    }
+
+    NSMutableArray *origCopy = [[[communicator.guilds reverseObjectEnumerator] allObjects] mutableCopy];
+    [origCopy filterUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(id evaluatedObject, NSDictionary *bindings) {
+        if (![evaluatedObject isKindOfClass:[DCGuild class]]) return NO;
+        DCGuild *guild = (DCGuild *)evaluatedObject;
+        return guild.snowflake && ![handledGuildIds containsObject:guild.snowflake];
+    }]];
+    if (origCopy.count > 0) {
+        NSRange range = NSMakeRange(1, origCopy.count);
+        NSIndexSet *indexSet = [NSIndexSet indexSetWithIndexesInRange:range];
+        [sortedGuilds insertObjects:origCopy atIndexes:indexSet];
+    }
+
+    self.displayGuilds = sortedGuilds;
+    communicator.guildsIsSorted = YES;
+}
+
+- (void)reloadGuildTableFromCanonicalState {
+    assertMainThread();
+    if (self.guildFolderAnimationInProgress) {
+        self.guildTableReloadPending = YES;
+        return;
+    }
+
+    [self rebuildDisplayGuildsIfNeeded];
+    [self.guildTableView reloadData];
+}
+
+- (void)finishGuildFolderAnimation {
+    assertMainThread();
+    self.guildFolderAnimationInProgress = NO;
+
+    if (self.guildTableReloadPending ||
+        !DCServerCommunicator.sharedInstance.guildsIsSorted) {
+        self.guildTableReloadPending = NO;
+        [self reloadGuildTableFromCanonicalState];
+    }
 }
 
 - (void)synchronizeSelectedGuildUI {
@@ -281,6 +426,15 @@
             if (self.selectedChannel &&
                 [self.selectedChannel.snowflake
                     isEqualToString:channelId]) {
+                if (self.experimentalMode) {
+                    self.selectedGuild = guild;
+                    self.selectedChannel = channel;
+                    DCServerCommunicator.sharedInstance.selectedGuild = guild;
+                    DCServerCommunicator.sharedInstance.selectedChannel = channel;
+                    [self synchronizeSelectedGuildUI];
+                    [self.channelTableView reloadData];
+                    [self activateSelectedChannelInExperimentalMode];
+                }
                 return;
             }
             self.selectedGuild                                  = guild;
@@ -295,8 +449,17 @@
             }
 
             dispatch_async(dispatch_get_main_queue(), ^{
-                [self performSegueWithIdentifier:@"guilds to chat"
-                                          sender:self];
+                if (self.experimentalMode) {
+                    [DCServerCommunicator.sharedInstance
+                        sendGuildSubscriptionWithGuildId:guild.snowflake
+                                               channelId:channel.snowflake];
+                    [channel ackMessage:channel.lastMessageId];
+                    [channel checkIfRead];
+                    [self activateSelectedChannelInExperimentalMode];
+                } else {
+                    [self performSegueWithIdentifier:@"guilds to chat"
+                                              sender:self];
+                }
             });
             return;
         }
@@ -336,9 +499,20 @@
             self.selectedChannel = nil;
         }
 
+        DCChannel *canonicalSelectedChannel =
+            DCServerCommunicator.sharedInstance.selectedChannel;
+        if (canonicalSelectedChannel) {
+            self.selectedChannel = canonicalSelectedChannel;
+            if (canonicalSelectedChannel.parentGuild) {
+                self.selectedGuild = canonicalSelectedChannel.parentGuild;
+            }
+        } else {
+            self.selectedChannel = nil;
+        }
+
         [self synchronizeSelectedGuildUI];
 
-        [self.guildTableView reloadData];
+        [self reloadGuildTableFromCanonicalState];
         [self.channelTableView reloadData];
 
         if (!self.refreshControl) {
@@ -435,13 +609,19 @@
         }
     }
 
-    if (!DCServerCommunicator.sharedInstance.guildsIsSorted) {
+    if (self.guildFolderAnimationInProgress) {
+        self.guildTableReloadPending = YES;
         return;
     }
-    
-    // Guard against count mismatch — fall back to full reload
+
+    if (!DCServerCommunicator.sharedInstance.guildsIsSorted) {
+        [self reloadGuildTableFromCanonicalState];
+        return;
+    }
+
+    // Guard against count mismatch — fall back to canonical state.
     if (self.displayGuilds.count != [self.guildTableView numberOfRowsInSection:0]) {
-        [self.guildTableView reloadData];
+        [self reloadGuildTableFromCanonicalState];
         return;
     }
 
@@ -468,10 +648,8 @@
         return;
     }
 
-    [self.guildTableView beginUpdates];
     [self.guildTableView reloadRowsAtIndexPaths:indexPaths
                                withRowAnimation:UITableViewRowAnimationNone];
-    [self.guildTableView endUpdates];
 }
 
 - (void)updateStatusForUser:(DCUser *)updatedUser {
@@ -550,8 +728,10 @@
         DCGuild *affectedGuild = incomingChannel.parentGuild;
 
         // Refresh the changed guild and any folder row that aggregates its state.
-        if (affectedGuild && self.displayGuilds &&
-            DCServerCommunicator.sharedInstance.guildsIsSorted) {
+        if (affectedGuild && self.guildFolderAnimationInProgress) {
+            self.guildTableReloadPending = YES;
+        } else if (affectedGuild && self.displayGuilds &&
+                   DCServerCommunicator.sharedInstance.guildsIsSorted) {
             NSMutableArray *guildIndexPaths = [NSMutableArray array];
 
             for (NSUInteger idx = 0; idx < self.displayGuilds.count; idx++) {
@@ -642,7 +822,7 @@
     [super viewWillAppear:animated];
 
     [self synchronizeSelectedGuildUI];
-    [self.guildTableView reloadData];
+    [self reloadGuildTableFromCanonicalState];
     [self.channelTableView reloadData];
 }
 
@@ -704,8 +884,21 @@
     didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     @autoreleasepool {
         if (tableView == self.guildTableView) {
-            id selectedGuild = [self.displayGuilds objectAtIndex:indexPath.row];
             [tableView deselectRowAtIndexPath:indexPath animated:YES];
+
+            if (self.guildFolderAnimationInProgress) {
+                return;
+            }
+            if (!DCServerCommunicator.sharedInstance.guildsIsSorted) {
+                [self reloadGuildTableFromCanonicalState];
+                return;
+            }
+            if (indexPath.row >= self.displayGuilds.count) {
+                [self reloadGuildTableFromCanonicalState];
+                return;
+            }
+
+            id selectedGuild = [self.displayGuilds objectAtIndex:indexPath.row];
             if ([selectedGuild isKindOfClass:[DCGuildFolder class]]) {
                 DCGuildFolder *folder           = selectedGuild;
                 folder.opened                   = !folder.opened;
@@ -716,6 +909,12 @@
                 [[NSUserDefaults standardUserDefaults] setObject:folderDict
                                                           forKey:[@(folder.id) stringValue]];
                 [[NSUserDefaults standardUserDefaults] synchronize];
+
+                self.guildFolderAnimationInProgress = YES;
+                [CATransaction begin];
+                [CATransaction setCompletionBlock:^{
+                    [self finishGuildFolderAnimation];
+                }];
                 [self.guildTableView beginUpdates];
                 if (folder.opened) {
                     NSMutableArray *newIndexPaths = [NSMutableArray array];
@@ -746,6 +945,7 @@
                     [self.guildTableView deleteRowsAtIndexPaths:indexPathsToDelete withRowAnimation:UITableViewRowAnimationAutomatic];
                 }
                 [self.guildTableView endUpdates];
+                [CATransaction commit];
                 return;
             }
             self.selectedGuild = selectedGuild;
@@ -792,27 +992,7 @@
             [tableView deselectRowAtIndexPath:indexPath animated:YES];
 
             if (self.experimentalMode) {
-                UINavigationController *navigationController =
-                    (UINavigationController *)
-                        self.slideMenuController.contentViewController;
-                DCChatViewController *contentViewController =
-                    navigationController.viewControllers.firstObject;
-                if ([contentViewController
-                        isKindOfClass:[DCChatViewController class]]) {
-
-                    NSString *formattedChannelName;
-
-                    formattedChannelName = DCServerCommunicator.sharedInstance
-                                                   .selectedChannel.name;
-
-                    [contentViewController activateSelectedChannel];
-
-                    [NSNotificationCenter.defaultCenter
-                        postNotificationName:@"GuildMemberListUpdated"
-                                      object:nil];
-
-                    [self.slideMenuController hideMenu:YES];
-                }
+                [self activateSelectedChannelInExperimentalMode];
             } else {
                 [self performSegueWithIdentifier:@"guilds to chat" sender:self];
             }
@@ -1300,82 +1480,7 @@
 
 - (NSInteger)tableView:(UITableView *)tableView
     numberOfRowsInSection:(NSInteger)section {
-    if (tableView == self.guildTableView && DCServerCommunicator.sharedInstance.guilds) {
-        // Sorting guilds based on userInfo[@"guildPositions"] array
-        if (!DCServerCommunicator.sharedInstance.guildsIsSorted) {
-            NSUInteger guildCount        = [DCServerCommunicator.sharedInstance.currentUserInfo.guildPositions count] + 1;
-            NSMutableArray *sortedGuilds = [NSMutableArray arrayWithCapacity:guildCount];
-            NSNull *nullObject           = [NSNull null];
-            NSMutableArray *cached = DCServerCommunicator.sharedInstance.cachedDisplayLayout;
-                if (cached.count) {
-                    self.displayGuilds = cached;
-                    DCServerCommunicator.sharedInstance.cachedDisplayLayout = nil;
-                    DCServerCommunicator.sharedInstance.guildsIsSorted = YES;
-                } else {
-                    // init to be able to index
-                    for (NSUInteger i = 0; i < guildCount; i++) {
-                        [sortedGuilds addObject:nullObject];
-                    }
-                    for (DCGuild *guild in DCServerCommunicator.sharedInstance.guilds) {
-                        NSUInteger index = [DCServerCommunicator.sharedInstance.currentUserInfo.guildPositions indexOfObject:guild.snowflake];
-                        if (index != NSNotFound) {
-                            [sortedGuilds insertObject:guild atIndex:index + 1];
-                        } else if ([[sortedGuilds objectAtIndex:0] isEqual:nullObject]) {
-                            // If the first element is still null, must be private guild
-                            [sortedGuilds insertObject:(id)guild atIndex:0];
-                        } else {
-                            // Otherwise, append to the end of the array
-                            [sortedGuilds addObject:guild];
-                        }
-                    }
-                    [sortedGuilds removeObjectIdenticalTo:nullObject];
-                    NSAssert(sortedGuilds && [sortedGuilds count] != 0, @"No sorted guilds found");
-                    DCServerCommunicator.sharedInstance.guilds = sortedGuilds;
-                    sortedGuilds                               = [NSMutableArray arrayWithObject:DCServerCommunicator.sharedInstance.guilds[0]]; // Add private guild at index 0
-                    NSMutableSet *handledGuildIds = NSMutableSet.new;
-                    for (DCGuildFolder *folder in DCServerCommunicator.sharedInstance.currentUserInfo.guildFolders) {
-                        if (folder.id) {
-                            [sortedGuilds addObject:folder];
-                        }
-                        if (folder.opened) {
-                            NSArray *folderGuilds = [[DCServerCommunicator.sharedInstance.guilds 
-                                filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(DCGuild *guild, NSDictionary *bindings) {
-                                    return [folder.guildIds containsObject:guild.snowflake];
-                                }]]
-                                sortedArrayUsingComparator:^NSComparisonResult(DCGuild *a, DCGuild *b) {
-                                    NSUInteger index1 = [folder.guildIds indexOfObject:a.snowflake];
-                                    NSUInteger index2 = [folder.guildIds indexOfObject:b.snowflake];
-                                    if (index1 < index2) {
-                                        return NSOrderedAscending;
-                                    } else if (index1 > index2) {
-                                        return NSOrderedDescending;
-                                    } else {
-                                        return NSOrderedSame;
-                                    }
-                                }];
-
-                            [sortedGuilds addObjectsFromArray:folderGuilds];
-                        }
-                        [handledGuildIds addObjectsFromArray:folder.guildIds];
-                    }
-                    NSMutableArray *origCopy = [[[DCServerCommunicator.sharedInstance.guilds reverseObjectEnumerator] allObjects] mutableCopy];
-                    [origCopy filterUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(id evaluatedObject, NSDictionary *bindings) {
-                        if ([evaluatedObject isKindOfClass:[DCGuild class]]) {
-                            DCGuild *guild = (DCGuild *)evaluatedObject;
-                            return guild.snowflake && ![handledGuildIds containsObject:guild.snowflake];
-                        }
-                        return NO;
-                    }]]; // get difference
-                    if (origCopy.count > 0) {
-                        NSRange range = NSMakeRange(1, [origCopy count]);
-                        NSIndexSet *indexSet = [NSIndexSet indexSetWithIndexesInRange:range];
-                        [sortedGuilds insertObjects:origCopy atIndexes:indexSet];
-                    }
-                    self.displayGuilds                      = sortedGuilds;
-                    DCServerCommunicator.sharedInstance.guildsIsSorted = YES;
-                }
-        }
-
+    if (tableView == self.guildTableView) {
         return self.displayGuilds.count;
     } else if (tableView == self.channelTableView && self.selectedGuild && self.selectedGuild.channels) {
         return self.selectedGuild.channels.count;

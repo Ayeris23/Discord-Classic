@@ -7,6 +7,8 @@
 @property (strong, nonatomic) NSString* globalName;
 @property (strong, nonatomic) NSString* pronouns;
 @property (strong, nonatomic) DCSnowflake* avatar;
+@property (strong, nonatomic) DCSnowflake* avatarDecorationID;
+@property (assign, nonatomic) NSInteger discriminator;
 @property (strong, nonatomic) NSString* phone;
 @property (strong, nonatomic) NSString* email;
 @property (strong, nonatomic) NSString* bio;

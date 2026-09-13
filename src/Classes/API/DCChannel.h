@@ -45,7 +45,9 @@ typedef NS_ENUM(NSInteger, DCChannelType) {
 @property (assign, nonatomic) BOOL unread;
 @property (nonatomic) NSInteger mentionCount;
 @property (assign, nonatomic) BOOL muted;
+@property (assign, nonatomic) BOOL readable;
 @property (assign, nonatomic) BOOL writeable;
+@property (strong, nonatomic) NSArray *permissionOverwrites;
 @property (assign, nonatomic) enum DCChannelType type;
 @property (assign, nonatomic) NSInteger position;
 // Canonical DCUser objects participating in a DM/group DM (excluding self).

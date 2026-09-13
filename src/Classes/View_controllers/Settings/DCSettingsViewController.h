@@ -13,8 +13,10 @@
 @property (weak, nonatomic) IBOutlet UITextField *tokenInputField;
 @property (weak, nonatomic) IBOutlet UISwitch *experimentalToggle;
 @property (weak, nonatomic) IBOutlet UISwitch *dataSaverToggle;
+@property (weak, nonatomic) IBOutlet UIBarButtonItem *clearCacheButton;
 
 @property (assign, nonatomic) BOOL isLoggingOut;
+
 - (IBAction)didTapLogOut;
 
 @end

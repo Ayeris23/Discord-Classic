@@ -20,6 +20,64 @@
 @implementation DCMessageDelta
 @end
 
+static NSComparisonResult DCCompareMessageSnowflakes(NSString *left, NSString *right) {
+    if (left.length < right.length) return NSOrderedAscending;
+    if (left.length > right.length) return NSOrderedDescending;
+    return [left compare:right options:NSLiteralSearch];
+}
+
+static NSString *DCMessageSourceChannelID(DCMessage *message) {
+    id channelID = [message.sourceJSON objectForKey:@"channel_id"];
+    return [channelID isKindOfClass:[NSString class]] ? channelID : nil;
+}
+
+static NSArray *DCNormalizeFetchedMessages(NSArray *messages,
+                                           NSString *channelID,
+                                           DCMessage *anchor,
+                                           BOOL newerThanAnchor) {
+    if (!messages) return nil;
+    if (messages.count == 0) return [NSArray array];
+
+    NSString *anchorID = anchor.snowflake;
+    NSMutableDictionary *bySnowflake =
+        [NSMutableDictionary dictionaryWithCapacity:messages.count];
+
+    for (id value in messages) {
+        if (![value isKindOfClass:[DCMessage class]]) continue;
+
+        DCMessage *message = value;
+        NSString *messageID = message.snowflake;
+        if (!messageID.length) continue;
+
+        NSString *sourceChannelID = DCMessageSourceChannelID(message);
+        if (channelID.length && sourceChannelID.length &&
+            ![sourceChannelID isEqualToString:channelID]) {
+            NSLog(@"[DCMessageStore] Dropping message %@ from channel %@ while loading %@",
+                  messageID, sourceChannelID, channelID);
+            continue;
+        }
+
+        if (anchorID.length) {
+            NSComparisonResult relative =
+                DCCompareMessageSnowflakes(messageID, anchorID);
+            if ((newerThanAnchor && relative != NSOrderedDescending) ||
+                (!newerThanAnchor && relative != NSOrderedAscending)) {
+                NSLog(@"[DCMessageStore] Dropping out-of-range message %@ around anchor %@",
+                      messageID, anchorID);
+                continue;
+            }
+        }
+
+        [bySnowflake setObject:message forKey:messageID];
+    }
+
+    NSArray *normalized = [bySnowflake allValues];
+    return [normalized sortedArrayUsingComparator:^NSComparisonResult(DCMessage *left,
+                                                                       DCMessage *right) {
+        return DCCompareMessageSnowflakes(left.snowflake, right.snowflake);
+    }];
+}
+
 @implementation DCMessageStore
 
 + (instancetype)sharedInstance {
@@ -46,22 +104,16 @@
     if (!channel) return nil;
 
     NSArray *older = [channel getMessages:limit beforeMessage:anchor];
-
-    // A short page marks the start of channel history.
-    DCChannelWindow *window = [self windowForChannel:channel.snowflake];
-    window.hasMoreBefore = (older.count >= (NSUInteger)limit);
-
-    return older;
+    return DCNormalizeFetchedMessages(older, channel.snowflake, anchor, NO);
 }
 
 - (NSArray *)loadAfterForChannel:(DCChannel *)channel
                     afterMessage:(DCMessage *)message
                            limit:(int)limit {
     if (!channel) return nil;
+
     NSArray *newer = [channel getMessages:limit afterMessage:message];
-    DCChannelWindow *window = [self windowForChannel:channel.snowflake];
-    window.hasMoreAfter = (newer.count >= limit);
-    return newer;
+    return DCNormalizeFetchedMessages(newer, channel.snowflake, message, YES);
 }
 
 - (DCMessageDelta *)reconcileForwardForChannel:(DCChannel *)channel
@@ -70,19 +122,27 @@
 
     const int forwardLimit = [DCTools isOriginalIPad] ? 18 : 50;
 
-    NSArray *fetched = [channel getMessages:forwardLimit afterMessage:anchor];
-    if (!fetched || fetched.count == 0) {
-        return nil; // nothing newer than the anchor
+    NSArray *rawFetched = [channel getMessages:forwardLimit afterMessage:anchor];
+    if (!rawFetched || rawFetched.count == 0) {
+        return nil;
     }
+
+    NSArray *fetched =
+        DCNormalizeFetchedMessages(rawFetched, channel.snowflake, anchor, YES);
+    if (fetched.count == 0) return nil;
 
     DCMessageDelta *delta = [DCMessageDelta new];
 
-    if (fetched.count >= forwardLimit) {
+    if (rawFetched.count >= (NSUInteger)forwardLimit) {
         // Cap hit: there may be a gap between the anchor and the present, and
         // paginating forward to bridge it is too costly on this hardware. The
         // user is returning to live, so re-anchor at the present instead.
-        delta.requiresFullReload  = YES;
-        delta.replacementMessages = [channel getMessages:forwardLimit beforeMessage:nil] ?: @[];
+        NSArray *replacement = [channel getMessages:forwardLimit beforeMessage:nil];
+        if (!replacement) return nil;
+
+        delta.requiresFullReload = YES;
+        delta.replacementMessages =
+            DCNormalizeFetchedMessages(replacement, channel.snowflake, nil, NO) ?: @[];
     } else {
         delta.candidateMessages = fetched;
     }
@@ -91,23 +151,33 @@
 
 - (DCChannelWindow *)windowForChannel:(NSString *)channelSnowflake {
     if (!channelSnowflake) return nil;
-    DCChannelWindow *window = self.channelWindows[channelSnowflake];
-    if (!window) {
-        CFAbsoluteTime windowLoadStart = CFAbsoluteTimeGetCurrent();
-        window = [[DCCacheManager sharedInstance]
-            loadMessageWindowForChannel:channelSnowflake];
-        if (window) {
-            NSLog(@"[ColdStartPerf] Message window %@ restore: %.3fs",
-                   channelSnowflake,
-                   CFAbsoluteTimeGetCurrent() - windowLoadStart);
+
+    DCChannelWindow *window = nil;
+    @synchronized (self) {
+        window = [self.channelWindows objectForKey:channelSnowflake];
+    }
+    if (window) return window;
+
+    CFAbsoluteTime windowLoadStart = CFAbsoluteTimeGetCurrent();
+    DCChannelWindow *loadedWindow = [[DCCacheManager sharedInstance]
+        loadMessageWindowForChannel:channelSnowflake];
+    if (loadedWindow) {
+        NSLog(@"[ColdStartPerf] Message window %@ restore: %.3fs",
+              channelSnowflake,
+              CFAbsoluteTimeGetCurrent() - windowLoadStart);
+        NSLog(@"[ColdStart] Restored %lu cached messages for channel %@",
+              (unsigned long)loadedWindow.messages.count, channelSnowflake);
+    } else {
+        loadedWindow = [[DCChannelWindow alloc]
+            initWithChannelSnowflake:channelSnowflake];
+    }
+
+    @synchronized (self) {
+        window = [self.channelWindows objectForKey:channelSnowflake];
+        if (!window) {
+            [self.channelWindows setObject:loadedWindow forKey:channelSnowflake];
+            window = loadedWindow;
         }
-        if (window) {
-            NSLog(@"[ColdStart] Restored %lu cached messages for channel %@",
-                  (unsigned long)window.messages.count, channelSnowflake);
-        } else {
-            window = [[DCChannelWindow alloc] initWithChannelSnowflake:channelSnowflake];
-        }
-        self.channelWindows[channelSnowflake] = window;
     }
     return window;
 }
@@ -121,21 +191,28 @@
     }
 
     NSString *channelID = [window.channelSnowflake copy];
-    NSUInteger generation = [[self.checkpointGenerations objectForKey:channelID]
-        unsignedIntegerValue] + 1;
-    [self.checkpointGenerations setObject:[NSNumber numberWithUnsignedInteger:generation]
-                                   forKey:channelID];
+    NSUInteger generation = 0;
+    @synchronized (self) {
+        generation = [[self.checkpointGenerations objectForKey:channelID]
+            unsignedIntegerValue] + 1;
+        [self.checkpointGenerations
+            setObject:[NSNumber numberWithUnsignedInteger:generation]
+               forKey:channelID];
+    }
 
     // Coalesce checkpoints more aggressively on the most constrained device.
     NSTimeInterval checkpointDelay = [DCTools isOriginalIPad] ? 6.0 : 1.5;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
                                  (int64_t)(checkpointDelay * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
-        NSUInteger current = [[self.checkpointGenerations objectForKey:channelID]
-            unsignedIntegerValue];
+        NSUInteger current = 0;
+        DCChannelWindow *currentWindow = nil;
+        @synchronized (self) {
+            current = [[self.checkpointGenerations objectForKey:channelID]
+                unsignedIntegerValue];
+            currentWindow = [self.channelWindows objectForKey:channelID];
+        }
         if (current != generation) return;
-
-        DCChannelWindow *currentWindow = [self.channelWindows objectForKey:channelID];
         if (currentWindow) [self checkpointWindow:currentWindow];
     });
 }
@@ -146,7 +223,10 @@
 }
 
 - (void)checkpointAllWindows {
-    NSArray *windows = [[self.channelWindows allValues] copy];
+    NSArray *windows = nil;
+    @synchronized (self) {
+        windows = [[self.channelWindows allValues] copy];
+    }
     for (DCChannelWindow *window in windows) {
         [self checkpointWindow:window];
     }
@@ -154,15 +234,19 @@
 
 - (void)removeWindowForChannel:(NSString *)channelSnowflake {
     if (!channelSnowflake) return;
-    [self.channelWindows removeObjectForKey:channelSnowflake];
-    [self.checkpointGenerations removeObjectForKey:channelSnowflake];
+    @synchronized (self) {
+        [self.channelWindows removeObjectForKey:channelSnowflake];
+        [self.checkpointGenerations removeObjectForKey:channelSnowflake];
+    }
     [[DCCacheManager sharedInstance]
         invalidateMessageWindowForChannel:channelSnowflake];
 }
 
 - (void)removeAllWindows {
-    [self.channelWindows removeAllObjects];
-    [self.checkpointGenerations removeAllObjects];
+    @synchronized (self) {
+        [self.channelWindows removeAllObjects];
+        [self.checkpointGenerations removeAllObjects];
+    }
     [[DCCacheManager sharedInstance] invalidateAllMessageWindows];
 }
 

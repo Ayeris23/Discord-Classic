@@ -14,6 +14,8 @@
 #include <sys/utsname.h>
 #import "Base64.h"
 #import "DCChatVideoAttachment.h"
+#import "DCChannel.h"
+#import "DCGuild.h"
 #import "DCGifInfo.h"
 #import "DCEmoji.h"
 #import "DCMessage.h"
@@ -28,11 +30,31 @@
 #import "UIImage+animatedGIF.h"
 #import "UILazyImage.h"
 #import "DCContentManager.h"
+#import "DCResourceManager.h"
+#import "DCChatMediaManager.h"
 #import "DTCoreTextLayouter.h"
 #import "DTCoreTextLayoutFrame.h"
 #import <CoreText/CoreText.h>
 
 // https://discord.gg/X4NSsMC
+
+static NSURL *DCRegisterChatMediaURL(NSURL *url,
+                                     NSString *channelID,
+                                     NSString *messageID) {
+    if (url) {
+        [[DCChatMediaManager sharedManager] registerMediaURL:url
+                                                   channelID:channelID
+                                                   messageID:messageID];
+    }
+    return url;
+}
+
+static BOOL DCMessageContentIsOnlyURL(NSString *content, NSString *urlString) {
+    if (content.length == 0 || urlString.length == 0) return NO;
+    NSString *trimmed = [content stringByTrimmingCharactersInSet:
+        [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    return [trimmed isEqualToString:urlString];
+}
 
 /* Older CoreText builds can stall while resolving unsupported supplementary
  * emoji. Route supported scalar glyphs explicitly and use a display-only
@@ -360,6 +382,142 @@ static void DCApplyLegacyUnicodeCompatibility(DCMessage *message) {
     message.attributedContent = [rendered copy];
 }
 
+static NSString *DCSystemMessageDisplayContent(DCMessage *message, NSDictionary *jsonMessage) {
+    NSInteger type = message.messageType;
+    NSString *authorName = [message.author displayName] ?: @"Unknown User";
+    id rawContentValue = [jsonMessage objectForKey:@"content"];
+    NSString *rawContent = [rawContentValue isKindOfClass:[NSString class]] ? rawContentValue : @"";
+
+    switch (type) {
+        case DCMessageTypeRecipientAdd: {
+            id mentionsValue = [jsonMessage objectForKey:@"mentions"];
+            NSDictionary *mention = [mentionsValue isKindOfClass:[NSArray class]]
+                ? [(NSArray *)mentionsValue firstObject] : nil;
+            NSString *targetName = [mention objectForKey:@"global_name"];
+            if (![targetName isKindOfClass:[NSString class]] || targetName.length == 0) {
+                targetName = [mention objectForKey:@"username"];
+            }
+            if (![targetName isKindOfClass:[NSString class]] || targetName.length == 0) {
+                targetName = @"Deleted User";
+            }
+            return [NSString stringWithFormat:@"%@ added %@ to the group conversation.",
+                    authorName, targetName];
+        }
+        case DCMessageTypeRecipientRemove:
+            return [NSString stringWithFormat:@"%@ left the group conversation.", authorName];
+        case DCMessageTypeCall:
+            return [NSString stringWithFormat:@"%@ started a call.", authorName];
+        case DCMessageTypeChannelNameChange:
+            return rawContent.length
+                ? [NSString stringWithFormat:@"%@ changed the group name to %@.", authorName, rawContent]
+                : [NSString stringWithFormat:@"%@ changed the group name.", authorName];
+        case DCMessageTypeChannelIconChange:
+            return [NSString stringWithFormat:@"%@ changed the group icon.", authorName];
+        case DCMessageTypeChannelPinnedMessage:
+            return [NSString stringWithFormat:@"%@ pinned a message to this channel.", authorName];
+        case DCMessageTypeUserJoin: {
+            static NSArray *joinMessages;
+            static dispatch_once_t onceToken;
+            dispatch_once(&onceToken, ^{
+                joinMessages = @[
+                    @"%@ joined the party.",
+                    @"%@ is here.",
+                    @"Welcome, %@. We hope you brought pizza.",
+                    @"A wild %@ appeared.",
+                    @"%@ just landed.",
+                    @"%@ just slid into the server.",
+                    @"%@ just showed up!",
+                    @"Welcome %@. Say hi!",
+                    @"%@ hopped into the server.",
+                    @"Everyone welcome %@!",
+                    @"Glad you're here, %@.",
+                    @"Good to see you, %@.",
+                    @"Yay you made it, %@!",
+                ];
+            });
+            uint64_t time = message.timestamp
+                ? (uint64_t)([message.timestamp timeIntervalSince1970] * 1000.0)
+                : (uint64_t)message.snowflake.longLongValue;
+            return [NSString stringWithFormat:joinMessages[time % joinMessages.count], authorName];
+        }
+        case DCMessageTypeGuildBoost:
+            return [NSString stringWithFormat:@"%@ just boosted the server!", authorName];
+        case DCMessageTypeGuildBoostTier1:
+            return [NSString stringWithFormat:@"%@ just boosted the server to Level 1!", authorName];
+        case DCMessageTypeGuildBoostTier2:
+            return [NSString stringWithFormat:@"%@ just boosted the server to Level 2!", authorName];
+        case DCMessageTypeGuildBoostTier3:
+            return [NSString stringWithFormat:@"%@ just boosted the server to Level 3!", authorName];
+        case DCMessageTypeChannelFollowAdd:
+            return [NSString stringWithFormat:@"%@ added a channel follow.", authorName];
+        case DCMessageTypeThreadCreated:
+            return rawContent.length
+                ? [NSString stringWithFormat:@"%@ started a thread: %@.", authorName, rawContent]
+                : [NSString stringWithFormat:@"%@ started a thread.", authorName];
+        default:
+            return nil;
+    }
+}
+
+
+static NSCache *DCGuildAvatarCompositeCache(void) {
+    static NSCache *cache = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        cache = [[NSCache alloc] init];
+        DCResourceManager *resources = [DCResourceManager sharedManager];
+        cache.totalCostLimit = MAX((NSUInteger)(512 * 1024),
+                                   resources.chatThumbnailMemoryBudget / 3);
+        cache.countLimit = MAX((NSUInteger)24,
+                               resources.imageMemoryCacheCountLimit * 2);
+    });
+    return cache;
+}
+
+static NSMutableSet *DCGuildAvatarRequestKeys(void) {
+    static NSMutableSet *keys = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        keys = [[NSMutableSet alloc] init];
+    });
+    return keys;
+}
+
+static NSString *DCGuildAvatarStringValue(id value) {
+    return [value isKindOfClass:[NSString class]] && [(NSString *)value length] > 0
+        ? (NSString *)value : nil;
+}
+
+static NSString *DCGuildAvatarCacheKey(DCUser *user, DCGuild *guild) {
+    if (!user.snowflake.length || !guild.snowflake.length) return nil;
+
+    NSString *guildAvatarID = DCGuildAvatarStringValue(
+        [user.guildAvatarIDs objectForKey:guild.snowflake]);
+    NSString *guildDecorationID = DCGuildAvatarStringValue(
+        [user.guildAvatarDecorationIDs objectForKey:guild.snowflake]);
+    NSString *baseID = guildAvatarID ?: DCGuildAvatarStringValue(user.avatarID);
+    NSString *decorationID =
+        guildDecorationID ?: DCGuildAvatarStringValue(user.avatarDecorationID);
+
+    if (!guildAvatarID.length && !guildDecorationID.length) return nil;
+
+    NSString *baseToken = baseID.length
+        ? baseID
+        : [NSString stringWithFormat:@"default:%ld", (long)user.discriminator];
+    return [NSString stringWithFormat:@"%@:%@:%@:%@",
+        guild.snowflake,
+        user.snowflake,
+        baseToken,
+        decorationID ?: @"-"];
+}
+
+static NSUInteger DCImageMemoryCost(UIImage *image) {
+    CGImageRef cgImage = image.CGImage;
+    if (!cgImage) return 0;
+    return (NSUInteger)CGImageGetBytesPerRow(cgImage) *
+           (NSUInteger)CGImageGetHeight(cgImage);
+}
+
 @implementation DCTools
 
 + (BOOL)isOriginalIPad {
@@ -506,8 +664,15 @@ static void DCApplyLegacyUnicodeCompatibility(DCMessage *message) {
     if (createdUser) {
         user.status = DCUserStatusOffline;
         user.guildNicknames = [NSMutableDictionary dictionary];
-    } else if (!user.guildNicknames) {
-        user.guildNicknames = [NSMutableDictionary dictionary];
+        user.guildAvatarIDs = [NSMutableDictionary dictionary];
+        user.guildAvatarDecorationIDs = [NSMutableDictionary dictionary];
+    } else {
+        if (!user.guildNicknames)
+            user.guildNicknames = [NSMutableDictionary dictionary];
+        if (!user.guildAvatarIDs)
+            user.guildAvatarIDs = [NSMutableDictionary dictionary];
+        if (!user.guildAvatarDecorationIDs)
+            user.guildAvatarDecorationIDs = [NSMutableDictionary dictionary];
     }
 
     if (cache) {
@@ -623,6 +788,168 @@ static void DCApplyLegacyUnicodeCompatibility(DCMessage *message) {
     }
 }
 
+
++ (UIImage *)cachedUserAvatar:(DCUser *)user inGuild:(DCGuild *)guild {
+    if (!user) return nil;
+    if (!guild.snowflake.length) return user.profileImage;
+
+    NSString *cacheKey = DCGuildAvatarCacheKey(user, guild);
+    if (!cacheKey.length) return user.profileImage;
+    return [DCGuildAvatarCompositeCache() objectForKey:cacheKey];
+}
+
++ (void)getUserAvatar:(DCUser *)user inGuild:(DCGuild *)guild {
+    if (!user || !user.snowflake.length) return;
+    if (!guild.snowflake.length) {
+        [self getUserAvatar:user];
+        return;
+    }
+
+    NSString *guildID = guild.snowflake;
+    NSString *guildAvatarID = DCGuildAvatarStringValue(
+        [user.guildAvatarIDs objectForKey:guildID]);
+    NSString *guildDecorationID = DCGuildAvatarStringValue(
+        [user.guildAvatarDecorationIDs objectForKey:guildID]);
+
+    if (!guildAvatarID.length && !guildDecorationID.length) {
+        [self getUserAvatar:user];
+        return;
+    }
+
+    NSString *cacheKey = DCGuildAvatarCacheKey(user, guild);
+    if (!cacheKey.length || [DCGuildAvatarCompositeCache() objectForKey:cacheKey]) {
+        return;
+    }
+
+    NSMutableSet *requestKeys = DCGuildAvatarRequestKeys();
+    @synchronized(requestKeys) {
+        if ([requestKeys containsObject:cacheKey]) return;
+        [requestKeys addObject:cacheKey];
+    }
+
+    NSString *baseAvatarID =
+        guildAvatarID ?: DCGuildAvatarStringValue(user.avatarID);
+    NSString *decorationID =
+        guildDecorationID ?: DCGuildAvatarStringValue(user.avatarDecorationID);
+
+    __block UIImage *rawAvatar = nil;
+    __block UIImage *decoration = nil;
+
+    BOOL usesGuildAvatar = guildAvatarID.length > 0;
+    BOOL usesGuildDecoration = guildDecorationID.length > 0;
+
+    if (!usesGuildAvatar &&
+        user.rawProfileImage &&
+        user.rawProfileImage.size.width > 0) {
+        rawAvatar = user.rawProfileImage;
+    }
+
+    if (!usesGuildDecoration && decorationID.length &&
+        user.avatarDecoration &&
+        user.avatarDecoration.size.width > 0) {
+        decoration = user.avatarDecoration;
+    }
+
+    if (!baseAvatarID.length) {
+        NSInteger selector = 0;
+        if (user.discriminator == 0) {
+            selector = (([user.snowflake longLongValue] >> 22) % 6);
+        } else {
+            selector = user.discriminator % 5;
+        }
+        rawAvatar = [[DCUser defaultAvatars] objectAtIndex:(NSUInteger)selector];
+    }
+
+    SDWebImageManager *manager = [SDWebImageManager sharedManager];
+    dispatch_group_t group = dispatch_group_create();
+
+    if (!rawAvatar && baseAvatarID.length) {
+        NSURL *avatarURL = nil;
+        if (usesGuildAvatar) {
+            avatarURL = [NSURL URLWithString:[NSString stringWithFormat:
+                @"https://cdn.discordapp.com/guilds/%@/users/%@/avatars/%@.png?size=80",
+                guildID, user.snowflake, baseAvatarID]];
+        } else {
+            avatarURL = [NSURL URLWithString:[NSString stringWithFormat:
+                @"https://cdn.discordapp.com/avatars/%@/%@.png?size=80",
+                user.snowflake, baseAvatarID]];
+        }
+
+        dispatch_group_enter(group);
+        [manager downloadImageWithURL:avatarURL
+                              options:SDWebImageRetryFailed
+                             progress:nil
+                            completed:^(UIImage *retrievedImage, NSError *error,
+                                        SDImageCacheType cacheType, BOOL finished,
+                                        NSURL *imageURL) {
+            if (retrievedImage && finished) {
+                rawAvatar = retrievedImage;
+            } else if (user.rawProfileImage && user.rawProfileImage.size.width > 0) {
+                rawAvatar = user.rawProfileImage;
+            }
+            dispatch_group_leave(group);
+        }];
+    }
+
+    if (!decoration && decorationID.length) {
+        NSURL *decorationURL = [NSURL URLWithString:[NSString stringWithFormat:
+            @"https://cdn.discordapp.com/avatar-decoration-presets/%@.png?size=96&passthrough=false",
+            decorationID]];
+        dispatch_group_enter(group);
+        [manager downloadImageWithURL:decorationURL
+                              options:SDWebImageRetryFailed
+                             progress:nil
+                            completed:^(UIImage *retrievedImage, NSError *error,
+                                        SDImageCacheType cacheType, BOOL finished,
+                                        NSURL *imageURL) {
+            if (retrievedImage && finished) {
+                decoration = retrievedImage;
+            }
+            dispatch_group_leave(group);
+        }];
+    }
+
+    dispatch_group_notify(group,
+        dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        @autoreleasepool {
+            UIImage *avatar = rawAvatar;
+            if (!avatar) {
+                NSInteger selector = 0;
+                if (user.discriminator == 0) {
+                    selector = (([user.snowflake longLongValue] >> 22) % 6);
+                } else {
+                    selector = user.discriminator % 5;
+                }
+                avatar = [[DCUser defaultAvatars] objectAtIndex:(NSUInteger)selector];
+            }
+
+            UIImage *processed =
+                [DCContentManager processedAvatarImage:avatar
+                                            decoration:decoration
+                                               context:DCAssetContextChat];
+            if (processed) {
+                [DCGuildAvatarCompositeCache() setObject:processed
+                                                  forKey:cacheKey
+                                                    cost:DCImageMemoryCost(processed)];
+            }
+
+            @synchronized(requestKeys) {
+                [requestKeys removeObject:cacheKey];
+            }
+
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [NSNotificationCenter.defaultCenter
+                    postNotificationName:@"RELOAD USER DATA"
+                                  object:user];
+            });
+        }
+    });
+}
+
++ (void)purgeGuildAvatarCache {
+    [DCGuildAvatarCompositeCache() removeAllObjects];
+}
+
 // Converts an NSDictionary created from json representing a role into a DCRole
 // object Also keeps the role in DCServerCommunicator.loadedUsers if cache:YES
 + (DCRole *)convertJsonRole:(NSDictionary *)jsonRole cache:(BOOL)cache {
@@ -729,14 +1056,55 @@ static void DCApplyLegacyUnicodeCompatibility(DCMessage *message) {
     return emoji;
 }
 
+static void DCFillMissingUserFieldsFromJSON(DCUser *user, NSDictionary *jsonUser) {
+    if (!user || ![jsonUser isKindOfClass:[NSDictionary class]]) return;
+
+    id value = [jsonUser objectForKey:@"username"];
+    if (!user.username.length && [value isKindOfClass:[NSString class]])
+        user.username = value;
+
+    value = [jsonUser objectForKey:@"global_name"];
+    if (!user.globalName.length && [value isKindOfClass:[NSString class]])
+        user.globalName = value;
+
+    value = [jsonUser objectForKey:@"avatar"];
+    if (!user.avatarID && [value isKindOfClass:[NSString class]])
+        user.avatarID = value;
+
+    if (!user.avatarDecorationID) {
+        id decorationData = [jsonUser objectForKey:@"avatar_decoration_data"];
+        if ([decorationData isKindOfClass:[NSDictionary class]]) {
+            id asset = [decorationData objectForKey:@"asset"];
+            if ([asset isKindOfClass:[NSString class]])
+                user.avatarDecorationID = asset;
+        }
+    }
+
+    value = [jsonUser objectForKey:@"discriminator"];
+    if (user.discriminator == 0 &&
+        [value respondsToSelector:@selector(integerValue)])
+        user.discriminator = [value integerValue];
+}
+
 // Converts an NSDictionary created from json representing a message into a
 // message object
 + (DCMessage *)convertJsonMessage:(NSDictionary *)jsonMessage {
-    return [self convertJsonMessage:jsonMessage deferLegacyLayout:NO];
+    return [self convertJsonMessage:jsonMessage
+                 deferLegacyLayout:NO
+                           channel:DCServerCommunicator.sharedInstance.selectedChannel];
 }
 
 + (DCMessage *)convertJsonMessage:(NSDictionary *)jsonMessage
                  deferLegacyLayout:(BOOL)deferLegacyLayout {
+    return [self convertJsonMessage:jsonMessage
+                 deferLegacyLayout:deferLegacyLayout
+                           channel:DCServerCommunicator.sharedInstance.selectedChannel];
+}
+
++ (DCMessage *)convertJsonMessage:(NSDictionary *)jsonMessage
+                 deferLegacyLayout:(BOOL)deferLegacyLayout
+                           channel:(DCChannel *)channel {
+    DCChannel *contextChannel = channel;
     CFAbsoluteTime perfStart = CFAbsoluteTimeGetCurrent();
     CFAbsoluteTime perfIdentityEnd = perfStart;
     CFAbsoluteTime perfDatesEnd = perfStart;
@@ -762,17 +1130,22 @@ static void DCApplyLegacyUnicodeCompatibility(DCMessage *message) {
         DCUser *authorUser = [DCServerCommunicator.sharedInstance userForSnowflake:authorId];
         if (!authorUser && authorId != nil && ![authorId isKindOfClass:[NSNull class]]) {
             authorUser = [DCTools convertJsonUser:[jsonMessage valueForKeyPath:@"author"] cache:YES];
+        } else {
+            DCFillMissingUserFieldsFromJSON(authorUser, author);
         }
 
-        // Apply guild nickname from message member object if present
+        // Message member data is useful as an early display fallback, but it
+        // must not override member state already resolved by live guild data.
         NSDictionary *memberDict = [jsonMessage objectForKey:@"member"];
         if (authorUser && [memberDict isKindOfClass:[NSDictionary class]]) {
-            NSString *nick = [memberDict objectForKey:@"nick"];
-            DCGuild *guild = DCServerCommunicator.sharedInstance.selectedChannel.parentGuild;
-            if ([nick isKindOfClass:[NSString class]] && nick.length > 0 && guild.snowflake) {
-                if (!authorUser.guildNicknames) authorUser.guildNicknames = NSMutableDictionary.new;
-                authorUser.guildNicknames[guild.snowflake] = nick;
-            }
+            NSString *guildID = [jsonMessage objectForKey:@"guild_id"];
+            if (![guildID isKindOfClass:[NSString class]] || guildID.length == 0)
+                guildID = contextChannel.parentGuild.snowflake;
+            [DCServerCommunicator.sharedInstance
+                applyGuildProfileFromMember:memberDict
+                                      toUser:authorUser
+                                     guildID:guildID
+                               authoritative:NO];
         }
 
         // load referenced message if it exists
@@ -847,6 +1220,8 @@ static void DCApplyLegacyUnicodeCompatibility(DCMessage *message) {
 
                     if (!referenceAuthor) {
                         referenceAuthor = [DCTools convertJsonUser:authorJSON cache:YES];
+                    } else {
+                        DCFillMissingUserFieldsFromJSON(referenceAuthor, authorJSON);
                     }
                 }
 
@@ -889,6 +1264,11 @@ static void DCApplyLegacyUnicodeCompatibility(DCMessage *message) {
         newMessage.content         = [jsonMessage objectForKey:@"content"];
         newMessage.rawContent      = newMessage.content;
         newMessage.snowflake       = [jsonMessage objectForKey:@"id"];
+        NSString *messageChannelID = [[jsonMessage objectForKey:@"channel_id"]
+            isKindOfClass:[NSString class]] ? [jsonMessage objectForKey:@"channel_id"] : nil;
+        if (!messageChannelID.length) {
+            messageChannelID = contextChannel.snowflake;
+        }
         newMessage.attachments     = NSMutableArray.new;
         newMessage.attachmentCount = 0;
         perfIdentityEnd = CFAbsoluteTimeGetCurrent();
@@ -958,65 +1338,87 @@ static void DCApplyLegacyUnicodeCompatibility(DCMessage *message) {
         newMessage.prettyTimestamp = newMessage.timestamp
             ? [prettyDateFormatter stringFromDate:newMessage.timestamp]
             : @"";
+
+        NSString *systemContent = DCSystemMessageDisplayContent(newMessage, jsonMessage);
+        if (systemContent.length) {
+            newMessage.content = systemContent;
+        }
+
         perfDatesEnd = CFAbsoluteTimeGetCurrent();
         // Load embeded images from both links and attatchments
         // ─── EMBEDS ───────────────────────────────────────────────────────────────────
         // Discord embeds are rich previews generated server-side from links in messages.
-        // Three types are handled: image (static image previews), gifv (Tenor/Giphy gifs),
-        // and video (third party video links like YouTube, Instagram etc.)
+        // Image embeds use the image path, gifv embeds use GIF-like presentation when
+        // Discord supplies a playable video rendition, and video embeds use video chrome.
         NSArray *embeds = [jsonMessage objectForKey:@"embeds"];
         if (embeds) {
             for (NSDictionary *embed in embeds) {
                 NSString *embedType = [embed objectForKey:@"type"];
-                // image/gifv
-                // Handle static image embeds and Tenor/Giphy gif embeds.
-                // gifv from other providers falls through to the video block below.
-                if ([embedType isEqualToString:@"image"]
-                    || (
-                        [embedType isEqualToString:@"gifv"]
-                        && ([[embed valueForKeyPath:@"provider.name"] isEqualToString:@"Tenor"]
-                         || [[embed valueForKeyPath:@"provider.name"] isEqualToString:@"Giphy"])
-                    )) {
-                    newMessage.attachmentCount++;
-                    newMessage.content = [newMessage.content stringByReplacingOccurrencesOfString:[embed objectForKey:@"url"] withString:@""];
+                NSString *originalEmbedURL = [[embed objectForKey:@"url"] isKindOfClass:[NSString class]]
+                    ? [embed objectForKey:@"url"] : nil;
+                NSURL *originalEmbedNSURL = [NSURL URLWithString:originalEmbedURL];
+                NSString *originalPathExtension = originalEmbedNSURL.pathExtension.lowercaseString;
+                BOOL isGifvEmbed = [embedType isEqualToString:@"gifv"];
+                NSString *gifvProxyVideoURL = [[embed valueForKeyPath:@"video.proxy_url"] isKindOfClass:[NSString class]]
+                    ? [embed valueForKeyPath:@"video.proxy_url"] : nil;
+                NSString *gifvVideoURL = [[embed valueForKeyPath:@"video.url"] isKindOfClass:[NSString class]]
+                    ? [embed valueForKeyPath:@"video.url"] : nil;
+                NSString *gifvPlaybackURL = gifvProxyVideoURL.length ? gifvProxyVideoURL : gifvVideoURL;
+                BOOL hasGifvPlayback = isGifvEmbed && gifvPlaybackURL.length > 0;
+                BOOL hasGifvImageFallback = isGifvEmbed && [originalPathExtension isEqualToString:@"gif"];
 
-                    NSString *attachmentURL;
-                    
-                    // gifv URL construction
-                    // Tenor and Giphy use different URL schemes to serve their gifs.
-                    // Tenor: reconstruct the HD gif URL from the thumbnail path components.
-                    // Giphy: swap .mp4 for .gif in the video URL.
-                    // Regular image embeds: use thumbnail proxy_url or thumbnail url directly.
-                    if ([embedType isEqualToString:@"gifv"]) {
-                        if ([[embed valueForKeyPath:@"provider.name"] isEqualToString:@"Tenor"]) {
-                            NSString *thumbnailURLString = [embed valueForKeyPath:@"thumbnail.url"];
-                            NSArray *parts = [thumbnailURLString componentsSeparatedByString:@"/"];
-                            // parts[0] = "https:", parts[1] = "", parts[2] = "media.tenor.com", parts[3] = gifId, parts[4] = filename
-                            NSString *gifId = parts[3];
-                            NSString *filename = [parts[4] stringByReplacingOccurrencesOfString:@".png" withString:@".gif"];
-                            NSString *newGifId = [gifId stringByReplacingCharactersInRange:NSMakeRange(gifId.length - 1, 1) withString:@"C"]; // -AAAAC (0x00000002) = HD GIF
-                            attachmentURL = [NSString stringWithFormat:@"https://media.tenor.com/%@/%@", newGifId, filename];
-                        } else if ([[embed valueForKeyPath:@"provider.name"] isEqualToString:@"Giphy"]) {
-                            attachmentURL = [[embed valueForKeyPath:@"video.url"] stringByReplacingOccurrencesOfString:@".mp4" withString:@".gif"];
-                        }
-                    } else if ([embed valueForKeyPath:@"thumbnail.proxy_url"] != [NSNull null]) {
-                        attachmentURL = [embed valueForKeyPath:@"thumbnail.proxy_url"];
-                    } else if ([embed valueForKeyPath:@"thumbnail.url"] != [NSNull null]) {
-                        attachmentURL = [embed valueForKeyPath:@"thumbnail.url"];
-                    } else {
-                        attachmentURL = [embed objectForKey:@"url"];
+                // gifv describes GIF-like presentation regardless of provider. Prefer the
+                // supplied video rendition, with a direct GIF as a fallback when available.
+                if ([embedType isEqualToString:@"image"] || hasGifvPlayback || hasGifvImageFallback) {
+                    newMessage.attachmentCount++;
+
+                    NSString *proxyImageURL = [[embed valueForKeyPath:@"image.proxy_url"] isKindOfClass:[NSString class]]
+                        ? [embed valueForKeyPath:@"image.proxy_url"] : nil;
+                    NSString *imageURL = [[embed valueForKeyPath:@"image.url"] isKindOfClass:[NSString class]]
+                        ? [embed valueForKeyPath:@"image.url"] : nil;
+                    NSString *proxyThumbnailURL = [[embed valueForKeyPath:@"thumbnail.proxy_url"] isKindOfClass:[NSString class]]
+                        ? [embed valueForKeyPath:@"thumbnail.proxy_url"] : nil;
+                    NSString *thumbnailURL = [[embed valueForKeyPath:@"thumbnail.url"] isKindOfClass:[NSString class]]
+                        ? [embed valueForKeyPath:@"thumbnail.url"] : nil;
+                    NSString *thumbnailSourceURL = proxyThumbnailURL.length
+                        ? proxyThumbnailURL
+                        : (thumbnailURL.length ? thumbnailURL : originalEmbedURL);
+                    NSString *imageSourceURL = proxyImageURL.length
+                        ? proxyImageURL
+                        : (imageURL.length ? imageURL : thumbnailSourceURL);
+
+                    if (DCMessageContentIsOnlyURL(newMessage.content, originalEmbedURL)) {
+                        newMessage.content = @"";
                     }
 
-                    // isGif detection
-                    // Detect gif content — either explicit gifv embed type or .gif file extension in URL.
-                    // CDN-hosted gifs from Discord itself come through as type "image" with a .gif URL.
-                    NSURL *embedNSURL = [NSURL URLWithString:[embed objectForKey:@"url"]];
-                    NSString *pathExtension = [embedNSURL.path.lowercaseString pathExtension];
-                    BOOL isGif = [embedType isEqualToString:@"gifv"] || [pathExtension isEqualToString:@"gif"];
+                    BOOL isGif = isGifvEmbed || [originalPathExtension isEqualToString:@"gif"];
+                    NSString *attachmentURL = [embedType isEqualToString:@"image"]
+                        ? imageSourceURL
+                        : thumbnailSourceURL;
 
-                    NSInteger width     = [[embed valueForKeyPath:@"thumbnail.width"] integerValue];
-                    NSInteger height    = [[embed valueForKeyPath:@"thumbnail.height"] integerValue];
-                    CGFloat aspectRatio = (CGFloat)width / (CGFloat)height;
+                    BOOL videoBackedGif = hasGifvPlayback;
+                    if (videoBackedGif) {
+                        attachmentURL = gifvPlaybackURL;
+                    } else if (hasGifvImageFallback) {
+                        attachmentURL = originalEmbedURL;
+                    }
+
+                    NSInteger width = 0;
+                    NSInteger height = 0;
+                    if ([embedType isEqualToString:@"image"]) {
+                        width = [[embed valueForKeyPath:@"image.width"] integerValue];
+                        height = [[embed valueForKeyPath:@"image.height"] integerValue];
+                    }
+                    if (width <= 0 || height <= 0) {
+                        width = [[embed valueForKeyPath:@"thumbnail.width"] integerValue];
+                        height = [[embed valueForKeyPath:@"thumbnail.height"] integerValue];
+                    }
+                    if (width <= 0 || height <= 0) {
+                        width = [[embed valueForKeyPath:@"video.width"] integerValue];
+                        height = [[embed valueForKeyPath:@"video.height"] integerValue];
+                    }
+                    CGFloat aspectRatio = (width > 0 && height > 0)
+                        ? (CGFloat)width / (CGFloat)height : 1.0f;
 
                     if (height > 1024) {
                         height = 1024;
@@ -1039,61 +1441,63 @@ static void DCApplyLegacyUnicodeCompatibility(DCMessage *message) {
                     // Build the final download URL, requesting PNG format to ensure iOS compatibility.
                     // Some Discord CDN URLs already have width/height baked in — don't append them again.
                     // Always trim trailing & or ? before appending parameters to avoid malformed URLs.
-                    BOOL alreadyHasDimensions = [attachmentURL rangeOfString:@"width="].location != NSNotFound;
-                    NSURL *urlString;
-                    if (alreadyHasDimensions) {
-                        NSString *trimmedURL = [attachmentURL stringByTrimmingCharactersInSet:
-                            [NSCharacterSet characterSetWithCharactersInString:@"&?"]];
-                        urlString = [NSURL URLWithString:[NSString
-                            stringWithFormat:@"%@%cformat=png", trimmedURL,
-                            [trimmedURL rangeOfString:@"?"].location == NSNotFound ? '?' : '&']];
-                    } else if (width != 0 || height != 0) {
-                        NSString *trimmedURL = [attachmentURL stringByTrimmingCharactersInSet:
-                            [NSCharacterSet characterSetWithCharactersInString:@"&?"]];
-                        urlString = [NSURL URLWithString:[NSString
-                            stringWithFormat:@"%@%cformat=png&width=%ld&height=%ld", trimmedURL,
-                            [trimmedURL rangeOfString:@"?"].location == NSNotFound ? '?' : '&',
-                            (long)width, (long)height]];
+                    NSURL *urlString = nil;
+                    if (videoBackedGif) {
+                        urlString = [NSURL URLWithString:thumbnailSourceURL];
                     } else {
-                        NSString *trimmedURL = [attachmentURL stringByTrimmingCharactersInSet:
-                            [NSCharacterSet characterSetWithCharactersInString:@"&?"]];
-                        urlString = [NSURL URLWithString:[NSString
-                            stringWithFormat:@"%@%cformat=png", trimmedURL,
-                            [trimmedURL rangeOfString:@"?"].location == NSNotFound ? '?' : '&']];
+                        BOOL alreadyHasDimensions = [attachmentURL rangeOfString:@"width="].location != NSNotFound;
+                        if (alreadyHasDimensions) {
+                            NSString *trimmedURL = [attachmentURL stringByTrimmingCharactersInSet:
+                                [NSCharacterSet characterSetWithCharactersInString:@"&?"]];
+                            urlString = [NSURL URLWithString:[NSString
+                                stringWithFormat:@"%@%cformat=png", trimmedURL,
+                                [trimmedURL rangeOfString:@"?"].location == NSNotFound ? '?' : '&']];
+                        } else if (width != 0 || height != 0) {
+                            NSString *trimmedURL = [attachmentURL stringByTrimmingCharactersInSet:
+                                [NSCharacterSet characterSetWithCharactersInString:@"&?"]];
+                            urlString = [NSURL URLWithString:[NSString
+                                stringWithFormat:@"%@%cformat=png&width=%ld&height=%ld", trimmedURL,
+                                [trimmedURL rangeOfString:@"?"].location == NSNotFound ? '?' : '&',
+                                (long)width, (long)height]];
+                        } else {
+                            NSString *trimmedURL = [attachmentURL stringByTrimmingCharactersInSet:
+                                [NSCharacterSet characterSetWithCharactersInString:@"&?"]];
+                            urlString = [NSURL URLWithString:[NSString
+                                stringWithFormat:@"%@%cformat=png", trimmedURL,
+                                [trimmedURL rangeOfString:@"?"].location == NSNotFound ? '?' : '&']];
+                        }
                     }
 
                     // Publish geometry/URLs only; visible attachment views own decoded pixels.
                     if (isGif) {
                         DCGifInfo *gif = [DCGifInfo new];
-                        gif.gifURL = [NSURL URLWithString:attachmentURL];
-                        gif.thumbnailURL = urlString;
+                        gif.gifURL = DCRegisterChatMediaURL([NSURL URLWithString:attachmentURL], messageChannelID, newMessage.snowflake);
+                        gif.thumbnailURL = DCRegisterChatMediaURL(urlString, messageChannelID, newMessage.snowflake);
                         gif.naturalSize = CGSizeMake(width, height);
+                        gif.videoBacked = videoBackedGif;
                         [newMessage.attachments addObject:gif];
                     } else {
                         UILazyImage *lazyImage = [UILazyImage new];
-                        lazyImage.imageURL = urlString;
+                        lazyImage.imageURL = DCRegisterChatMediaURL([NSURL URLWithString:attachmentURL], messageChannelID, newMessage.snowflake);
                         lazyImage.naturalSize = CGSizeMake(width, height);
                         [newMessage.attachments addObject:lazyImage];
                     }
-                } else if ([embedType isEqualToString:@"video"] ||
-                           [embedType isEqualToString:@"gifv"]) {
+                } else if ([embedType isEqualToString:@"video"] || isGifvEmbed) {
                     // Video Embed
-                    // Handle video embeds — YouTube, Instagram, third party video links etc.
-                    // Also catches gifv embeds that aren't from Tenor or Giphy (handled above).
+                    // Handle normal video embeds and malformed gifv embeds that do not include
+                    // a playable video rendition.
                     // videoURL = the actual playable video URL passed to MPMoviePlayerViewController.
                     // baseURL = the thumbnail image URL for the cell preview.
-                    NSString *originalEmbedURL = [embed objectForKey:@"url"]; // NEW — captures the URL once for reuse
+                    BOOL isYouTube = originalEmbedURL &&
+                        ([originalEmbedURL hasPrefix:@"https://www.youtube.com"] ||
+                         [originalEmbedURL hasPrefix:@"https://m.youtube.com"]   ||
+                         [originalEmbedURL hasPrefix:@"https://youtube.com"]     ||
+                         [originalEmbedURL hasPrefix:@"https://youtu.be"]);
 
-                        BOOL isYouTube = originalEmbedURL &&
-                                         ([originalEmbedURL hasPrefix:@"https://www.youtube.com"] ||
-                                          [originalEmbedURL hasPrefix:@"https://m.youtube.com"]   ||
-                                          [originalEmbedURL hasPrefix:@"https://youtube.com"]     ||
-                                          [originalEmbedURL hasPrefix:@"https://youtu.be"]);
+                    NSURL *attachmentURL;
 
-                        NSURL *attachmentURL;
-
-                    if (!isYouTube) {
-                        newMessage.content = [newMessage.content stringByReplacingOccurrencesOfString:originalEmbedURL withString:@""];
+                    if (!isYouTube && DCMessageContentIsOnlyURL(newMessage.content, originalEmbedURL)) {
+                        newMessage.content = @"";
                     }
                     if ([embed valueForKeyPath:@"video.proxy_url"] != nil &&
                         [[embed valueForKeyPath:@"video.proxy_url"]
@@ -1113,7 +1517,7 @@ static void DCApplyLegacyUnicodeCompatibility(DCMessage *message) {
                         NSLog(@"[MediaPerf] video view build %.1fms", videoViewTime * 1000.0);
                     }
 
-                    video.videoURL = attachmentURL;
+                    video.videoURL = DCRegisterChatMediaURL(attachmentURL, messageChannelID, newMessage.snowflake);
                     // YouTube videos and shorts
                     if (isYouTube && originalEmbedURL) {
                         NSURL *ytURL = [NSURL URLWithString:originalEmbedURL];
@@ -1158,7 +1562,8 @@ static void DCApplyLegacyUnicodeCompatibility(DCMessage *message) {
                         width = 16;
                         height = 9;
                     }
-                    CGFloat aspectRatio = (CGFloat)width / (CGFloat)height;
+                    CGFloat aspectRatio = (width > 0 && height > 0)
+                        ? (CGFloat)width / (CGFloat)height : 1.0f;
 
                     if (height > 1024) {
                         height = 1024;
@@ -1184,7 +1589,7 @@ static void DCApplyLegacyUnicodeCompatibility(DCMessage *message) {
                         : nil;
 
                     // Publish lightweight video metadata immediately so layout has stable geometry.
-                    video.thumbnailURL = urlString;
+                    video.thumbnailURL = DCRegisterChatMediaURL(urlString, messageChannelID, newMessage.snowflake);
                     [newMessage.attachments addObject:video];
 
                     // Decode video thumbnails only while the attachment is visible.
@@ -1198,29 +1603,26 @@ static void DCApplyLegacyUnicodeCompatibility(DCMessage *message) {
 
         // ─── DIRECT ATTACHMENTS ───────────────────────────────────────────────────────
         // Files directly uploaded by users — images, videos, audio etc.
-        // Unlike embeds these come from Discord's CDN directly and have explicit content_type.
+        // Unlike embeds these come from Discord's CDN directly; content_type may be absent.
         NSArray *attachments = [jsonMessage objectForKey:@"attachments"];
         if (attachments) {
             for (NSDictionary *attachment in attachments) {
-                NSString *fileType = [attachment objectForKey:@"content_type"];
+                id contentTypeValue = [attachment objectForKey:@"content_type"];
+                NSString *fileType = [contentTypeValue isKindOfClass:[NSString class]]
+                    ? [(NSString *)contentTypeValue lowercaseString]
+                    : nil;
                 // Image Attachments
                 // Image attachments — includes PNG, JPG, WebP, and GIF.
                 // WebP files need format=png appended so iOS can decode them.
                 // GIF files are routed to DCGifInfo for tap-to-play behavior.
-                if ([fileType rangeOfString:@"image/"].location != NSNotFound) {
+                if ([fileType hasPrefix:@"image/"]) {
                     newMessage.attachmentCount++;
 
-                    NSString *attachmentURL = nil;
-                    id proxyURLValue = [attachment objectForKey:@"proxy_url"];
-                    if ([proxyURLValue isKindOfClass:[NSString class]] &&
-                        [(NSString *)proxyURLValue length] > 0) {
-                        attachmentURL = proxyURLValue;
-                    } else {
-                        id originalURLValue = [attachment objectForKey:@"url"];
-                        if ([originalURLValue isKindOfClass:[NSString class]]) {
-                            attachmentURL = originalURLValue;
-                        }
-                    }
+                    NSString *originalURL = [[attachment objectForKey:@"url"] isKindOfClass:[NSString class]]
+                        ? [attachment objectForKey:@"url"] : nil;
+                    NSString *proxyURL = [[attachment objectForKey:@"proxy_url"] isKindOfClass:[NSString class]]
+                        ? [attachment objectForKey:@"proxy_url"] : nil;
+                    NSString *attachmentURL = proxyURL.length ? proxyURL : originalURL;
                     if (attachmentURL.length == 0) continue;
                     NSURL *attachmentNSURL = [NSURL URLWithString:attachmentURL];
                     NSString *pathExtension = [attachmentNSURL.path.lowercaseString pathExtension];
@@ -1229,7 +1631,8 @@ static void DCApplyLegacyUnicodeCompatibility(DCMessage *message) {
 
                     NSInteger width     = [[attachment objectForKey:@"width"] integerValue];
                     NSInteger height    = [[attachment objectForKey:@"height"] integerValue];
-                    CGFloat aspectRatio = (CGFloat)width / (CGFloat)height;
+                    CGFloat aspectRatio = (width > 0 && height > 0)
+                        ? (CGFloat)width / (CGFloat)height : 1.0f;
 
                     if (height > 1024) {
                         height = 1024;
@@ -1272,13 +1675,13 @@ static void DCApplyLegacyUnicodeCompatibility(DCMessage *message) {
                     // Direct uploads follow the same metadata-only lifecycle as image embeds.
                     if (isGif) {
                         DCGifInfo *gif = [DCGifInfo new];
-                        gif.gifURL = [NSURL URLWithString:attachmentURL];
-                        gif.thumbnailURL = urlString;
+                        gif.gifURL = DCRegisterChatMediaURL([NSURL URLWithString:attachmentURL], messageChannelID, newMessage.snowflake);
+                        gif.thumbnailURL = DCRegisterChatMediaURL(urlString, messageChannelID, newMessage.snowflake);
                         gif.naturalSize = CGSizeMake(width, height);
                         [newMessage.attachments addObject:gif];
                     } else {
                         UILazyImage *lazyImage = [UILazyImage new];
-                        lazyImage.imageURL = urlString;
+                        lazyImage.imageURL = DCRegisterChatMediaURL(attachmentNSURL, messageChannelID, newMessage.snowflake);
                         lazyImage.naturalSize = CGSizeMake(width, height);
                         [newMessage.attachments addObject:lazyImage];
                     }
@@ -1287,10 +1690,10 @@ static void DCApplyLegacyUnicodeCompatibility(DCMessage *message) {
                 // Directly uploaded video files — only formats natively supported by iOS MPMoviePlayer.
                 // Other video formats (webm, avi etc.) fall through to the unknown handler below
                 // which appends the raw URL to the message content as a fallback.
-                } else if ([fileType rangeOfString:@"video/quicktime"].location != NSNotFound ||
-                           [fileType rangeOfString:@"video/mp4"].location != NSNotFound ||
-                           [fileType rangeOfString:@"video/mpv"].location != NSNotFound ||
-                           [fileType rangeOfString:@"video/3gpp"].location != NSNotFound) {
+                } else if ([fileType isEqualToString:@"video/quicktime"] ||
+                           [fileType isEqualToString:@"video/mp4"] ||
+                           [fileType isEqualToString:@"video/mpv"] ||
+                           [fileType isEqualToString:@"video/3gpp"]) {
                     // iOS only supports these video formats
                     newMessage.attachmentCount++;
 
@@ -1306,7 +1709,7 @@ static void DCApplyLegacyUnicodeCompatibility(DCMessage *message) {
                         NSLog(@"[MediaPerf] video metadata build %.1fms", videoViewTime * 1000.0);
                     }
 
-                    video.videoURL = attachmentURL;
+                    video.videoURL = DCRegisterChatMediaURL(attachmentURL, messageChannelID, newMessage.snowflake);
 
                     NSString *baseURL = [attachment objectForKey:@"proxy_url"];
                     if (![baseURL isKindOfClass:[NSString class]] || baseURL.length == 0) {
@@ -1342,7 +1745,7 @@ static void DCApplyLegacyUnicodeCompatibility(DCMessage *message) {
                      * display time.  Keeping this URL clean also fixes the old
                      * missing-? construction for direct video proxy thumbnails. */
                     video.thumbnailURL = [baseURL isKindOfClass:[NSString class]]
-                        ? [NSURL URLWithString:baseURL]
+                        ? DCRegisterChatMediaURL([NSURL URLWithString:baseURL], messageChannelID, newMessage.snowflake)
                         : nil;
 
                     [newMessage.attachments addObject:video];
@@ -1350,9 +1753,33 @@ static void DCApplyLegacyUnicodeCompatibility(DCMessage *message) {
                     // Thumbnail pixels are resident only while the attachment is visible.
                     video.userInteractionEnabled = YES;
                 } else {
-                    newMessage.content =
-                        [NSString stringWithFormat:@"%@\n%@", newMessage.content,
-                                                   [attachment objectForKey:@"url"]];
+                    NSString *rawAttachmentURL = [[attachment objectForKey:@"url"]
+                        isKindOfClass:[NSString class]] ? [attachment objectForKey:@"url"] : nil;
+                    NSURL *registeredAttachmentURL = rawAttachmentURL.length
+                        ? DCRegisterChatMediaURL([NSURL URLWithString:rawAttachmentURL],
+                                                 messageChannelID,
+                                                 newMessage.snowflake)
+                        : nil;
+                    if (registeredAttachmentURL) {
+                        NSString *filename = [[attachment objectForKey:@"filename"]
+                            isKindOfClass:[NSString class]] ? [attachment objectForKey:@"filename"] : nil;
+                        if (filename.length == 0) {
+                            filename = registeredAttachmentURL.lastPathComponent.length
+                                ? registeredAttachmentURL.lastPathComponent
+                                : @"Attachment";
+                        }
+
+                        // Keep the display label safe for the lightweight Markdown link parser.
+                        filename = [filename stringByReplacingOccurrencesOfString:@"]" withString:@"］"];
+                        filename = [filename stringByReplacingOccurrencesOfString:@"\r" withString:@" "];
+                        filename = [filename stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
+
+                        NSString *fileTag = [NSString stringWithFormat:@"[📄 %@](%@)",
+                            filename, registeredAttachmentURL.absoluteString];
+                        newMessage.content = newMessage.content.length
+                            ? [newMessage.content stringByAppendingFormat:@"\n%@", fileTag]
+                            : fileTag;
+                    }
                     continue;
                 }
             }
@@ -1421,8 +1848,7 @@ static void DCApplyLegacyUnicodeCompatibility(DCMessage *message) {
             }
             // role ping check
             for (NSString *roleSnowflake in mentionRoles) {
-                if ([DCServerCommunicator.sharedInstance.selectedGuild.userRoles 
-                        containsObject:roleSnowflake]) {
+                if ([contextChannel.parentGuild.userRoles containsObject:roleSnowflake]) {
                     newMessage.pingingUser = true;
                 }
             }
@@ -1445,7 +1871,7 @@ static void DCApplyLegacyUnicodeCompatibility(DCMessage *message) {
         // account for height of a grouped message
 
         CGSize authorNameSize = [[newMessage.author 
-            displayNameInGuild:DCServerCommunicator.sharedInstance.selectedChannel.parentGuild]
+            displayNameInGuild:contextChannel.parentGuild]
                  sizeWithFont:[UIFont boldSystemFontOfSize:15]
             constrainedToSize:CGSizeMake(contentWidth, MAXFLOAT)
                 lineBreakMode:(NSLineBreakMode)UILineBreakModeWordWrap];
@@ -1651,11 +2077,12 @@ static void DCApplyLegacyUnicodeCompatibility(DCMessage *message) {
                 [newGuild.userRoles addObjectsFromArray:[member objectForKey:@"roles"]];
             }
             DCUser *user = [DCServerCommunicator.sharedInstance userForSnowflake:[member objectForKey:@"user_id"]];
-            NSString *nick = [member objectForKey:@"nick"];
-            if (user && nick && (NSNull *)nick != [NSNull null] && nick.length > 0
-                && newGuild.snowflake && (NSNull *)newGuild.snowflake != [NSNull null]) {
-                if (!user.guildNicknames) user.guildNicknames = NSMutableDictionary.new;
-                user.guildNicknames[newGuild.snowflake] = nick;
+            if (user && newGuild.snowflake && (NSNull *)newGuild.snowflake != [NSNull null]) {
+                [DCServerCommunicator.sharedInstance
+                    applyGuildProfileFromMember:member
+                                          toUser:user
+                                         guildID:newGuild.snowflake
+                                   authoritative:YES];
             }
         }
     } else {
@@ -1667,11 +2094,12 @@ static void DCApplyLegacyUnicodeCompatibility(DCMessage *message) {
             if ([[member valueForKeyPath:@"user.id"] isEqualToString:DCServerCommunicator.sharedInstance.snowflake]) {
                 [newGuild.userRoles addObjectsFromArray:[member objectForKey:@"roles"]];
             }
-            NSString *nick = [member objectForKey:@"nick"];
-            if (nick && (NSNull *)nick != [NSNull null] && nick.length > 0 
-                && newGuild.snowflake) { // add nil check for snowflake
-                if (!user.guildNicknames) user.guildNicknames = NSMutableDictionary.new;
-                user.guildNicknames[newGuild.snowflake] = nick;
+            if (user && newGuild.snowflake) {
+                [DCServerCommunicator.sharedInstance
+                    applyGuildProfileFromMember:member
+                                          toUser:user
+                                         guildID:newGuild.snowflake
+                                   authoritative:YES];
             }
         }
     }
@@ -1785,6 +2213,7 @@ static void DCApplyLegacyUnicodeCompatibility(DCMessage *message) {
         newChannel.type        = [[jsonChannel objectForKey:@"type"] intValue];
         NSString *rawPosition  = [jsonChannel objectForKey:@"position"];
         newChannel.position    = rawPosition ? [rawPosition intValue] : 0;
+        newChannel.readable    = true;
         newChannel.writeable   = true;
 
         // check if channel is muted
@@ -1821,6 +2250,8 @@ static void DCApplyLegacyUnicodeCompatibility(DCMessage *message) {
             // Calculate permissions
             NSArray *rawOverwrites =
                 [jsonChannel objectForKey:@"permission_overwrites"];
+            newChannel.permissionOverwrites = [rawOverwrites isKindOfClass:[NSArray class]]
+                ? [NSArray arrayWithArray:rawOverwrites] : [NSArray array];
             // sort with role priority
             NSArray *overwrites = [rawOverwrites sortedArrayUsingComparator:
                                                      ^NSComparisonResult(NSDictionary *perm1, NSDictionary *perm2) {
@@ -1869,11 +2300,14 @@ static void DCApplyLegacyUnicodeCompatibility(DCMessage *message) {
                 }
             }
 
-            newChannel.writeable = canWrite || [[jsonGuild objectForKey:@"owner_id"] isEqualToString:DCServerCommunicator.sharedInstance.snowflake];
+            BOOL isOwner = [[jsonGuild objectForKey:@"owner_id"]
+                isEqualToString:DCServerCommunicator.sharedInstance.snowflake];
+            newChannel.readable = isOwner || (allowCode != 1 && allowCode != 3);
+            newChannel.writeable = isOwner || (newChannel.readable && canWrite);
             // ignore perms for guild categories
             if (newChannel.type == DCChannelTypeGuildCategory) { // category
                 [categories addObject:newChannel];
-            } else {
+            } else if (newChannel.readable) {
                 [newGuild.channels addObject:newChannel];
             }
         }

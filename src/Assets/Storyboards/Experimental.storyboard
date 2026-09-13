@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <document type="com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB" version="2.0" toolsVersion="5056" systemVersion="13F1911" targetRuntime="iOS.CocoaTouch" variant="6xAndEarlier" propertyAccessControl="none" initialViewController="d1B-15-6LU">
     <dependencies>
-        <deployment version="1280" defaultVersion="1296" identifier="iOS"/>
+        <deployment version="1280" defaultVersion="1280" identifier="iOS"/>
         <development version="4600" identifier="xcode"/>
         <plugIn identifier="com.apple.InterfaceBuilder.IBCocoaTouchPlugin" version="3733"/>
     </dependencies>
@@ -141,7 +141,7 @@
                         <outlet property="toolbarBG" destination="FbZ-Ui-nx4" id="xaM-Pu-PZf"/>
                         <segue destination="Q6T-U8-h63" kind="push" identifier="to Tokenpage" id="Iix-KX-QdC"/>
                         <segue destination="ufZ-Xj-WmP" kind="modal" identifier="chat to contact" id="ZLN-09-gkt"/>
-                        <segue destination="xzW-XR-Sbg" kind="modal" identifier="Chat to Gallery" id="0nX-fC-Muh"/>
+                        <segue destination="xzW-XR-Sbg" kind="custom" identifier="Chat to Gallery" customClass="DCImageOverlaySegue" id="0nX-fC-Muh"/>
                     </connections>
                 </viewController>
                 <searchDisplayController id="niR-m5-FP3">
@@ -1538,7 +1538,7 @@ Your place to hang out like it's 2012</string>
                         <outlet property="sendButton" destination="6Vt-EX-T0X" id="t03-H5-oDX"/>
                         <outlet property="toolbar" destination="GaE-Vm-7p6" id="lfg-VE-Mkt"/>
                         <outlet property="toolbarBG" destination="RRX-yq-vKJ" id="ahj-E5-oCe"/>
-                        <segue destination="xzW-XR-Sbg" kind="modal" identifier="Chat to Gallery" id="cdu-l6-Trp"/>
+                        <segue destination="xzW-XR-Sbg" kind="custom" identifier="Chat to Gallery" customClass="DCImageOverlaySegue" id="cdu-l6-Trp"/>
                     </connections>
                 </viewController>
                 <searchDisplayController id="wgx-4q-AOo">
@@ -1890,8 +1890,10 @@ Use only as a last resort.</string>
                     </tableView>
                     <navigationItem key="navigationItem" title="Settings" id="4fI-gP-edo">
                         <barButtonItem key="backBarButtonItem" title="Back" id="nve-V4-jbi"/>
+                        <barButtonItem key="rightBarButtonItem" title="Clear Cache" id="ei5-ow-G86"/>
                     </navigationItem>
                     <connections>
+                        <outlet property="clearCacheButton" destination="ei5-ow-G86" id="TmV-cZ-NR4"/>
                         <outlet property="dataSaverToggle" destination="tHg-vK-aOc" id="Lpv-sj-imc"/>
                         <outlet property="experimentalToggle" destination="crD-dS-3pT" id="mG9-fe-7d9"/>
                         <outlet property="tokenInputField" destination="y8p-ZP-QBf" id="mln-uE-SfK"/>
@@ -2426,7 +2428,7 @@ Use only as a last resort.</string>
         <image name="ContactsBar.png" width="160" height="57"/>
         <image name="Group 99.png" width="40" height="40"/>
         <image name="Group_111.png" width="584" height="179"/>
-        <image name="GuildIconBase.png" width="96" height="96"/>
+        <image name="GuildIconBase.png" width="48" height="48"/>
         <image name="MessageField.png" width="31" height="31"/>
         <image name="No-Header.png" width="264" height="146"/>
         <image name="SendMessageButton.png" width="31" height="31"/>

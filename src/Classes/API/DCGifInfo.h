@@ -8,13 +8,9 @@
 
 #import <UIKit/UIKit.h>
 
-@class DCChatGifAttachment;
-
 @interface DCGifInfo : NSObject
-@property (strong, nonatomic) UIImage *staticThumbnail;
 @property (strong, nonatomic) NSURL *gifURL;
 @property (strong, nonatomic) NSURL *thumbnailURL;
 @property (assign, nonatomic) CGSize naturalSize;
-@property (weak, nonatomic) DCChatGifAttachment *view;
-
+@property (assign, nonatomic, getter=isVideoBacked) BOOL videoBacked;
 @end

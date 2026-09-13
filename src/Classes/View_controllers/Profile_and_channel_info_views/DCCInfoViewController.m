@@ -8,6 +8,7 @@
 
 #import "DCCInfoViewController.h"
 #include "DCUser.h"
+#include "DCGuild.h"
 #include "DCServerCommunicator.h"
 #include <CoreGraphics/CGGeometry.h>
 #include "DCMenuViewController.h"
@@ -130,12 +131,16 @@
         }
         if ([item isKindOfClass:[DCUser class]]) {
             DCUser *user = item;
-            cell.userName.text               = [user displayNameInGuild:DCServerCommunicator.sharedInstance.selectedChannel.parentGuild];
-            if (user.profileImage && user.profileImage.size.width > 0) {
-                cell.userPFP.image = user.profileImage;
+            DCGuild *guild =
+                DCServerCommunicator.sharedInstance.selectedChannel.parentGuild;
+            cell.userName.text = [user displayNameInGuild:guild];
+
+            UIImage *avatar = [DCTools cachedUserAvatar:user inGuild:guild];
+            if (avatar && avatar.size.width > 0) {
+                cell.userPFP.image = avatar;
             } else {
-                cell.userPFP.image = nil;
-                [DCTools getUserAvatar:user];
+                cell.userPFP.image = user.profileImage;
+                [DCTools getUserAvatar:user inGuild:guild];
             }
             if ([DCServerCommunicator.sharedInstance.selectedChannel.parentGuild.snowflake length] > 0) {
                 cell.statusLight.hidden = NO;

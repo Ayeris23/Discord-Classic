@@ -10,6 +10,7 @@
 #import "DCServerCommunicator.h"
 #import "DCTools.h"
 #import "DCCacheManager.h"
+#import "DCContentPurgeManager.h"
 #import "WSWebSocket.h"
 
 @implementation DCSettingsViewController
@@ -19,6 +20,8 @@
     [super viewDidLoad];
     self.experimentalToggle.on = [[NSUserDefaults standardUserDefaults] boolForKey:@"experimentalMode"];
     self.dataSaverToggle.on    = [[NSUserDefaults standardUserDefaults] boolForKey:@"dataSaver"];
+    self.clearCacheButton.target = self;
+    self.clearCacheButton.action = @selector(didTapClearCache:);
 
     NSString *token =
         [NSUserDefaults.standardUserDefaults stringForKey:@"token"];
@@ -70,6 +73,53 @@
     }
 }
 
+- (void)didTapClearCache:(id)sender {
+    UIAlertView *alert = [[UIAlertView alloc]
+        initWithTitle:@"Beep Boop"
+              message:@"Human, are you sure you want to purge all app content?"
+             delegate:self
+    cancelButtonTitle:@"No"
+    otherButtonTitles:@"Yes", nil];
+    alert.tag = 100;
+    [alert show];
+}
+
+- (void)purgeAppContent {
+    self.clearCacheButton.enabled = NO;
+    self.isLoggingOut = YES;
+
+    NSString *token = self.tokenInputField.text;
+    if (token.length > 0) {
+        [[NSUserDefaults standardUserDefaults] setObject:token forKey:@"token"];
+        [[NSUserDefaults standardUserDefaults] synchronize];
+    }
+
+    [DCContentPurgeManager purgeAllContentPreservingCredentialsWithCompletion:
+        ^(BOOL success, NSError *error) {
+            if (!success) {
+                self.clearCacheButton.enabled = YES;
+                self.isLoggingOut = NO;
+                UIAlertView *failureAlert = [[UIAlertView alloc]
+                    initWithTitle:@"Cache Purge Failed"
+                          message:error.localizedDescription ?: @"Some cached content could not be removed."
+                         delegate:nil
+                cancelButtonTitle:@"OK"
+                otherButtonTitles:nil];
+                [failureAlert show];
+                return;
+            }
+
+            UIAlertView *restartAlert = [[UIAlertView alloc]
+                initWithTitle:@"Restart Required"
+                      message:@"App content has been purged. Discord Classic needs to restart to rebuild everything fresh."
+                     delegate:self
+            cancelButtonTitle:nil
+            otherButtonTitles:@"OK", nil];
+            restartAlert.tag = 101;
+            [restartAlert show];
+        }];
+}
+
 - (IBAction)didTapLogOut {
     UIAlertView *alert = [[UIAlertView alloc]
         initWithTitle:@"Log Out"
@@ -108,6 +158,16 @@
 }
 
 - (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)buttonIndex {
+    if (alertView.tag == 100) {
+        if (buttonIndex == 1) {
+            [self purgeAppContent];
+        }
+        return;
+    }
+    if (alertView.tag == 101) {
+        exit(0);
+        return;
+    }
     if (alertView.tag == 99) {
         // Logout confirmation
         if (buttonIndex == 1) {

@@ -2,6 +2,9 @@
 //  DCResourceManager.h
 //  Discord Classic
 //
+//  Created by Ayeris on 8/12/26.
+//  Copyright (c) 2026 Ayeris All rights reserved.
+//
 //  Central resource policy for old iOS hardware.  Keep device-specific quirks
 //  out of cache/media code; consumers ask this object for budgets instead.
 //
@@ -30,6 +33,9 @@ typedef NS_ENUM(NSInteger, DCDeviceMemoryClass) {
 @property (nonatomic, readonly) NSUInteger imageMemoryCacheBudget;
 @property (nonatomic, readonly) NSUInteger imageMemoryCacheCountLimit;
 @property (nonatomic, readonly) NSUInteger chatThumbnailMemoryBudget;
+@property (nonatomic, readonly) NSUInteger chatAnimatedGIFMemoryBudget;
+@property (nonatomic, readonly) NSUInteger chatAnimatedGIFFrameLimit;
+@property (nonatomic, readonly) NSUInteger imageViewerDecodedImageBudget;
 @property (nonatomic, readonly) NSUInteger URLMemoryCacheBudget;
 
 /* Memory-driven chat residency.  CPU/display-specific pagination policy stays

@@ -32,12 +32,12 @@
 - (void)prepareForReuse {
     // iOS 5 lacks didEndDisplayingCell:, so reuse is the reliable release point for decoded media.
     for (UIView *subview in [NSArray arrayWithArray:self.subviews]) {
-        if ([subview isKindOfClass:[UILazyImageView class]]) {
+        if ([subview isKindOfClass:[DCChatGifAttachment class]]) {
+            [(DCChatGifAttachment *)subview releaseThumbnailForResidency];
+        } else if ([subview isKindOfClass:[UILazyImageView class]]) {
             [(UILazyImageView *)subview releaseChatThumbnailForResidency];
         } else if ([subview isKindOfClass:[DCChatVideoAttachment class]]) {
             [(DCChatVideoAttachment *)subview releaseThumbnailForResidency];
-        } else if ([subview isKindOfClass:[DCChatGifAttachment class]]) {
-            [(DCChatGifAttachment *)subview releaseThumbnailForResidency];
         }
     }
 

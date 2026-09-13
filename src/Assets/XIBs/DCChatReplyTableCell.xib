@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <document type="com.apple.InterfaceBuilder3.CocoaTouch.XIB" version="3.0" toolsVersion="5056" systemVersion="13F1911" targetRuntime="iOS.CocoaTouch" propertyAccessControl="none">
     <dependencies>
-        <deployment version="1280" defaultVersion="1296" identifier="iOS"/>
+        <deployment version="1280" defaultVersion="1280" identifier="iOS"/>
         <plugIn identifier="com.apple.InterfaceBuilder.IBCocoaTouchPlugin" version="3733"/>
     </dependencies>
     <objects>
@@ -89,6 +89,8 @@
                 <outlet property="referencedAuthorLabel" destination="tgA-We-qXE" id="0eQ-p4-zrs"/>
                 <outlet property="referencedMessage" destination="amd-y3-ncl" id="TMG-mt-Eqm"/>
                 <outlet property="referencedProfileImage" destination="xKn-f7-9FU" id="Fbs-WX-H7Q"/>
+                <outlet property="separatorHigh" destination="FSa-Rv-l8v" id="28I-7g-AJU"/>
+                <outlet property="separatorLow" destination="N3Z-ch-IQp" id="wgt-VR-LgN"/>
                 <outlet property="timestampLabel" destination="3HZ-iS-aC5" id="X9w-BH-6VH"/>
             </connections>
         </tableViewCell>

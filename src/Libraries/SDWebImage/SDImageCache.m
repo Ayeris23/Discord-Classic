@@ -52,8 +52,7 @@ BOOL ImageDataHasPNGPreffix(NSData *data) {
     return NO;
 }
 
-FOUNDATION_STATIC_INLINE NSUInteger SDCacheCostForImage(UIImage *image) {
-    // Report decoded image cost in bytes so NSCache limits reflect memory use.
+FOUNDATION_STATIC_INLINE NSUInteger SDCacheCostForSingleImage(UIImage *image) {
     CGImageRef cgImage = image.CGImage;
     if (cgImage) {
         size_t bytesPerRow = CGImageGetBytesPerRow(cgImage);
@@ -63,10 +62,27 @@ FOUNDATION_STATIC_INLINE NSUInteger SDCacheCostForImage(UIImage *image) {
         }
     }
 
-    /* Conservative fallback for unusual UIImage subclasses without CGImage. */
     CGFloat pixelWidth = image.size.width * image.scale;
     CGFloat pixelHeight = image.size.height * image.scale;
     return (NSUInteger)(pixelWidth * pixelHeight * 4.0f);
+}
+
+FOUNDATION_STATIC_INLINE NSUInteger SDCacheCostForImage(UIImage *image) {
+    // Animated UIImages retain every decoded frame; account for all of them.
+    NSArray *frames = image.images;
+    if (frames.count > 0) {
+        NSUInteger total = 0;
+        for (UIImage *frame in frames) {
+            NSUInteger frameCost = SDCacheCostForSingleImage(frame);
+            if (NSUIntegerMax - total < frameCost) {
+                return NSUIntegerMax;
+            }
+            total += frameCost;
+        }
+        return total;
+    }
+
+    return SDCacheCostForSingleImage(image);
 }
 
 @interface SDImageCache ()

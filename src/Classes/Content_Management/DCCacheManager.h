@@ -151,5 +151,6 @@
 // --- User info cache ---
 - (void)saveUserInfo:(DCUserInfo *)userInfo;
 - (DCUserInfo *)loadCachedUserInfo;
+- (void)invalidateUserInfoCache;
 
 @end

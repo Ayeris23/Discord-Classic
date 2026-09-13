@@ -25,6 +25,8 @@ typedef NS_ENUM(NSInteger, DCUserStatus) {
 @property (strong, nonatomic) NSString* username;
 @property (strong, nonatomic) NSString* globalName;
 @property (strong, nonatomic) NSMutableDictionary* guildNicknames;
+@property (strong, nonatomic) NSMutableDictionary* guildAvatarIDs;
+@property (strong, nonatomic) NSMutableDictionary* guildAvatarDecorationIDs;
 @property (strong, nonatomic) NSString* biography;
 @property (strong, nonatomic) NSString* customStatus;
 @property (assign, nonatomic) DCUserStatus status;

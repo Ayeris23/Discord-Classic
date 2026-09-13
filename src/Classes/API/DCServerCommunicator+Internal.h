@@ -7,6 +7,7 @@
 
 @property (assign, nonatomic) BOOL inflateStreamReady;
 @property (strong, nonatomic) NSMutableData *compressedBuffer;
+@property (strong, nonatomic) NSRecursiveLock *inflateLock;
 
 @property (strong, nonatomic) UIView *notificationView;
 @property (assign, nonatomic) BOOL gotHeartbeat;
@@ -31,6 +32,10 @@
 // Users whose presence was supplied by the live Gateway in this process.
 // Late disk hydration must never overwrite these with an older cached status.
 @property (strong, nonatomic) NSMutableSet *livePresenceUserIDs;
+// Guild/user pairs whose member-profile fields were resolved by live data.
+@property (strong, nonatomic) NSMutableSet *liveResolvedGuildNicknameKeys;
+@property (strong, nonatomic) NSMutableSet *liveResolvedGuildAvatarKeys;
+@property (strong, nonatomic) NSMutableSet *liveResolvedGuildDecorationKeys;
 
 - (void)showNonIntrusiveNotificationWithTitle:(NSString *)title;
 - (void)dismissNotification;

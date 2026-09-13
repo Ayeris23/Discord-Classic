@@ -22,7 +22,8 @@
 @property (weak, nonatomic) IBOutlet UIImageView *universalImageView;
 @property (strong, nonatomic) IBOutlet UILabel *referencedAuthorLabel;
 @property (strong, nonatomic) IBOutlet DTAttributedLabel *referencedMessage;
-@property (weak, nonatomic) IBOutlet UIImageView *separatorImageView;
+@property (weak, nonatomic) IBOutlet UIView *separatorLow;
+@property (weak, nonatomic) IBOutlet UIView *separatorHigh;
 @property (strong, nonatomic) NSString *messageSnowflake;
 @property (nonatomic, strong) DCMessageLayout *configuredLayout;
 

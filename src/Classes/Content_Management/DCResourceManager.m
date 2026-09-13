@@ -2,6 +2,9 @@
 //  DCResourceManager.m
 //  Discord Classic
 //
+//  Created by Ayeris on 8/12/26.
+//  Copyright (c) 2026 Ayeris All rights reserved.
+//
 
 #import "DCResourceManager.h"
 
@@ -118,6 +121,42 @@ static NSUInteger DCMB(NSUInteger megabytes) {
     }
 }
 
+- (NSUInteger)chatAnimatedGIFMemoryBudget {
+    switch (self.memoryClass) {
+        case DCDeviceMemoryClass256MB: return DCMB(8);
+        case DCDeviceMemoryClass512MB: return DCMB(16);
+        case DCDeviceMemoryClass1GB: return DCMB(24);
+        case DCDeviceMemoryClass2GBPlus: return DCMB(32);
+        case DCDeviceMemoryClassUnknown:
+        default: return DCMB(8);
+    }
+}
+
+- (NSUInteger)chatAnimatedGIFFrameLimit {
+    switch (self.memoryClass) {
+        case DCDeviceMemoryClass256MB: return 120;
+        case DCDeviceMemoryClass512MB: return 180;
+        case DCDeviceMemoryClass1GB: return 240;
+        case DCDeviceMemoryClass2GBPlus: return 300;
+        case DCDeviceMemoryClassUnknown:
+        default: return 120;
+    }
+}
+
+- (NSUInteger)imageViewerDecodedImageBudget {
+    /* The viewer owns one decoded raster at a time and purges competing image
+     * caches before loading. Keep enough headroom for UIKit/chat state while
+     * allowing useful zoom detail on low-memory hardware. */
+    switch (self.memoryClass) {
+        case DCDeviceMemoryClass256MB: return DCMB(12);
+        case DCDeviceMemoryClass512MB: return DCMB(24);
+        case DCDeviceMemoryClass1GB: return DCMB(40);
+        case DCDeviceMemoryClass2GBPlus: return DCMB(64);
+        case DCDeviceMemoryClassUnknown:
+        default: return DCMB(12);
+    }
+}
+
 - (NSUInteger)URLMemoryCacheBudget {
     /* NSURLCache holds response data, not decoded UIKit pixels.  It still needs
      * to shrink on 256 MB hardware so it does not compete with the live graph. */
@@ -195,7 +234,7 @@ static NSUInteger DCMB(NSUInteger megabytes) {
 
     NSLog(@"[ResourcePolicy] %@ class %@ physical %.0fMB resident %.1fMB "
           @"systemReclaimable~%.1fMB imageCache %.1fMB/%lu chatThumb %.1fMB "
-          @"urlCache %.1fMB chatWindow %ld/%ld trim %ld warnings %lu",
+          @"gif %.1fMB/%lu viewer %.1fMB urlCache %.1fMB chatWindow %ld/%ld trim %ld warnings %lu",
           reason ?: @"profile",
           [self dc_memoryClassName],
           (double)self.physicalMemoryBytes / (double)DCMegabyte,
@@ -204,6 +243,9 @@ static NSUInteger DCMB(NSUInteger megabytes) {
           (double)self.imageMemoryCacheBudget / (double)DCMegabyte,
           (unsigned long)self.imageMemoryCacheCountLimit,
           (double)self.chatThumbnailMemoryBudget / (double)DCMegabyte,
+          (double)self.chatAnimatedGIFMemoryBudget / (double)DCMegabyte,
+          (unsigned long)self.chatAnimatedGIFFrameLimit,
+          (double)self.imageViewerDecodedImageBudget / (double)DCMegabyte,
           (double)self.URLMemoryCacheBudget / (double)DCMegabyte,
           (long)self.chatMessageSoftLimit,
           (long)self.chatMessageHardLimit,

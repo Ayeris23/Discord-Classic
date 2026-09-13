@@ -10,8 +10,14 @@
 #import <MessageUI/MessageUI.h>
 #import "APLSlideMenuViewController.h"
 
-@interface DCImageViewController : UIViewController<UIScrollViewDelegate, UIActionSheetDelegate, 
-		MFMailComposeViewControllerDelegate, MFMessageComposeViewControllerDelegate>
+@class DCMessage;
+
+extern NSString * const DCImageViewerUnderlyingGeometryDidChangeNotification;
+
+@interface DCImageViewController : UIViewController<UIScrollViewDelegate, UIActionSheetDelegate,
+        MFMailComposeViewControllerDelegate, MFMessageComposeViewControllerDelegate>
+
++ (BOOL)isImageViewerActive;
 
 @property (weak, nonatomic) IBOutlet UIImageView *imageView;
 @property (strong, nonatomic) IBOutlet UIScrollView *scrollView;
@@ -19,5 +25,7 @@
 @property (nonatomic, assign) BOOL chromeVisible;
 @property (weak, nonatomic) IBOutlet UINavigationBar *navBar;
 @property (strong, nonatomic) NSURL *fullResURL;
+@property (strong, nonatomic) UIImage *previewImage;
+@property (strong, nonatomic) DCMessage *sourceMessage;
 
 @end

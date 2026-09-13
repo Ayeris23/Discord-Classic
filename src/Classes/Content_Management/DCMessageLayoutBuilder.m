@@ -404,14 +404,7 @@ static void DCLogAttributedStringShape(DCMessage *message,
                 break;
             }
         } else if ([attachment isKindOfClass:[DCGifInfo class]]) {
-            DCGifInfo *gif = attachment;
-            if ((gif.naturalSize.width <= 0 || gif.naturalSize.height <= 0) &&
-                (!gif.staticThumbnail ||
-                 gif.staticThumbnail.size.width <= 0 ||
-                 gif.staticThumbnail.size.height <= 0)) {
-                hasUnknownGeometry = YES;
-                break;
-            }
+            continue;
         }
     }
     if (hasUnknownGeometry) return;
@@ -550,10 +543,8 @@ static void DCLogAttributedStringShape(DCMessage *message,
             CGSize sourceSize = CGSizeZero;
             if (gifInfo.naturalSize.width > 0 && gifInfo.naturalSize.height > 0) {
                 sourceSize = gifInfo.naturalSize;
-            } else if (gifInfo.staticThumbnail) {
-                sourceSize = gifInfo.staticThumbnail.size;
             } else {
-                continue;
+                sourceSize = CGSizeMake(16.0f, 9.0f);
             }
             CGFloat aspectRatio = sourceSize.width / sourceSize.height;
             int newWidth  = (int)(200 * aspectRatio);

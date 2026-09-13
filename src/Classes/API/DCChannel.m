@@ -36,6 +36,18 @@ static dispatch_queue_t channel_event_queue;
     return channel_event_queue;
 }
 
+static UIImage *DCNormalizedUploadImage(UIImage *image) {
+    if (!image || image.imageOrientation == UIImageOrientationUp) {
+        return image;
+    }
+
+    UIGraphicsBeginImageContextWithOptions(image.size, NO, image.scale);
+    [image drawInRect:CGRectMake(0, 0, image.size.width, image.size.height)];
+    UIImage *normalized = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    return normalized ?: image;
+}
+
 static dispatch_queue_t channel_send_queue;
 - (dispatch_queue_t)get_channel_send_queue {
     if (channel_send_queue == nil) {
@@ -306,61 +318,73 @@ static dispatch_queue_t channel_send_queue;
 }
 
 - (void)sendImage:(UIImage *)image mimeType:(NSString *)type {
+    if (!image) return;
+
     dispatch_async(dispatch_get_main_queue(), ^{
         [UIApplication sharedApplication].networkActivityIndicatorVisible = YES;
     });
-    NSMutableURLRequest *urlRequest = [DCServerCommunicator
-        requestWithPath:[NSString stringWithFormat:@"/channels/%@/messages", self.snowflake]
-                  token:DCServerCommunicator.sharedInstance.token];
-    [urlRequest setValue:@"no-store" forHTTPHeaderField:@"Cache-Control"];
-    [urlRequest setHTTPMethod:@"POST"];
-    NSString *boundary = @"---------------------------14737809831466499882746641449";
-    NSString *contentType = [NSString stringWithFormat:@"multipart/form-data; boundary=%@", boundary];
-    [urlRequest setValue:contentType forHTTPHeaderField:@"Content-Type"];
 
-    NSMutableData *postbody = NSMutableData.new;
-    [postbody appendData:[[NSString stringWithFormat:@"\r\n--%@\r\n", boundary]
-                             dataUsingEncoding:NSUTF8StringEncoding]];
-    NSString *extension = [type substringFromIndex:6];
-    [postbody
-        appendData:[[NSString stringWithFormat:
-                                  @"Content-Disposition: form-data; name=\"file\"; filename=\"upload.%@\"\r\n",
-                                  extension]
-                       dataUsingEncoding:NSUTF8StringEncoding]];
-    if ([type isEqualToString:@"image/jpeg"]) {
-        [postbody appendData:[@"Content-Type: image/jpeg\r\n\r\n"
-                                 dataUsingEncoding:NSUTF8StringEncoding]];
-        [postbody
-            appendData:[NSData
-                           dataWithData:UIImageJPEGRepresentation(image, 80)]];
-    } else if ([type isEqualToString:@"image/png"]) {
-        [postbody appendData:[@"Content-Type: image/png\r\n\r\n"
-                                 dataUsingEncoding:NSUTF8StringEncoding]];
-        [postbody
-            appendData:[NSData dataWithData:UIImagePNGRepresentation(image)]];
-    }
-    [postbody appendData:[[NSString stringWithFormat:@"\r\n--%@\r\n", boundary]
-                             dataUsingEncoding:NSUTF8StringEncoding]];
-    [postbody
-        appendData:[@"Content-Disposition: form-data; name=\"content\"\r\n\r\n "
-                       dataUsingEncoding:NSUTF8StringEncoding]];
-    [postbody appendData:[[NSString stringWithFormat:@"\r\n--%@--", boundary]
-                             dataUsingEncoding:NSUTF8StringEncoding]];
-
-    [urlRequest setHTTPBody:postbody];
-
+    NSString *channelID = [self.snowflake copy];
     dispatch_async([self get_channel_send_queue], ^{
-        NSError *error                  = nil;
-        NSHTTPURLResponse *responseCode = nil;
+        @autoreleasepool {
+            UIImage *uploadImage = DCNormalizedUploadImage(image);
+            NSData *imageData = nil;
+            NSString *extension = @"jpg";
+            NSString *uploadType = @"image/jpeg";
 
-        [DCTools checkData:[NSURLConnection sendSynchronousRequest:urlRequest
-                                                 returningResponse:&responseCode
-                                                             error:&error]
-                 withError:error];
-        dispatch_sync(dispatch_get_main_queue(), ^{
-            [UIApplication sharedApplication].networkActivityIndicatorVisible =
-                NO;
-        });
+            if ([type isEqualToString:@"image/png"]) {
+                imageData = UIImagePNGRepresentation(uploadImage);
+                extension = @"png";
+                uploadType = @"image/png";
+            } else {
+                imageData = UIImageJPEGRepresentation(uploadImage, 0.8f);
+            }
+
+            if (!imageData.length) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [UIApplication sharedApplication].networkActivityIndicatorVisible = NO;
+                });
+                return;
+            }
+
+            NSMutableURLRequest *urlRequest = [DCServerCommunicator
+                requestWithPath:[NSString stringWithFormat:@"/channels/%@/messages", channelID]
+                          token:DCServerCommunicator.sharedInstance.token];
+            [urlRequest setValue:@"no-store" forHTTPHeaderField:@"Cache-Control"];
+            [urlRequest setHTTPMethod:@"POST"];
+
+            NSString *boundary = @"---------------------------14737809831466499882746641449";
+            NSString *contentType = [NSString stringWithFormat:@"multipart/form-data; boundary=%@", boundary];
+            [urlRequest setValue:contentType forHTTPHeaderField:@"Content-Type"];
+
+            NSMutableData *postbody = NSMutableData.new;
+            [postbody appendData:[[NSString stringWithFormat:@"\r\n--%@\r\n", boundary]
+                                     dataUsingEncoding:NSUTF8StringEncoding]];
+            [postbody appendData:[[NSString stringWithFormat:
+                @"Content-Disposition: form-data; name=\"file\"; filename=\"upload.%@\"\r\n",
+                extension] dataUsingEncoding:NSUTF8StringEncoding]];
+            [postbody appendData:[[NSString stringWithFormat:@"Content-Type: %@\r\n\r\n", uploadType]
+                                     dataUsingEncoding:NSUTF8StringEncoding]];
+            [postbody appendData:imageData];
+            [postbody appendData:[[NSString stringWithFormat:@"\r\n--%@\r\n", boundary]
+                                     dataUsingEncoding:NSUTF8StringEncoding]];
+            [postbody appendData:[@"Content-Disposition: form-data; name=\"content\"\r\n\r\n "
+                                     dataUsingEncoding:NSUTF8StringEncoding]];
+            [postbody appendData:[[NSString stringWithFormat:@"\r\n--%@--", boundary]
+                                     dataUsingEncoding:NSUTF8StringEncoding]];
+            [urlRequest setHTTPBody:postbody];
+
+            NSError *error = nil;
+            NSHTTPURLResponse *responseCode = nil;
+            [DCTools checkData:[NSURLConnection sendSynchronousRequest:urlRequest
+                                                     returningResponse:&responseCode
+                                                                 error:&error]
+                     withError:error];
+
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [UIApplication sharedApplication].networkActivityIndicatorVisible = NO;
+            });
+        }
     });
 }
 
@@ -509,8 +533,11 @@ static dispatch_queue_t channel_send_queue;
 }
 
 - (void)ackMessage:(NSString *)messageId {
+    if (messageId.length == 0) return;
+
     self.lastReadMessageId = messageId;
     self.mentionCount = 0;
+    [self checkIfRead];
     dispatch_async([self get_channel_event_queue], ^{
         NSMutableURLRequest *urlRequest = [DCServerCommunicator
             requestWithPath:[NSString stringWithFormat:@"/channels/%@/messages/%@/ack", 
@@ -614,7 +641,7 @@ static dispatch_queue_t channel_send_queue;
         return nil;
     }
     if (parsedResponse.count <= 0) {
-        return nil;
+        return [NSArray array];
     }
 
     CFAbsoluteTime jsonElapsed = CFAbsoluteTimeGetCurrent() - jsonStart;
@@ -626,134 +653,12 @@ static dispatch_queue_t channel_send_queue;
     CFAbsoluteTime convertStart = CFAbsoluteTimeGetCurrent();
     dispatch_sync(dispatch_get_main_queue(), ^{
 
-        static NSArray *joinMessages;
-        static dispatch_once_t onceToken;
-        dispatch_once(&onceToken, ^{
-            joinMessages = @[
-                @"%@ joined the party.",
-                @"%@ is here.",
-                @"Welcome, %@. We hope you brought pizza.",
-                @"A wild %@ appeared.",
-                @"%@ just landed.",
-                @"%@ just slid into the server.",
-                @"%@ just showed up!",
-                @"Welcome %@. Say hi!",
-                @"%@ hopped into the server.",
-                @"Everyone welcome %@!",
-                @"Glad you're here, %@.",
-                @"Good to see you, %@.",
-                @"Yay you made it, %@!",
-            ];
-        });
-
         for (NSDictionary *jsonMessage in parsedResponse) {
             @autoreleasepool {
                 DCMessage *convertedMessage =
-                    [DCTools convertJsonMessage:jsonMessage deferLegacyLayout:YES];
-
-                NSString *messageType = [jsonMessage objectForKey:@"type"];
-
-                if ([messageType intValue] == DCMessageTypeRecipientAdd) {
-                    NSArray *mentions     = [jsonMessage objectForKey:@"mentions"];
-                    NSDictionary *mention = mentions.firstObject;
-                    // NSString *targetName = [mentions
-                            NSString *targetUsername =
-                        [mention objectForKey:@"global_name"];
-                    if ([targetUsername isKindOfClass:[NSNull class]]) {
-                        targetUsername = @"Deleted User";
-                    }
-                    convertedMessage.content       = [NSString
-                        stringWithFormat:@"%@ added %@ to the group conversation.",
-                                         [convertedMessage.author displayName],
-                                         targetUsername];
-                    float contentWidth             = UIScreen.mainScreen.bounds.size.width - 63;
-                    CGSize textSize                = [convertedMessage.content
-                             sizeWithFont:[UIFont systemFontOfSize:14]
-                        constrainedToSize:CGSizeMake(contentWidth, MAXFLOAT)
-                            lineBreakMode:NSLineBreakByWordWrapping];
-                    convertedMessage.contentHeight = textSize.height + 40;
-                } else if ([messageType intValue] == DCMessageTypeRecipientRemove) {
-                    convertedMessage.content       = [NSString
-                        stringWithFormat:@"%@ left the group conversation.",
-                                         [convertedMessage.author displayName]];
-                    float contentWidth             = UIScreen.mainScreen.bounds.size.width - 63;
-                    CGSize textSize                = [convertedMessage.content
-                             sizeWithFont:[UIFont systemFontOfSize:14]
-                        constrainedToSize:CGSizeMake(contentWidth, MAXFLOAT)
-                            lineBreakMode:NSLineBreakByWordWrapping];
-                    convertedMessage.contentHeight = textSize.height + 40;
-                } else if ([messageType intValue] == DCMessageTypeChannelNameChange) {
-                    convertedMessage.content       = [NSString
-                        stringWithFormat:@"%@ changed the group name to %@.",
-                                         [convertedMessage.author displayName],
-                                         [jsonMessage objectForKey:@"content"]];
-                    float contentWidth             = UIScreen.mainScreen.bounds.size.width - 63;
-                    CGSize textSize                = [convertedMessage.content
-                             sizeWithFont:[UIFont systemFontOfSize:14]
-                        constrainedToSize:CGSizeMake(contentWidth, MAXFLOAT)
-                            lineBreakMode:NSLineBreakByWordWrapping];
-                    convertedMessage.contentHeight = textSize.height + 30;
-                } else if ([messageType intValue] == DCMessageTypeChannelIconChange) {
-                    convertedMessage.content       = [NSString
-                        stringWithFormat:@"%@ changed the group icon.",
-                                         [convertedMessage.author displayName]];
-                    float contentWidth             = UIScreen.mainScreen.bounds.size.width - 63;
-                    CGSize textSize                = [convertedMessage.content
-                             sizeWithFont:[UIFont systemFontOfSize:14]
-                        constrainedToSize:CGSizeMake(contentWidth, MAXFLOAT)
-                            lineBreakMode:NSLineBreakByWordWrapping];
-                    convertedMessage.contentHeight = textSize.height + 15;
-                } else if ([messageType intValue] == DCMessageTypeChannelPinnedMessage) {
-                    convertedMessage.content       = [NSString
-                        stringWithFormat:@"%@ pinned a message to this channel.",
-                                         [convertedMessage.author displayName]];
-                    float contentWidth             = UIScreen.mainScreen.bounds.size.width - 63;
-                    CGSize textSize                = [convertedMessage.content
-                             sizeWithFont:[UIFont systemFontOfSize:14]
-                        constrainedToSize:CGSizeMake(contentWidth, MAXFLOAT)
-                            lineBreakMode:NSLineBreakByWordWrapping];
-                    convertedMessage.contentHeight = textSize.height + 40;
-                } else if ([messageType intValue] == DCMessageTypeUserJoin) {
-                    static dispatch_once_t dateFormatOnceToken;
-                    static NSDateFormatter *dateFormatter;
-                    dispatch_once(&dateFormatOnceToken, ^{
-                        dateFormatter = [NSDateFormatter new];
-                        dateFormatter.dateFormat = @"yyyy-MM-dd'T'HH:mm:ss.SSSSSS+00':'00";
-                        dateFormatter.timeZone     = [NSTimeZone timeZoneWithName:@"GMT"];
-                        dateFormatter.locale     = [[NSLocale alloc] initWithLocaleIdentifier:@"en_US_POSIX"];
-                    });
-                    NSDate *timestamp = [dateFormatter dateFromString:[jsonMessage objectForKey:@"timestamp"]];
-                    uint64_t time = [timestamp timeIntervalSince1970] * 1000; // ms
-                    convertedMessage.content       = [NSString
-                        stringWithFormat:joinMessages[time % joinMessages.count],
-                                         [convertedMessage.author displayName]];
-                    float contentWidth             = UIScreen.mainScreen.bounds.size.width - 63;
-                    CGSize textSize                = [convertedMessage.content
-                             sizeWithFont:[UIFont systemFontOfSize:14]
-                        constrainedToSize:CGSizeMake(contentWidth, MAXFLOAT)
-                            lineBreakMode:NSLineBreakByWordWrapping];
-                    convertedMessage.contentHeight = textSize.height + 20;
-                } else if ([messageType intValue] == DCMessageTypeGuildBoost) {
-                    convertedMessage.content       = [NSString
-                        stringWithFormat:@"%@ just boosted the server!",
-                                         [convertedMessage.author displayName]];
-                    float contentWidth             = UIScreen.mainScreen.bounds.size.width - 63;
-                    CGSize textSize                = [convertedMessage.content
-                             sizeWithFont:[UIFont systemFontOfSize:14]
-                        constrainedToSize:CGSizeMake(contentWidth, MAXFLOAT)
-                            lineBreakMode:NSLineBreakByWordWrapping];
-                    convertedMessage.contentHeight = textSize.height + 20;
-                } else if ([messageType intValue] == DCMessageTypeThreadCreated) {
-                    convertedMessage.content       = [NSString
-                        stringWithFormat:@"%@ started a thread: 'placeholder'. See all 'placeholder'.",
-                                         [convertedMessage.author displayName]];
-                    float contentWidth             = UIScreen.mainScreen.bounds.size.width - 63;
-                    CGSize textSize                = [convertedMessage.content
-                             sizeWithFont:[UIFont systemFontOfSize:14]
-                        constrainedToSize:CGSizeMake(contentWidth, MAXFLOAT)
-                            lineBreakMode:NSLineBreakByWordWrapping];
-                    convertedMessage.contentHeight = textSize.height + 20;
-                }
+                    [DCTools convertJsonMessage:jsonMessage
+                                     deferLegacyLayout:YES
+                                               channel:self];
                 [messages insertObject:convertedMessage atIndex:0];
             }
         }
@@ -843,7 +748,7 @@ static dispatch_queue_t channel_send_queue;
        return nil;
    }
    if (parsedResponse.count <= 0) {
-       return nil;
+       return [NSArray array];
    }
 
    CFAbsoluteTime jsonElapsed = CFAbsoluteTimeGetCurrent() - jsonStart;
@@ -875,7 +780,9 @@ static dispatch_queue_t channel_send_queue;
         for (NSDictionary *jsonMessage in parsedResponse) {
             @autoreleasepool {
                 DCMessage *convertedMessage =
-                    [DCTools convertJsonMessage:jsonMessage deferLegacyLayout:YES];
+                    [DCTools convertJsonMessage:jsonMessage
+                                     deferLegacyLayout:YES
+                                               channel:self];
 
                 NSString *messageType = [jsonMessage objectForKey:@"type"];
 
@@ -1002,7 +909,9 @@ static dispatch_queue_t channel_send_queue;
     [aCoder encodeObject:self.lastReadMessageId forKey:@"lastReadMessageId"];
     [aCoder encodeInteger:self.mentionCount     forKey:@"mentionCount"];
     [aCoder encodeBool:self.muted               forKey:@"muted"];
+    [aCoder encodeBool:self.readable            forKey:@"readable"];
     [aCoder encodeBool:self.writeable           forKey:@"writeable"];
+    [aCoder encodeObject:self.permissionOverwrites forKey:@"permissionOverwrites"];
     [aCoder encodeInteger:self.type             forKey:@"type"];
     [aCoder encodeInteger:self.position         forKey:@"position"];
     [aCoder encodeObject:self.iconID            forKey:@"iconID"];
@@ -1049,7 +958,13 @@ static dispatch_queue_t channel_send_queue;
         self.lastReadMessageId = [aDecoder decodeObjectForKey:@"lastReadMessageId"];
         self.mentionCount      = [aDecoder decodeIntegerForKey:@"mentionCount"];
         self.muted             = [aDecoder decodeBoolForKey:@"muted"];
-        self.writeable         = [aDecoder decodeBoolForKey:@"writeable"];
+        self.readable          = [aDecoder containsValueForKey:@"readable"]
+            ? [aDecoder decodeBoolForKey:@"readable"] : YES;
+        self.writeable         = [aDecoder containsValueForKey:@"writeable"]
+            ? [aDecoder decodeBoolForKey:@"writeable"] : YES;
+        id decodedOverwrites   = [aDecoder decodeObjectForKey:@"permissionOverwrites"];
+        self.permissionOverwrites = [decodedOverwrites isKindOfClass:[NSArray class]]
+            ? decodedOverwrites : [NSArray array];
         self.type              = (DCChannelType)[aDecoder decodeIntegerForKey:@"type"];
         self.position          = [aDecoder decodeIntegerForKey:@"position"];
         self.iconID            = [aDecoder decodeObjectForKey:@"iconID"];

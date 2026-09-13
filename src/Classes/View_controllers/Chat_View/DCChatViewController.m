@@ -63,9 +63,13 @@
 @property (nonatomic, strong) DCChannelWindow *currentWindow;
 @property (assign, nonatomic) NSUInteger numberOfMessagesLoaded;
 @property (strong, nonatomic) UIImage *selectedImage;
+@property (strong, nonatomic) DCMessage *selectedImageMessage;
 @property (assign, nonatomic) BOOL oldMode;
 @property (assign, nonatomic) BOOL loadingOlderMessages;
 @property (assign, nonatomic) BOOL loadingNewerMessages;
+@property (strong, nonatomic) UIView *emptyChatLoadingView;
+@property (strong, nonatomic) UIActivityIndicatorView *emptyChatLoadingSpinner;
+@property (strong, nonatomic) UILabel *emptyChatLoadingLabel;
 @property (strong, nonatomic) UIView *typingIndicatorView;
 @property (strong, nonatomic) UILabel *typingLabel;
 @property (strong, nonatomic) NSMutableDictionary *typingUsers;
@@ -109,6 +113,27 @@
 @property (nonatomic, assign) CFAbsoluteTime lastNewerRunwayStarvationLog;
 @property (nonatomic, assign) NSInteger olderRunwayRequestedCount;
 @property (nonatomic, assign) NSInteger newerRunwayRequestedCount;
+@property (nonatomic, strong) NSURL *activeVideoSourceURL;
+@property (nonatomic, strong) MPMoviePlayerViewController *activeVideoPlayerController;
+@property (nonatomic, assign) BOOL activeVideoSignatureRetryUsed;
+@property (nonatomic, strong) UIButton *jumpToPresentButton;
+@property (nonatomic, assign) BOOL jumpToPresentButtonVisible;
+@property (nonatomic, assign) BOOL jumpToPresentIntegratedComposer;
+@property (nonatomic, assign) CGFloat jumpToPresentRightMargin;
+@property (nonatomic, assign) CGFloat jumpToPresentSpacing;
+@property (nonatomic, assign) CGFloat jumpToPresentMessageFieldRightInset;
+@property (nonatomic, assign) CGFloat jumpToPresentInputFieldRightInset;
+@property (nonatomic, assign) CGFloat jumpToPresentPlaceholderRightInset;
+- (void)setupJumpToPresentButton;
+- (void)updateJumpToPresentButtonFrame;
+- (void)updateJumpToPresentButtonVisibility;
+- (void)setJumpToPresentButtonVisible:(BOOL)visible animated:(BOOL)animated;
+- (void)didTapJumpToPresent;
+- (void)updateSendButtonEnabledState;
+- (void)setupEmptyChatLoadingIndicator;
+- (void)layoutEmptyChatLoadingIndicator;
+- (void)updateEmptyChatLoadingIndicator;
+- (void)invalidatePendingMessageLoads;
 - (void)stopForwardMomentumContinuation;
 - (void)startForwardMomentumContinuationWithVelocity:(CGFloat)velocityY;
 - (void)forwardMomentumTick:(CADisplayLink *)displayLink;
@@ -121,6 +146,8 @@
 - (NSString *)referencePreviewTextForMessage:(DCMessage *)message;
 - (NSUInteger)prewarmReferencePresentationsForMessages:(NSArray *)messages;
 - (dispatch_queue_t)get_chat_presentation_queue;
+- (void)dc_presentResolvedVideoURL:(NSURL *)resolvedURL sourceURL:(NSURL *)sourceURL;
+- (void)dc_openResolvedExternalURL:(NSURL *)url;
 @end
 
 // dynamic message box vars
@@ -155,6 +182,12 @@ typedef NS_ENUM(NSInteger, DCWindowTrimDirection) {
     DCWindowTrimDirectionRemoveNewest = 1,
     DCWindowTrimDirectionRemoveOldest = 2
 };
+
+static NSComparisonResult DCCompareChatSnowflakes(NSString *left, NSString *right) {
+    if (left.length < right.length) return NSOrderedAscending;
+    if (left.length > right.length) return NSOrderedDescending;
+    return [left compare:right options:NSLiteralSearch];
+}
 static char kDCChatTextDrawStartKey;
 
 /*
@@ -186,13 +219,7 @@ static BOOL DCMessageHasUnknownAttachmentGeometry(DCMessage *message) {
                 return YES;
             }
         } else if ([attachment isKindOfClass:[DCGifInfo class]]) {
-            DCGifInfo *gif = attachment;
-            if ((gif.naturalSize.width <= 0 || gif.naturalSize.height <= 0) &&
-                (!gif.staticThumbnail ||
-                 gif.staticThumbnail.size.width <= 0 ||
-                 gif.staticThumbnail.size.height <= 0)) {
-                return YES;
-            }
+            continue;
         }
     }
     return NO;
@@ -223,6 +250,10 @@ static NSInteger DCNewerPaginationTriggerRow(void) {
         return 8;
     }
     return MAX(3, DCProximityMessageLoadCount() / 2);
+}
+
+static CGFloat DCJumpToPresentRevealDistance(void) {
+    return 600.0f;
 }
 
 // Runway distance includes both deceleration travel and expected row-production latency.
@@ -305,11 +336,14 @@ static CGFloat DCPresentationRunwayTargetPoints(CGFloat velocityY, CGFloat viewp
 
 @implementation DCChatViewController
 @synthesize currentWindow = _currentWindow;
+@synthesize loadingOlderMessages = _loadingOlderMessages;
+@synthesize loadingNewerMessages = _loadingNewerMessages;
 
 int lastTimeInterval = 0; // for typing indicator
 
 - (BOOL)shouldAutorotateToInterfaceOrientation:(UIInterfaceOrientation)interfaceOrientation {
-    if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
+    if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad ||
+        [DCImageViewController isImageViewerActive]) {
         return (interfaceOrientation != UIInterfaceOrientationPortraitUpsideDown);
     }
     return (interfaceOrientation == UIInterfaceOrientationPortrait);
@@ -320,7 +354,8 @@ int lastTimeInterval = 0; // for typing indicator
 }
 
 - (NSUInteger)supportedInterfaceOrientations {
-    if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
+    if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad ||
+        [DCImageViewController isImageViewerActive]) {
         return UIInterfaceOrientationMaskAllButUpsideDown;
     }
     return UIInterfaceOrientationMaskPortrait;
@@ -371,6 +406,91 @@ static dispatch_queue_t chat_presentation_queue;
     return self.currentWindow.messages;
 }
 
+- (void)setLoadingOlderMessages:(BOOL)loadingOlderMessages {
+    if (_loadingOlderMessages == loadingOlderMessages) return;
+    _loadingOlderMessages = loadingOlderMessages;
+    [self updateEmptyChatLoadingIndicator];
+}
+
+- (void)setLoadingNewerMessages:(BOOL)loadingNewerMessages {
+    if (_loadingNewerMessages == loadingNewerMessages) return;
+    _loadingNewerMessages = loadingNewerMessages;
+    [self updateEmptyChatLoadingIndicator];
+}
+
+- (void)setupEmptyChatLoadingIndicator {
+    if (self.emptyChatLoadingView || !self.chatTableView) return;
+
+    UIView *hostView = self.chatTableView.superview ?: self.view;
+    UIView *loadingView = [[UIView alloc] initWithFrame:self.chatTableView.frame];
+    loadingView.backgroundColor = [UIColor clearColor];
+    loadingView.userInteractionEnabled = NO;
+    loadingView.hidden = YES;
+
+    UIActivityIndicatorView *spinner = [[UIActivityIndicatorView alloc]
+        initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleWhiteLarge];
+    spinner.hidesWhenStopped = YES;
+
+    UILabel *label = [[UILabel alloc] initWithFrame:CGRectZero];
+    label.text = @"Loading…";
+    label.font = [UIFont systemFontOfSize:13.0f];
+    label.textColor = [UIColor lightGrayColor];
+    label.backgroundColor = [UIColor clearColor];
+    label.textAlignment = UITextAlignmentCenter;
+
+    [loadingView addSubview:spinner];
+    [loadingView addSubview:label];
+    [hostView insertSubview:loadingView aboveSubview:self.chatTableView];
+
+    self.emptyChatLoadingView = loadingView;
+    self.emptyChatLoadingSpinner = spinner;
+    self.emptyChatLoadingLabel = label;
+
+    [self layoutEmptyChatLoadingIndicator];
+    [self updateEmptyChatLoadingIndicator];
+}
+
+- (void)layoutEmptyChatLoadingIndicator {
+    if (!self.emptyChatLoadingView || !self.chatTableView) return;
+
+    self.emptyChatLoadingView.frame = self.chatTableView.frame;
+
+    CGRect bounds = self.emptyChatLoadingView.bounds;
+    CGFloat midX = CGRectGetMidX(bounds);
+    CGFloat midY = CGRectGetMidY(bounds);
+
+    self.emptyChatLoadingSpinner.center = CGPointMake(midX, midY - 14.0f);
+    self.emptyChatLoadingLabel.frame = CGRectMake(0.0f,
+                                                   midY + 12.0f,
+                                                   bounds.size.width,
+                                                   20.0f);
+}
+
+- (void)updateEmptyChatLoadingIndicator {
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self updateEmptyChatLoadingIndicator];
+        });
+        return;
+    }
+
+    if (!self.emptyChatLoadingView) return;
+
+    BOOL hasChannel =
+        DCServerCommunicator.sharedInstance.selectedChannel.snowflake.length > 0;
+    BOOL isLoading = self.loadingOlderMessages || self.loadingNewerMessages;
+    BOOL shouldShow = hasChannel && _currentWindow.messages.count == 0 && isLoading;
+
+    if (shouldShow) {
+        [self layoutEmptyChatLoadingIndicator];
+        self.emptyChatLoadingView.hidden = NO;
+        [self.emptyChatLoadingSpinner startAnimating];
+    } else {
+        [self.emptyChatLoadingSpinner stopAnimating];
+        self.emptyChatLoadingView.hidden = YES;
+    }
+}
+
 // Point the controller at the window for whatever channel is now selected.
 // Called at every channel-entry point so the cached window can't go stale.
 - (void)syncWindowForSelectedChannel {
@@ -378,6 +498,22 @@ static dispatch_queue_t chat_presentation_queue;
     self.currentWindow = cid ? [[DCMessageStore sharedInstance] windowForChannel:cid] : nil;
     [self.referencePresentationCache removeAllObjects];
     self.presentationRunwayPrewarmPending = NO;
+}
+
+- (void)invalidatePendingMessageLoads {
+    self.olderLoadGeneration++;
+    self.newerLoadGeneration++;
+    self.reconcileGeneration++;
+    self.reconcilingChannelID = nil;
+    self.loadingOlderMessages = NO;
+    self.loadingNewerMessages = NO;
+    self.olderRunwayRequestStartTime = 0.0;
+    self.newerRunwayRequestStartTime = 0.0;
+    self.olderRunwayRequestedCount = 0;
+    self.newerRunwayRequestedCount = 0;
+    self.deferredWindowTrimDirection = DCWindowTrimDirectionNone;
+    self.forwardMomentumBlockedOnData = NO;
+    [self stopForwardMomentumContinuation];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -596,6 +732,10 @@ static dispatch_queue_t chat_presentation_queue;
                                                name:@"READY"
                                              object:nil];
     [NSNotificationCenter.defaultCenter addObserver:self
+                                           selector:@selector(handleSelectedChannelStateChanged:)
+                                               name:@"RELOAD CHANNEL LIST"
+                                             object:nil];
+    [NSNotificationCenter.defaultCenter addObserver:self
                                            selector:@selector(handleForwardReconcile)
                                                name:@"CONNECTION_RESTORED"
                                              object:nil];
@@ -614,6 +754,10 @@ static dispatch_queue_t chat_presentation_queue;
     [NSNotificationCenter.defaultCenter addObserver:self
                                            selector:@selector(handleGuildMemberListUpdated:)
                                                name:@"GuildMemberListUpdated"
+                                             object:nil];
+    [NSNotificationCenter.defaultCenter addObserver:self
+                                           selector:@selector(handleImageViewerGeometryChanged:)
+                                               name:DCImageViewerUnderlyingGeometryDidChangeNotification
                                              object:nil];
 
     [NSNotificationCenter.defaultCenter
@@ -680,6 +824,8 @@ static dispatch_queue_t chat_presentation_queue;
                                    forState:UIControlStateNormal];
         [self.sendButton setBackgroundImage:[UIImage imageNamed:@"SendMessageButtonPressed"]
                                    forState:UIControlStateHighlighted];
+        [self.sendButton setBackgroundImage:[UIImage imageNamed:@"SendMessageButton-Disabled"]
+                                   forState:UIControlStateDisabled];
 
         [self.photoButton setBackgroundImage:[UIImage imageNamed:@"CameraButton"]
                                     forState:UIControlStateNormal];
@@ -690,15 +836,8 @@ static dispatch_queue_t chat_presentation_queue;
     lastTimeInterval = 0;
 
     self.inputField.delegate = self;
-    self.inputFieldPlaceholder.text     = DCServerCommunicator.sharedInstance.selectedChannel.writeable
-            ? [NSString stringWithFormat:@"Message%@%@",
-                                     ![DCServerCommunicator.sharedInstance.selectedChannel.parentGuild.name isEqualToString:@"Direct Messages"]
-                                             ? @" #"
-                                             : (DCServerCommunicator.sharedInstance.selectedChannel.recipients.count > 2 ? @" " : @" @"),
-                                     DCServerCommunicator.sharedInstance.selectedChannel.name]
-            : @"No Permission";
-    self.toolbar.userInteractionEnabled = DCServerCommunicator.sharedInstance.selectedChannel.writeable;
-    self.inputFieldPlaceholder.hidden   = NO;
+    [self updateMessageComposerForSelectedChannel];
+    self.inputFieldPlaceholder.hidden = NO;
     // resizable inputField
     _baseInputHeight      = self.inputField.frame.size.height;
     _baseMsgFieldBGHeight = self.messageFieldBG.frame.size.height;
@@ -727,7 +866,11 @@ static dispatch_queue_t chat_presentation_queue;
     self.typingLabel.backgroundColor = [UIColor clearColor];
 
     [self.typingIndicatorView addSubview:self.typingLabel];
-    [self.view addSubview:self.typingIndicatorView];
+    if (self.toolbar) {
+        [self.view insertSubview:self.typingIndicatorView belowSubview:self.toolbar];
+    } else {
+        [self.view addSubview:self.typingIndicatorView];
+    }
     self.typingUsers = [NSMutableDictionary dictionary];
     
     // Message Input bitmap
@@ -770,6 +913,9 @@ static dispatch_queue_t chat_presentation_queue;
                                                        bundle:nil]
                  forCellReuseIdentifier:@"Universal Typehandler Cell"];
     }
+
+    [self setupEmptyChatLoadingIndicator];
+    [self setupJumpToPresentButton];
 }
 
 - (void)viewDidLayoutSubviews {
@@ -780,6 +926,277 @@ static dispatch_queue_t chat_presentation_queue;
             break;
         }
     }
+    [self updateJumpToPresentButtonFrame];
+    [self layoutEmptyChatLoadingIndicator];
+}
+
+- (void)setupJumpToPresentButton {
+    if (self.jumpToPresentButton) return;
+
+    UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
+    button.frame = CGRectMake(0.0f, 0.0f, 31.0f, 31.0f);
+    button.hidden = YES;
+    button.alpha = 0.0f;
+    button.userInteractionEnabled = NO;
+    button.accessibilityLabel = @"Jump to present";
+    button.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin |
+                              UIViewAutoresizingFlexibleTopMargin;
+    [button setBackgroundImage:[UIImage imageNamed:@"Down"]
+                      forState:UIControlStateNormal];
+    [button setBackgroundImage:[UIImage imageNamed:@"DownPressed"]
+                      forState:UIControlStateHighlighted];
+    [button addTarget:self
+               action:@selector(didTapJumpToPresent)
+     forControlEvents:UIControlEventTouchUpInside];
+
+    self.jumpToPresentButton = button;
+    self.jumpToPresentButtonVisible = NO;
+
+    if (!self.sendButton && self.toolbar) {
+        NSString *sendAction = NSStringFromSelector(@selector(sendMessage:));
+        for (UIView *subview in self.toolbar.subviews) {
+            if (![subview isKindOfClass:[UIButton class]]) continue;
+            UIButton *candidate = (UIButton *)subview;
+            NSArray *actions = [candidate actionsForTarget:self
+                                            forControlEvent:UIControlEventTouchUpInside];
+            if ([actions containsObject:sendAction]) {
+                self.sendButton = candidate;
+                break;
+            }
+        }
+    }
+
+    if (!self.inputField && self.messageFieldBG.superview) {
+        for (UIView *subview in self.messageFieldBG.superview.subviews) {
+            if ([subview isKindOfClass:[UITextView class]]) {
+                self.inputField = (UITextView *)subview;
+                break;
+            }
+        }
+    }
+
+    self.jumpToPresentIntegratedComposer =
+        !self.oldMode && self.toolbar && self.messageFieldBG && self.inputField &&
+        [self.sendButton isKindOfClass:[UIButton class]];
+
+    if (self.jumpToPresentIntegratedComposer) {
+        UIView *composer = self.messageFieldBG.superview;
+        self.jumpToPresentRightMargin =
+            MAX(0.0f, self.toolbar.bounds.size.width - CGRectGetMaxX(self.sendButton.frame));
+        self.jumpToPresentSpacing =
+            MAX(0.0f, CGRectGetMinX(self.sendButton.frame) - CGRectGetMaxX(composer.frame));
+        self.jumpToPresentMessageFieldRightInset =
+            MAX(0.0f, composer.bounds.size.width - CGRectGetMaxX(self.messageFieldBG.frame));
+        self.jumpToPresentInputFieldRightInset =
+            MAX(0.0f, composer.bounds.size.width - CGRectGetMaxX(self.inputField.frame));
+        self.jumpToPresentPlaceholderRightInset = self.inputFieldPlaceholder
+            ? MAX(0.0f, composer.bounds.size.width - CGRectGetMaxX(self.inputFieldPlaceholder.frame))
+            : 0.0f;
+    }
+
+    if (!self.oldMode && self.sendButton) {
+        [self.sendButton setBackgroundImage:[UIImage imageNamed:@"SendMessageButton-Disabled"]
+                                   forState:UIControlStateDisabled];
+    }
+
+    [self updateSendButtonEnabledState];
+
+    [self.view addSubview:button];
+    [self.view bringSubviewToFront:button];
+    [self updateJumpToPresentButtonFrame];
+}
+
+- (void)updateJumpToPresentButtonFrame {
+    if (!self.jumpToPresentButton || !self.toolbar) return;
+
+    if (!self.jumpToPresentIntegratedComposer) {
+        const CGFloat size = 31.0f;
+        const CGFloat margin = 6.0f;
+        CGFloat x = self.jumpToPresentButtonVisible
+            ? floorf(self.view.bounds.size.width - margin - size)
+            : floorf(self.view.bounds.size.width + margin);
+        CGFloat y = floorf(CGRectGetMinY(self.toolbar.frame) - margin - size);
+        self.jumpToPresentButton.frame = CGRectMake(x, y, size, size);
+        [self.view bringSubviewToFront:self.jumpToPresentButton];
+        return;
+    }
+
+    UIView *composer = self.messageFieldBG.superview;
+    CGFloat toolbarWidth = self.toolbar.bounds.size.width;
+    CGFloat buttonWidth = self.sendButton.frame.size.width;
+    CGFloat downX = toolbarWidth - self.jumpToPresentRightMargin - buttonWidth;
+    CGFloat sendX = self.jumpToPresentButtonVisible
+        ? downX - self.jumpToPresentSpacing - buttonWidth
+        : downX;
+
+    CGRect sendFrame = self.sendButton.frame;
+    sendFrame.origin.x = floorf(sendX);
+    self.sendButton.frame = sendFrame;
+
+    CGRect composerFrame = composer.frame;
+    composerFrame.size.width = MAX(0.0f,
+        floorf(sendX - self.jumpToPresentSpacing - composerFrame.origin.x));
+    composer.frame = composerFrame;
+
+    CGRect messageFieldFrame = self.messageFieldBG.frame;
+    messageFieldFrame.size.width = MAX(0.0f,
+        composerFrame.size.width - messageFieldFrame.origin.x -
+        self.jumpToPresentMessageFieldRightInset);
+    self.messageFieldBG.frame = messageFieldFrame;
+
+    CGRect inputFrame = self.inputField.frame;
+    inputFrame.size.width = MAX(0.0f,
+        composerFrame.size.width - inputFrame.origin.x -
+        self.jumpToPresentInputFieldRightInset);
+    self.inputField.frame = inputFrame;
+
+    if (self.inputFieldPlaceholder) {
+        CGRect placeholderFrame = self.inputFieldPlaceholder.frame;
+        placeholderFrame.size.width = MAX(0.0f,
+            composerFrame.size.width - placeholderFrame.origin.x -
+            self.jumpToPresentPlaceholderRightInset);
+        self.inputFieldPlaceholder.frame = placeholderFrame;
+    }
+
+    CGFloat buttonX = self.jumpToPresentButtonVisible
+        ? downX
+        : toolbarWidth + self.jumpToPresentRightMargin;
+    CGRect buttonFrameInToolbar = CGRectMake(floorf(buttonX),
+                                              sendFrame.origin.y,
+                                              buttonWidth,
+                                              sendFrame.size.height);
+    self.jumpToPresentButton.frame =
+        [self.toolbar convertRect:buttonFrameInToolbar toView:self.view];
+    [self.view bringSubviewToFront:self.jumpToPresentButton];
+}
+
+- (void)updateJumpToPresentButtonVisibility {
+    if (!self.jumpToPresentButton || !self.chatTableView || !self.currentWindow) return;
+
+    CGFloat distanceFromNewest = MAX(0.0f,
+        self.chatTableView.contentOffset.y + self.chatTableView.contentInset.top);
+    BOOL shouldShow =
+        self.messages.count > 0 &&
+        (self.currentWindow.hasMoreAfter ||
+         distanceFromNewest >= DCJumpToPresentRevealDistance());
+
+    if (shouldShow == self.jumpToPresentButtonVisible) return;
+    [self setJumpToPresentButtonVisible:shouldShow animated:YES];
+}
+
+- (void)setJumpToPresentButtonVisible:(BOOL)visible animated:(BOOL)animated {
+    if (!self.jumpToPresentButton) return;
+
+    self.jumpToPresentButtonVisible = visible;
+    self.jumpToPresentButton.hidden = NO;
+    self.jumpToPresentButton.userInteractionEnabled = visible;
+
+    void (^changes)(void) = ^{
+        [self updateJumpToPresentButtonFrame];
+        if (self.jumpToPresentIntegratedComposer) {
+            [self resizeInputField];
+        }
+        self.jumpToPresentButton.alpha = visible ? 1.0f : 0.0f;
+    };
+
+    void (^completion)(BOOL) = ^(BOOL finished) {
+        if (!self.jumpToPresentButtonVisible &&
+            self.jumpToPresentButton.alpha <= 0.01f) {
+            self.jumpToPresentButton.hidden = YES;
+        }
+    };
+
+    if (animated) {
+        [UIView animateWithDuration:0.18
+                              delay:0.0
+                            options:UIViewAnimationOptionBeginFromCurrentState |
+                                    UIViewAnimationOptionCurveEaseInOut
+                         animations:changes
+                         completion:completion];
+    } else {
+        changes();
+        completion(YES);
+    }
+}
+
+- (void)didTapJumpToPresent {
+    assertMainThread();
+
+    DCChannel *channel = DCServerCommunicator.sharedInstance.selectedChannel;
+    DCChannelWindow *window = self.currentWindow;
+    if (!channel || !window || !self.chatTableView) return;
+
+    [self stopForwardMomentumContinuation];
+    self.sampledScrollVelocityY = 0.0f;
+    self.lastVelocitySampleTime = 0.0;
+
+    if (!window.hasMoreAfter) {
+        CGPoint presentOffset = CGPointMake(
+            self.chatTableView.contentOffset.x,
+            -self.chatTableView.contentInset.top);
+        [self.chatTableView setContentOffset:presentOffset animated:YES];
+        return;
+    }
+
+    [self invalidatePendingMessageLoads];
+
+    window.hasSavedContentOffset = NO;
+    window.savedContentOffsetY = 0.0f;
+    [self handleChannelLoadCold:channel];
+    [self updateJumpToPresentButtonVisibility];
+}
+
+- (void)updateMessageComposerForSelectedChannel {
+    DCChannel *channel = DCServerCommunicator.sharedInstance.selectedChannel;
+    if (!channel) {
+        self.inputFieldPlaceholder.text = @"Select a Channel";
+        self.toolbar.userInteractionEnabled = NO;
+        return;
+    }
+
+    BOOL isDirectMessage = channel.type == DCChannelTypeDM;
+    BOOL isGroupDirectMessage = channel.type == DCChannelTypeGroupDM;
+    NSString *prefix = isGroupDirectMessage ? @" " : (isDirectMessage ? @" @" : @" #");
+
+    self.inputFieldPlaceholder.text = channel.writeable
+        ? [NSString stringWithFormat:@"Message%@%@", prefix, channel.name ?: @""]
+        : @"No Permission";
+    self.toolbar.userInteractionEnabled = channel.writeable;
+}
+
+- (void)refreshSelectedChannelChrome {
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self refreshSelectedChannelChrome];
+        });
+        return;
+    }
+
+    DCChannel *channel = DCServerCommunicator.sharedInstance.selectedChannel;
+    self.navigationItem.title = channel.name.length ? channel.name : @"Chat";
+    [self updateMessageComposerForSelectedChannel];
+}
+
+- (void)handleSelectedChannelStateChanged:(NSNotification *)notification {
+    [self refreshSelectedChannelChrome];
+}
+
+- (void)acknowledgeNewestMessageIfFollowingLiveTail {
+    DCChannel *channel = DCServerCommunicator.sharedInstance.selectedChannel;
+    DCChannelWindow *window = self.currentWindow;
+    DCMessage *newestMessage = window.messages.lastObject;
+
+    if (!channel || !window || !window.atPresentTime || window.hasMoreAfter ||
+        newestMessage.snowflake.length == 0) {
+        return;
+    }
+
+    channel.lastMessageId = newestMessage.snowflake;
+    if ([channel.lastReadMessageId isEqualToString:newestMessage.snowflake] &&
+        channel.mentionCount == 0 && !channel.unread) {
+        return;
+    }
+    [channel ackMessage:newestMessage.snowflake];
 }
 
 - (BOOL)viewingPresentTime {
@@ -804,6 +1221,10 @@ static dispatch_queue_t chat_presentation_queue;
         viewingPresentTime && !window.hasMoreAfter;
 }
 
+- (void)updateSendButtonEnabledState {
+    self.sendButton.enabled = self.inputField.text.length != 0;
+}
+
 - (BOOL)textViewShouldBeginEditing:(UITextView *)textView {
     self.inputFieldPlaceholder.hidden = self.inputField.text.length != 0;
     lastTimeInterval                  = 0;
@@ -812,6 +1233,7 @@ static dispatch_queue_t chat_presentation_queue;
 
 - (void)textViewDidChange:(UITextView *)textView {
     self.inputFieldPlaceholder.hidden = self.inputField.text.length != 0;
+    [self updateSendButtonEnabledState];
     int currentTimeInterval           = [[NSDate date] timeIntervalSince1970];
     if (currentTimeInterval - lastTimeInterval >= 10) {
         [DCServerCommunicator.sharedInstance
@@ -834,6 +1256,7 @@ static dispatch_queue_t chat_presentation_queue;
     self.currentWindow.hasMoreBefore = YES;
     self.currentWindow.hasMoreAfter = NO;
     self.currentWindow.atPresentTime = YES;
+    [[DCMessageStore sharedInstance] scheduleCheckpointForWindow:self.currentWindow];
 
     [self.chatTableView reloadData];
     [self getMessages:50 beforeMessage:nil];
@@ -843,6 +1266,7 @@ static dispatch_queue_t chat_presentation_queue;
     assertMainThread();
     DBGLOG(@"%s: Resetting chat data", __PRETTY_FUNCTION__);
     [self invalidateAllTypingTimers];
+    [self invalidatePendingMessageLoads];
 
     [self syncWindowForSelectedChannel];
     @autoreleasepool {
@@ -858,17 +1282,11 @@ static dispatch_queue_t chat_presentation_queue;
         self.currentWindow.hasMoreBefore = YES;
         self.currentWindow.hasMoreAfter = NO;
         self.currentWindow.atPresentTime = YES;
+        [[DCMessageStore sharedInstance] scheduleCheckpointForWindow:self.currentWindow];
         self.numberOfMessagesLoaded = 0;
         self.disablePing = NO;
     }
-    self.inputFieldPlaceholder.text     = DCServerCommunicator.sharedInstance.selectedChannel.writeable
-            ? [NSString stringWithFormat:@"Message%@%@",
-                                     ![DCServerCommunicator.sharedInstance.selectedChannel.parentGuild.name isEqualToString:@"Direct Messages"]
-                                             ? @" #"
-                                             : (DCServerCommunicator.sharedInstance.selectedChannel.recipients.count > 2 ? @" " : @" @"),
-                                     DCServerCommunicator.sharedInstance.selectedChannel.name]
-            : @"No Permission";
-    self.toolbar.userInteractionEnabled = DCServerCommunicator.sharedInstance.selectedChannel.writeable;
+    [self updateMessageComposerForSelectedChannel];
     self.typingIndicatorView.hidden     = YES;
     self.chatTableView.height = self.view.height - self.keyboardHeight - self.toolbar.height;
     self.typingIndicatorView.y = self.view.height - self.keyboardHeight - self.toolbar.height - 20;
@@ -900,10 +1318,9 @@ static dispatch_queue_t chat_presentation_queue;
 - (void)handleReady {
     assertMainThread();
 
-    self.reconcileGeneration++;
-    self.reconcilingChannelID = nil;
-
+    [self invalidatePendingMessageLoads];
     [self activateSelectedChannel];
+    [self acknowledgeNewestMessageIfFollowingLiveTail];
 }
     
 - (void)handleForwardReconcile {
@@ -1048,6 +1465,8 @@ static dispatch_queue_t chat_presentation_queue;
                 [self.messages removeAllObjects];
                 [self.messages addObjectsFromArray:replacementMessages];
 
+                window.hasMoreBefore =
+                    replacementMessages.count >= (NSUInteger)([DCTools isOriginalIPad] ? 18 : 50);
                 window.hasMoreAfter = NO;
                 window.atPresentTime = YES;
 
@@ -1062,6 +1481,7 @@ static dispatch_queue_t chat_presentation_queue;
 
                 self.restoringWindowPosition = NO;
 
+                [self acknowledgeNewestMessageIfFollowingLiveTail];
                 [self saveScrollPositionForWindow:window];
                 [[DCMessageStore sharedInstance] scheduleCheckpointForWindow:window];
                 return;
@@ -1103,6 +1523,7 @@ static dispatch_queue_t chat_presentation_queue;
 
                 NSLog(@"[ChatPerf] A4 compacted forward reconcile to %lu complete messages",
                       (unsigned long)self.messages.count);
+                [self acknowledgeNewestMessageIfFollowingLiveTail];
                 [self saveScrollPositionForWindow:window];
                 [[DCMessageStore sharedInstance] scheduleCheckpointForWindow:window];
                 return;
@@ -1191,6 +1612,9 @@ static dispatch_queue_t chat_presentation_queue;
 
             self.restoringWindowPosition = NO;
 
+            if (window.atPresentTime) {
+                [self acknowledgeNewestMessageIfFollowingLiveTail];
+            }
             [self saveScrollPositionForWindow:window];
             [[DCMessageStore sharedInstance] scheduleCheckpointForWindow:window];
         });
@@ -1203,6 +1627,7 @@ static dispatch_queue_t chat_presentation_queue;
     DCChannel *channel =
         DCServerCommunicator.sharedInstance.selectedChannel;
 
+    [self refreshSelectedChannelChrome];
     if (!channel.snowflake.length || !self.chatTableView) {
         return;
     }
@@ -1220,9 +1645,15 @@ static dispatch_queue_t chat_presentation_queue;
     }
 
     [self syncWindowForSelectedChannel];
-    [self removeDuplicateMessagesFromWindow:self.currentWindow];
+    BOOL repairedWindow = [self removeDuplicateMessagesFromWindow:self.currentWindow];
 
     BOOL changedWindow = previousWindow != self.currentWindow;
+    if (changedWindow) {
+        [self invalidatePendingMessageLoads];
+    }
+    if (repairedWindow) {
+        [[DCMessageStore sharedInstance] scheduleCheckpointForWindow:self.currentWindow];
+    }
 
     /*
      * reloadData can synchronously generate scroll callbacks. Suppress
@@ -1253,6 +1684,7 @@ static dispatch_queue_t chat_presentation_queue;
     }
 
     self.restoringWindowPosition = NO;
+    [self updateJumpToPresentButtonVisibility];
 
     /* reloadData does not imply a subsequent scroll event.  Rehydrate once the
      * new/returning channel's visible cells have settled into final geometry. */
@@ -1260,29 +1692,25 @@ static dispatch_queue_t chat_presentation_queue;
         [self updateVisibleChatMediaResidency];
     });
 
+    if (self.messages.count == 0) {
+        /*
+         * An empty window must never be treated as a populated same-channel
+         * return. UI setup may legitimately resolve currentWindow before the
+         * first activation, and an early history request may already own the
+         * load flag. Start a cold load only when no request is in flight.
+         */
+        if (!self.loadingOlderMessages && !self.loadingNewerMessages) {
+            [self handleChannelLoadCold:channel];
+        }
+        return;
+    }
+
     if (!changedWindow) {
         // Returning from a profile/modal while still viewing the same channel.
         if (self.currentWindow.atPresentTime &&
             !self.currentWindow.hasMoreAfter) {
             [self handleForwardReconcile];
         }
-        return;
-    }
-
-    self.deferredWindowTrimDirection = DCWindowTrimDirectionNone;
-
-    // Invalidate controller-global pagination requests from the old channel.
-    self.olderLoadGeneration++;
-    self.newerLoadGeneration++;
-    self.loadingOlderMessages = NO;
-    self.loadingNewerMessages = NO;
-    self.olderRunwayRequestStartTime = 0.0;
-    self.newerRunwayRequestStartTime = 0.0;
-    self.olderRunwayRequestedCount = 0;
-    self.newerRunwayRequestedCount = 0;
-
-    if (self.messages.count == 0) {
-        [self handleChannelLoadCold:channel];
         return;
     }
 
@@ -1311,10 +1739,7 @@ static dispatch_queue_t chat_presentation_queue;
             continue;
         }
         if (authorMatches) {
-            message.author.profileImage = user.profileImage;
-            message.author.rawProfileImage = user.rawProfileImage;
-
-            cell.profileImage.image = user.profileImage;
+            cell.profileImage.image = [self avatarImageForUser:user];
 
             DCMessageLayout *layout = [self layoutForModelIndex:i];
             if (!layout.grouped) {
@@ -1326,11 +1751,7 @@ static dispatch_queue_t chat_presentation_queue;
             }
         }
         if (refAuthorMatches) {
-            message.referencedMessage.author.profileImage = user.profileImage;
-
-            message.referencedMessage.author.rawProfileImage = user.rawProfileImage;
-
-            cell.referencedProfileImage.image = user.profileImage;
+            cell.referencedProfileImage.image = [self avatarImageForUser:user];
         }
     }
 }
@@ -1430,7 +1851,14 @@ static dispatch_queue_t chat_presentation_queue;
 
     for (UIView *subview in [NSArray arrayWithArray:cell.subviews]) {
         BOOL shouldBeResident = [self chatMediaSubviewShouldBeResident:subview];
-        if ([subview isKindOfClass:[UILazyImageView class]]) {
+        if ([subview isKindOfClass:[DCChatGifAttachment class]]) {
+            if (shouldBeResident) {
+                [(DCChatGifAttachment *)subview
+                    prepareForDisplayAllowLoading:allowLoading];
+            } else {
+                [(DCChatGifAttachment *)subview releaseThumbnailForResidency];
+            }
+        } else if ([subview isKindOfClass:[UILazyImageView class]]) {
             if (shouldBeResident) {
                 [(UILazyImageView *)subview
                     prepareChatThumbnailForDisplaySize:subview.bounds.size
@@ -1444,13 +1872,6 @@ static dispatch_queue_t chat_presentation_queue;
                     prepareForDisplayAllowLoading:allowLoading];
             } else {
                 [(DCChatVideoAttachment *)subview releaseThumbnailForResidency];
-            }
-        } else if ([subview isKindOfClass:[DCChatGifAttachment class]]) {
-            if (shouldBeResident) {
-                [(DCChatGifAttachment *)subview
-                    prepareForDisplayAllowLoading:allowLoading];
-            } else {
-                [(DCChatGifAttachment *)subview releaseThumbnailForResidency];
             }
         }
     }
@@ -1471,6 +1892,10 @@ static dispatch_queue_t chat_presentation_queue;
 - (void)tableView:(UITableView *)tableView
   willDisplayCell:(UITableViewCell *)tableCell
 forRowAtIndexPath:(NSIndexPath *)indexPath {
+    if (tableView == self.chatTableView) {
+        [self updateEmptyChatLoadingIndicator];
+    }
+
     if (tableView != self.chatTableView ||
         ![tableCell isKindOfClass:[DCChatTableCell class]]) {
         return;
@@ -1491,12 +1916,12 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     assertMainThread();
     for (DCChatTableCell *cell in [self.chatTableView visibleCells]) {
         for (UIView *subview in [NSArray arrayWithArray:cell.subviews]) {
-            if ([subview isKindOfClass:[UILazyImageView class]]) {
+            if ([subview isKindOfClass:[DCChatGifAttachment class]]) {
+                [(DCChatGifAttachment *)subview releaseThumbnailForResidency];
+            } else if ([subview isKindOfClass:[UILazyImageView class]]) {
                 [(UILazyImageView *)subview releaseChatThumbnailForResidency];
             } else if ([subview isKindOfClass:[DCChatVideoAttachment class]]) {
                 [(DCChatVideoAttachment *)subview releaseThumbnailForResidency];
-            } else if ([subview isKindOfClass:[DCChatGifAttachment class]]) {
-                [(DCChatGifAttachment *)subview releaseThumbnailForResidency];
             }
         }
     }
@@ -1572,6 +1997,102 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     [self.chatTableView endUpdates];
 }
 
+- (NSDictionary *)visibleMessagePositionsForLiveInsertion {
+    NSMutableDictionary *positions = [NSMutableDictionary dictionary];
+
+    for (NSIndexPath *indexPath in [self.chatTableView indexPathsForVisibleRows]) {
+        NSInteger modelIndex = [self modelIndexForRow:indexPath.row];
+        if (modelIndex < 0 || modelIndex >= (NSInteger)self.messages.count) {
+            continue;
+        }
+
+        DCMessage *message = self.messages[modelIndex];
+        if (!message.snowflake.length) {
+            continue;
+        }
+
+        UITableViewCell *cell = [self.chatTableView cellForRowAtIndexPath:indexPath];
+        if (!cell) {
+            continue;
+        }
+
+        CALayer *presentationLayer = (CALayer *)cell.layer.presentationLayer;
+        CGPoint position = presentationLayer ? presentationLayer.position
+                                             : cell.layer.position;
+        [positions setObject:[NSValue valueWithCGPoint:position]
+                      forKey:message.snowflake];
+    }
+
+    return positions;
+}
+
+- (void)animateLiveInsertionFromMessagePositions:(NSDictionary *)oldPositions {
+    NSMutableArray *animatedCells = [NSMutableArray array];
+    NSMutableArray *finalPositions = [NSMutableArray array];
+
+    for (NSString *snowflake in oldPositions) {
+        NSInteger modelIndex = [self modelIndexForMessageSnowflake:snowflake];
+        if (modelIndex == NSNotFound) {
+            continue;
+        }
+
+        NSIndexPath *indexPath =
+            [NSIndexPath indexPathForRow:[self rowForModelIndex:modelIndex]
+                             inSection:0];
+        UITableViewCell *cell = [self.chatTableView cellForRowAtIndexPath:indexPath];
+        if (!cell) {
+            continue;
+        }
+
+        CGPoint finalPosition = cell.layer.position;
+        CGPoint oldPosition = [[oldPositions objectForKey:snowflake] CGPointValue];
+
+        [cell.layer removeAllAnimations];
+        cell.center = CGPointMake(finalPosition.x, oldPosition.y);
+
+        [animatedCells addObject:cell];
+        [finalPositions addObject:[NSValue valueWithCGPoint:finalPosition]];
+    }
+
+    NSIndexPath *newIndexPath = [NSIndexPath indexPathForRow:0 inSection:0];
+    UITableViewCell *newCell = [self.chatTableView cellForRowAtIndexPath:newIndexPath];
+    CGPoint newCellFinalPosition = CGPointZero;
+    BOOL animateNewCell = (newCell != nil);
+
+    if (animateNewCell) {
+        newCellFinalPosition = newCell.layer.position;
+        CGFloat entranceDistance = MIN(CGRectGetHeight(newCell.bounds), 88.0f);
+
+        [newCell.layer removeAllAnimations];
+        /*
+         * The table is vertically inverted, so decreasing table-space Y
+         * places the cell below the visible live edge.
+         */
+        newCell.center = CGPointMake(newCellFinalPosition.x,
+                                     newCellFinalPosition.y - entranceDistance);
+        newCell.alpha = 0.15f;
+    }
+
+    [UIView animateWithDuration:0.24
+                          delay:0.0
+                        options:UIViewAnimationOptionBeginFromCurrentState |
+                                UIViewAnimationOptionCurveEaseOut |
+                                UIViewAnimationOptionAllowUserInteraction
+                     animations:^{
+                         for (NSUInteger i = 0; i < animatedCells.count; i++) {
+                             UITableViewCell *cell = animatedCells[i];
+                             CGPoint position = [finalPositions[i] CGPointValue];
+                             cell.center = position;
+                         }
+
+                         if (animateNewCell) {
+                             newCell.center = newCellFinalPosition;
+                             newCell.alpha = 1.0f;
+                         }
+                     }
+                     completion:nil];
+}
+
 - (void)handleMessageCreate:(NSNotification *)notification {
     assertMainThread();
 
@@ -1579,9 +2100,10 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
     NSString *channelID = payload[@"channel_id"];
     NSString *messageID = payload[@"id"];
+    DCChannel *selectedChannel = DCServerCommunicator.sharedInstance.selectedChannel;
 
-    if (![channelID isEqualToString:
-            self.currentWindow.channelSnowflake]) {
+    if (![channelID isEqualToString:self.currentWindow.channelSnowflake] ||
+        ![channelID isEqualToString:selectedChannel.snowflake]) {
         return;
     }
 
@@ -1624,6 +2146,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
         self.currentWindow.hasMoreAfter = YES;
         self.currentWindow.atPresentTime = NO;
         self.viewingPresentTime = NO;
+        [self updateJumpToPresentButtonVisibility];
         NSLog(@"[ChatPerf] A4 deferred live MESSAGE_CREATE %@ while reading history",
               messageID);
         [self saveScrollPositionForWindow:self.currentWindow];
@@ -1634,14 +2157,119 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
     DCMessage *newMessage =
         [DCTools convertJsonMessage:payload
-                  deferLegacyLayout:[DCTools isOriginalIPad]];
+                  deferLegacyLayout:[DCTools isOriginalIPad]
+                            channel:selectedChannel];
 
     if (!newMessage || !newMessage.snowflake.length) {
         return;
     }
 
-    if (!newMessage.author.profileImage) {
-        [DCTools getUserAvatar:newMessage.author];
+    [self ensureAvatarForUser:newMessage.author];
+
+    /*
+     * MESSAGE_CREATE normally arrives in snowflake order, but reconnects and
+     * replay timing can deliver an older event after a newer one is already
+     * present. Never append such a message to the model tail: the chat window
+     * invariant is oldest -> newest, and the inverted table derives every row
+     * index from that ordering.
+     *
+     * This is intentionally a rare repair path. Normal live messages keep the
+     * fast row-zero insertion and its animation.
+     */
+    DCMessage *currentNewest = self.messages.lastObject;
+    if (currentNewest.snowflake.length &&
+        DCCompareChatSnowflakes(newMessage.snowflake,
+                                currentNewest.snowflake) != NSOrderedDescending) {
+        BOOL followLiveTail = self.chatTableView.contentOffset.y <= 10.0f;
+        CGPoint previousOffset = self.chatTableView.contentOffset;
+        NSString *viewportAnchorSnowflake = nil;
+        CGFloat viewportAnchorY = 0.0f;
+
+        if (!followLiveTail) {
+            NSArray *visiblePaths = [self.chatTableView indexPathsForVisibleRows];
+            NSIndexPath *anchorPath = nil;
+            for (NSIndexPath *path in visiblePaths) {
+                if (!anchorPath || path.row < anchorPath.row) {
+                    anchorPath = path;
+                }
+            }
+
+            if (anchorPath &&
+                anchorPath.row < (NSInteger)self.messages.count) {
+                NSInteger anchorModelIndex =
+                    [self modelIndexForRow:anchorPath.row];
+                if (anchorModelIndex >= 0 &&
+                    anchorModelIndex < (NSInteger)self.messages.count) {
+                    DCMessage *anchorMessage =
+                        self.messages[anchorModelIndex];
+                    viewportAnchorSnowflake =
+                        [anchorMessage.snowflake copy];
+                    CGRect anchorRect =
+                        [self.chatTableView rectForRowAtIndexPath:anchorPath];
+                    viewportAnchorY =
+                        anchorRect.origin.y - self.chatTableView.contentOffset.y;
+                }
+            }
+        }
+
+        NSUInteger insertionIndex = 0;
+        while (insertionIndex < self.messages.count) {
+            DCMessage *candidate = self.messages[insertionIndex];
+            if (DCCompareChatSnowflakes(candidate.snowflake,
+                                        newMessage.snowflake) == NSOrderedDescending) {
+                break;
+            }
+            insertionIndex++;
+        }
+
+        NSLog(@"%s: Repairing out-of-order MESSAGE_CREATE %@ before %@",
+              __PRETTY_FUNCTION__,
+              newMessage.snowflake,
+              currentNewest.snowflake);
+
+        [self.messages insertObject:newMessage atIndex:insertionIndex];
+        [[DCCacheManager sharedInstance] invalidateAllMessages];
+
+        self.restoringWindowPosition = YES;
+        [self.chatTableView reloadData];
+        [self.chatTableView layoutIfNeeded];
+
+        if (followLiveTail) {
+            [self.chatTableView setContentOffset:CGPointZero animated:NO];
+            self.currentWindow.atPresentTime = YES;
+            [self evictOldestDownToCeiling];
+        } else if (viewportAnchorSnowflake.length) {
+            NSInteger anchorModelIndex =
+                [self modelIndexForMessageSnowflake:viewportAnchorSnowflake];
+            if (anchorModelIndex != NSNotFound) {
+                NSInteger anchorRow = [self rowForModelIndex:anchorModelIndex];
+                NSIndexPath *anchorPath =
+                    [NSIndexPath indexPathForRow:anchorRow inSection:0];
+                CGRect anchorRect =
+                    [self.chatTableView rectForRowAtIndexPath:anchorPath];
+                CGFloat targetOffsetY =
+                    anchorRect.origin.y - viewportAnchorY;
+                [self.chatTableView
+                    setContentOffset:CGPointMake(previousOffset.x,
+                                                  [self clampedOffsetY:targetOffsetY])
+                            animated:NO];
+            }
+            self.currentWindow.atPresentTime = NO;
+        } else {
+            [self.chatTableView
+                setContentOffset:CGPointMake(previousOffset.x,
+                                              [self clampedOffsetY:previousOffset.y])
+                        animated:NO];
+            self.currentWindow.atPresentTime = NO;
+        }
+
+        self.currentWindow.hasMoreAfter = NO;
+        self.restoringWindowPosition = NO;
+        [self saveScrollPositionForWindow:self.currentWindow];
+        [[DCMessageStore sharedInstance]
+            scheduleCheckpointForWindow:self.currentWindow];
+        [self updateJumpToPresentButtonVisibility];
+        return;
     }
 
     /*
@@ -1652,6 +2280,10 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
      */
     BOOL followLiveTail =
         self.chatTableView.contentOffset.y <= 10.0f;
+
+    NSDictionary *liveInsertionPositions = followLiveTail
+        ? [self visibleMessagePositionsForLiveInsertion]
+        : nil;
 
     CGPoint previousOffset =
         self.chatTableView.contentOffset;
@@ -1786,6 +2418,11 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
     [self saveScrollPositionForWindow:self.currentWindow];
     [[DCMessageStore sharedInstance] scheduleCheckpointForWindow:self.currentWindow];
+    [self updateJumpToPresentButtonVisibility];
+
+    if (followLiveTail) {
+        [self animateLiveInsertionFromMessagePositions:liveInsertionPositions];
+    }
 }
 
 - (void)handleGuildMemberListUpdated:(NSNotification *)notification {
@@ -1904,6 +2541,15 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
 - (void)handleMessageEdit:(NSNotification *)notification {
     assertMainThread();
+
+    DCChannel *selectedChannel = DCServerCommunicator.sharedInstance.selectedChannel;
+    NSString *eventChannelID = [notification.userInfo objectForKey:@"channel_id"];
+    if (![self.currentWindow.channelSnowflake isEqualToString:selectedChannel.snowflake] ||
+        (eventChannelID.length &&
+         ![eventChannelID isEqualToString:self.currentWindow.channelSnowflake])) {
+        return;
+    }
+
     NSString *snowflake = [notification.userInfo objectForKey:@"id"];
     if (!snowflake || snowflake.length == 0) {
         NSLog(@"%s: No snowflake provided for message edit", __PRETTY_FUNCTION__);
@@ -1918,7 +2564,10 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     }
     DCMessage *compareMessage = [self.messages objectAtIndex:index];
 
-    DCMessage *newMessage = [DCTools convertJsonMessage:notification.userInfo];
+    DCMessage *newMessage =
+        [DCTools convertJsonMessage:notification.userInfo
+                  deferLegacyLayout:NO
+                            channel:selectedChannel];
 
     // MESSAGE_UPDATE is partial. Keep a complete server-shaped payload for the
     // next disk checkpoint by overlaying changed top-level fields on the last
@@ -1994,6 +2643,15 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
 - (void)handleMessageDelete:(NSNotification *)notification {
     assertMainThread();
+
+    DCChannel *selectedChannel = DCServerCommunicator.sharedInstance.selectedChannel;
+    NSString *eventChannelID = [notification.userInfo objectForKey:@"channel_id"];
+    if (![self.currentWindow.channelSnowflake isEqualToString:selectedChannel.snowflake] ||
+        (eventChannelID.length &&
+         ![eventChannelID isEqualToString:self.currentWindow.channelSnowflake])) {
+        return;
+    }
+
     if (!self.messages || self.messages.count == 0) {
         return;
     }
@@ -2287,38 +2945,90 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
 - (void)updateTypingIndicator {
     assertMainThread();
-    if (self.typingUsers.count == 0) {
-        [self.chatTableView
-            setHeight:self.view.height - self.keyboardHeight - self.toolbar.height];
-        self.typingIndicatorView.hidden = YES;
+
+    BOOL shouldShow = self.typingUsers.count > 0;
+    BOOL wasVisible = !self.typingIndicatorView.hidden;
+
+    if (shouldShow) {
+        NSMutableArray *typingNames = [NSMutableArray array];
+        for (NSString *userId in self.typingUsers.allKeys) {
+            DCUser *user = [DCServerCommunicator.sharedInstance userForSnowflake:userId];
+            if (!user) {
+                for (DCUser *recipient in DCServerCommunicator.sharedInstance.selectedChannel.recipients) {
+                    if ([recipient.snowflake isEqualToString:userId]) {
+                        user = recipient;
+                        break;
+                    }
+                }
+            }
+            if (user) {
+                [typingNames addObject:[user displayName]];
+            }
+        }
+
+        NSString *typingText;
+        if (typingNames.count == 1) {
+            typingText = [NSString stringWithFormat:@"%@ is typing...", typingNames.firstObject];
+        } else if (typingNames.count == 2) {
+            typingText = [NSString stringWithFormat:@"%@ and %@ are typing...", typingNames[0], typingNames[1]];
+        } else if (typingNames.count == 3) {
+            typingText = [NSString stringWithFormat:@"%@, %@, and %@ are typing...", typingNames[0], typingNames[1], typingNames[2]];
+        } else {
+            typingText = @"Several users are typing...";
+        }
+
+        self.typingLabel.text = typingText;
+        [self.typingIndicatorView setNeedsDisplay];
+    }
+
+    if (shouldShow == wasVisible) {
         return;
     }
 
-    NSMutableArray *typingNames = [NSMutableArray array];
-    for (NSString *userId in self.typingUsers.allKeys) {
-        DCUser *user = [DCServerCommunicator.sharedInstance userForSnowflake:userId];
-        if (user) {
-            [typingNames addObject:[user displayName]];
-        }
+    CGFloat composerTop = self.view.height - self.keyboardHeight - self.toolbar.height;
+    CGFloat targetTableHeight = composerTop - (shouldShow ? 20.0f : 0.0f);
+    CGFloat visibleIndicatorY = composerTop - 20.0f;
+    CGFloat hiddenIndicatorY = composerTop;
+
+    BOOL followLiveTail =
+        self.currentWindow &&
+        !self.currentWindow.hasMoreAfter &&
+        self.chatTableView.contentOffset.y <= 10.0f;
+
+    if (shouldShow) {
+        [self.typingIndicatorView.layer removeAllAnimations];
+        [self.typingIndicatorView setY:hiddenIndicatorY];
+        self.typingIndicatorView.hidden = NO;
     }
 
-    NSString *typingText;
-    if (typingNames.count == 1) {
-        typingText = [NSString stringWithFormat:@"%@ is typing...", typingNames.firstObject];
-    } else if (typingNames.count == 2) {
-        typingText = [NSString stringWithFormat:@"%@ and %@ are typing...", typingNames[0], typingNames[1]];
-    } else if (typingNames.count == 3) {
-        typingText = [NSString stringWithFormat:@"%@, %@, and %@ are typing...", typingNames[0], typingNames[1], typingNames[2]];
+    if (followLiveTail) {
+        [self.chatTableView setContentOffset:CGPointZero animated:NO];
     } else {
-        typingText = @"Several users are typing...";
+        [self.chatTableView setHeight:targetTableHeight];
+        [self layoutEmptyChatLoadingIndicator];
     }
 
-    self.typingLabel.text           = typingText;
-    self.typingIndicatorView.hidden = NO;
-    [self.typingIndicatorView setNeedsDisplay];
-    [self.chatTableView
-        setHeight:self.view.height - self.keyboardHeight - 20 - self.toolbar.height];
-    [self.typingIndicatorView setY:self.view.height - self.keyboardHeight - self.toolbar.height - 20];
+    [UIView animateWithDuration:0.24
+                          delay:0.0
+                        options:UIViewAnimationOptionBeginFromCurrentState |
+                                UIViewAnimationOptionCurveEaseOut |
+                                UIViewAnimationOptionAllowUserInteraction
+                     animations:^{
+                         [self.typingIndicatorView setY:shouldShow
+                             ? visibleIndicatorY
+                             : hiddenIndicatorY];
+
+                         if (followLiveTail) {
+                             [self.chatTableView setHeight:targetTableHeight];
+                             [self.chatTableView setContentOffset:CGPointZero animated:NO];
+                             [self layoutEmptyChatLoadingIndicator];
+                         }
+                     }
+                     completion:^(BOOL finished) {
+                         if (!shouldShow && self.typingUsers.count == 0) {
+                             self.typingIndicatorView.hidden = YES;
+                         }
+                     }];
 }
 
 - (void)getMessages:(int)numberOfMessages beforeMessage:(DCMessage *)message {
@@ -2366,19 +3076,23 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
         for (DCMessage *newMessage in newMessages) {
             @autoreleasepool {
-                if (!newMessage.author.profileImage) {
-                    [DCTools getUserAvatar:newMessage.author];
+                DCGuild *avatarGuild = channel.parentGuild;
+                if (![DCTools cachedUserAvatar:newMessage.author
+                                       inGuild:avatarGuild]) {
+                    [DCTools getUserAvatar:newMessage.author inGuild:avatarGuild];
                 }
 
                 if (newMessage.referencedMessage &&
                     newMessage.referencedMessage.author &&
-                    !newMessage.referencedMessage.author.profileImage) {
-                    [DCTools getUserAvatar:newMessage.referencedMessage.author];
+                    ![DCTools cachedUserAvatar:newMessage.referencedMessage.author
+                                       inGuild:avatarGuild]) {
+                    [DCTools getUserAvatar:newMessage.referencedMessage.author
+                                   inGuild:avatarGuild];
                 }
             }
         }
 
-        DCGuild *guild = DCServerCommunicator.sharedInstance.selectedChannel.parentGuild;
+        DCGuild *guild = channel.parentGuild;
         if (guild && ![guild.name isEqualToString:@"Direct Messages"]) {
             NSMutableSet *authorIds = [NSMutableSet set];
             for (DCMessage *msg in newMessages) {
@@ -2435,9 +3149,13 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                 return;
             }
 
+            targetWindow.hasMoreBefore =
+                newMessages.count >= (NSUInteger)numberOfMessages;
+
             NSArray *deduped = [self deduplicateAgainstWindow:newMessages];
 
             if (deduped.count == 0) {
+                [[DCMessageStore sharedInstance] scheduleCheckpointForWindow:targetWindow];
                 self.loadingOlderMessages = NO;
                 self.olderRunwayRequestStartTime = 0.0;
                 self.olderRunwayRequestedCount = 0;
@@ -2586,20 +3304,23 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
         for (DCMessage *newMessage in newMessages) {
             @autoreleasepool {
-                if (!newMessage.author.profileImage) {
-                    [DCTools getUserAvatar:newMessage.author];
+                DCGuild *avatarGuild = channel.parentGuild;
+                if (![DCTools cachedUserAvatar:newMessage.author
+                                       inGuild:avatarGuild]) {
+                    [DCTools getUserAvatar:newMessage.author inGuild:avatarGuild];
                 }
 
                 if (newMessage.referencedMessage &&
                     newMessage.referencedMessage.author &&
-                    !newMessage.referencedMessage.author.profileImage) {
-                    [DCTools
-                        getUserAvatar:newMessage.referencedMessage.author];
+                    ![DCTools cachedUserAvatar:newMessage.referencedMessage.author
+                                       inGuild:avatarGuild]) {
+                    [DCTools getUserAvatar:newMessage.referencedMessage.author
+                                   inGuild:avatarGuild];
                 }
             }
         }
 
-        DCGuild *guild = DCServerCommunicator.sharedInstance.selectedChannel.parentGuild;
+        DCGuild *guild = channel.parentGuild;
         if (guild && ![guild.name isEqualToString:@"Direct Messages"]) {
             NSMutableSet *authorIds = [NSMutableSet set];
             for (DCMessage *msg in newMessages) {
@@ -2686,11 +3407,15 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                 return;
             }
 
+            targetWindow.hasMoreAfter =
+                newMessages.count >= (NSUInteger)numberOfMessages;
+
             NSArray *deduped =
                 [self deduplicateAgainstWindow:newMessages];
 
             if (deduped.count == 0) {
                 [self updatePresentTimeFromTablePosition];
+                [[DCMessageStore sharedInstance] scheduleCheckpointForWindow:targetWindow];
 
                 self.loadingNewerMessages = NO;
                 self.newerRunwayRequestStartTime = 0.0;
@@ -3013,13 +3738,22 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     self.loadingOlderMessages = NO;
 }
 
-- (void)ensureAvatarForUser:(DCUser *)user {
-    if (!user || !user.snowflake.length) {
-        return;
-    }
+- (UIImage *)avatarImageForUser:(DCUser *)user {
+    if (!user) return nil;
 
-    if (!user.profileImage) {
-        [DCTools getUserAvatar:user];
+    DCGuild *guild =
+        DCServerCommunicator.sharedInstance.selectedChannel.parentGuild;
+    UIImage *guildAvatar = [DCTools cachedUserAvatar:user inGuild:guild];
+    return guildAvatar ?: user.profileImage;
+}
+
+- (void)ensureAvatarForUser:(DCUser *)user {
+    if (!user || !user.snowflake.length) return;
+
+    DCGuild *guild =
+        DCServerCommunicator.sharedInstance.selectedChannel.parentGuild;
+    if (![DCTools cachedUserAvatar:user inGuild:guild]) {
+        [DCTools getUserAvatar:user inGuild:guild];
     }
 }
 
@@ -3086,9 +3820,20 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                 [self.referenceRunwayParser attributedStringFromMarkdown:sourceText];
             NSMutableAttributedString *attributed = [parsed mutableCopy];
             if (attributed.length && self.referenceRunwayShadows) {
-                [attributed addAttribute:DTShadowsAttribute
-                                   value:self.referenceRunwayShadows
-                                   range:NSMakeRange(0, attributed.length)];
+                NSMutableArray *shadowRanges = [NSMutableArray array];
+                [attributed enumerateAttribute:DCMarkdownSpoilerAttributeName
+                                       inRange:NSMakeRange(0, attributed.length)
+                                       options:0
+                                    usingBlock:^(id value, NSRange range, BOOL *stop) {
+                    if (!value && range.length) {
+                        [shadowRanges addObject:[NSValue valueWithRange:range]];
+                    }
+                }];
+                for (NSValue *value in shadowRanges) {
+                    [attributed addAttribute:DTShadowsAttribute
+                                       value:self.referenceRunwayShadows
+                                       range:value.rangeValue];
+                }
             }
 
             if (attributed) {
@@ -3282,12 +4027,12 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     if (![tableCell isKindOfClass:[DCChatTableCell class]]) return;
     DCChatTableCell *cell = (DCChatTableCell *)tableCell;
     for (UIView *subview in [NSArray arrayWithArray:cell.subviews]) {
-        if ([subview isKindOfClass:[UILazyImageView class]]) {
+        if ([subview isKindOfClass:[DCChatGifAttachment class]]) {
+            [(DCChatGifAttachment *)subview releaseThumbnailForResidency];
+        } else if ([subview isKindOfClass:[UILazyImageView class]]) {
             [(UILazyImageView *)subview releaseChatThumbnailForResidency];
         } else if ([subview isKindOfClass:[DCChatVideoAttachment class]]) {
             [(DCChatVideoAttachment *)subview releaseThumbnailForResidency];
-        } else if ([subview isKindOfClass:[DCChatGifAttachment class]]) {
-            [(DCChatGifAttachment *)subview releaseThumbnailForResidency];
         }
     }
 }
@@ -3387,7 +4132,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
              * markdown/layout/image attachment rebuild.
              */
             if (sameMessage && sameLayout && !isReplyTarget && !isEditTarget) {
-                cell.profileImage.image = messageAtRowIndex.author.profileImage;
+                cell.profileImage.image = [self avatarImageForUser:messageAtRowIndex.author];
 
                 DCGuild *guild =
                     DCServerCommunicator.sharedInstance.selectedChannel.parentGuild;
@@ -3399,7 +4144,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
                 if (messageAtRowIndex.referencedMessage) {
                     cell.referencedProfileImage.image =
-                        messageAtRowIndex.referencedMessage.author.profileImage;
+                        [self avatarImageForUser:messageAtRowIndex.referencedMessage.author];
 
                     if (layout.hasReference) {
                         cell.referencedAuthorLabel.text =
@@ -3428,11 +4173,13 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
             // cleanup loop
             for (UIView *subView in cell.subviews) {
                 @autoreleasepool {
-                    if ([subView isKindOfClass:[UILazyImageView class]]) {
+                    if ([subView isKindOfClass:[DCChatGifAttachment class]]) {
+                        [(DCChatGifAttachment *)subView releaseThumbnailForResidency];
+                        [subView removeFromSuperview];
+                    } else if ([subView isKindOfClass:[UILazyImageView class]]) {
                         [(UILazyImageView *)subView releaseChatThumbnailForResidency];
                         [subView removeFromSuperview];
-                    }
-                    if ([subView isKindOfClass:[DCChatVideoAttachment class]]) {
+                    } else if ([subView isKindOfClass:[DCChatVideoAttachment class]]) {
                         [(DCChatVideoAttachment *)subView releaseThumbnailForResidency];
                         [subView removeFromSuperview];
                     }
@@ -3441,10 +4188,6 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                     }
                     if ([subView isKindOfClass:[UIButton class]] && 
                         ![subView isKindOfClass:[DTLinkButton class]]) {
-                        [subView removeFromSuperview];
-                    }
-                    if ([subView isKindOfClass:[DCChatGifAttachment class]]) {
-                        [(DCChatGifAttachment *)subView releaseThumbnailForResidency];
                         [subView removeFromSuperview];
                     }
                     if ([subView isKindOfClass:[UIActivityIndicatorView class]]) {
@@ -3478,7 +4221,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
                 CFAbsoluteTime referenceBindStart = CFAbsoluteTimeGetCurrent();
                 cell.referencedAuthorLabel.text = referenceAuthorName;
-                cell.referencedProfileImage.image = referenceResolved ? reference.author.profileImage : nil;
+                cell.referencedProfileImage.image = referenceResolved ? [self avatarImageForUser:reference.author] : nil;
 
                 CGFloat referenceWidth = MAX(0.0f, self.chatTableView.width - referenceAuthorWidth);
 
@@ -3589,6 +4332,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                                                        cell.timestampLabel.height);
             }
 
+            cell.universalImageView.image = nil;
             if (messageAtRowIndex.messageType == DCMessageTypeRecipientAdd || messageAtRowIndex.messageType == DCMessageTypeUserJoin) {
                 cell.universalImageView.image = [UIImage imageNamed:@"U-Add"];
             } else if (messageAtRowIndex.messageType == DCMessageTypeRecipientRemove) {
@@ -3655,8 +4399,10 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
             }
             cellPerfContentEnd = CFAbsoluteTimeGetCurrent();
             cellPerfPostContentStart = CFAbsoluteTimeGetCurrent();
-            if (cell.profileImage.image != messageAtRowIndex.author.profileImage) {
-                cell.profileImage.image = messageAtRowIndex.author.profileImage;
+            UIImage *authorAvatar =
+                [self avatarImageForUser:messageAtRowIndex.author];
+            if (cell.profileImage.image != authorAvatar) {
+                cell.profileImage.image = authorAvatar;
             }
             if (cell.profileImage.gestureRecognizers.count == 0) {
                 cell.profileImage.userInteractionEnabled = YES;
@@ -3781,10 +4527,8 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                         CGSize gifSize = CGSizeZero;
                         if (gifInfo.naturalSize.width > 0 && gifInfo.naturalSize.height > 0) {
                             gifSize = gifInfo.naturalSize;
-                        } else if (gifInfo.staticThumbnail) {
-                            gifSize = gifInfo.staticThumbnail.size;
                         } else {
-                            continue;
+                            gifSize = CGSizeMake(16.0f, 9.0f);
                         }
 
                         CGFloat aspectRatio = gifSize.width / gifSize.height;
@@ -3795,15 +4539,11 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                             newHeight = newWidth / aspectRatio;
                         }
 
-                        DCChatGifAttachment *gif = [[[NSBundle mainBundle]
-                            loadNibNamed:@"DCChatGifAttachment"
-                                   owner:nil
-                                 options:nil] objectAtIndex:0];
-                        gifInfo.view = gif;
-                        gif.staticThumbnail = nil;
+                        DCChatGifAttachment *gif = [[DCChatGifAttachment alloc]
+                            initWithFrame:CGRectMake(55, imageViewOffset, newWidth, newHeight)];
                         gif.gifURL = gifInfo.gifURL;
-                        gif.thumbnailURL = gifInfo.thumbnailURL;
-                        [gif setFrame:CGRectMake(55, imageViewOffset, newWidth, newHeight)];
+                        gif.videoBacked = gifInfo.videoBacked;
+                        gif.imageURL = gifInfo.thumbnailURL;
                         imageViewOffset += newHeight;
                         [cell addSubview:gif];
                         if ([self chatMediaSubviewShouldBeResident:gif]) {
@@ -4001,7 +4741,27 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 }
 
 - (void)attributedLabel:(DTAttributedLabel *)label didSelectLinkWithURL:(NSURL *)url {
-    [[UIApplication sharedApplication] openURL:url];
+    [self dc_openResolvedExternalURL:url];
+}
+
+- (void)dc_openResolvedExternalURL:(NSURL *)url {
+    if (!url) return;
+    NSString *scheme = url.scheme.lowercaseString;
+    if (![scheme isEqualToString:@"http"] && ![scheme isEqualToString:@"https"]) {
+        [[UIApplication sharedApplication] openURL:url];
+        return;
+    }
+
+    [[DCChatMediaManager sharedManager]
+        resolveMediaURL:url
+             completion:^(NSURL *resolvedURL, NSError *resolutionError) {
+        if (resolutionError &&
+            [[DCChatMediaManager sharedManager] mediaURLNeedsRefresh:resolvedURL]) {
+            NSLog(@"[MediaSignature] link refresh failed %@: %@", url, resolutionError);
+            return;
+        }
+        [[UIApplication sharedApplication] openURL:resolvedURL ?: url];
+    }];
 }
 
 - (UIView *)attributedTextContentView:(DTAttributedTextContentView *)attributedTextContentView 
@@ -4115,7 +4875,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                 }
             }
         }
-        [[UIApplication sharedApplication] openURL:url];
+        [self dc_openResolvedExternalURL:url];
     } else {
         [[UIApplication sharedApplication] openURL:url];
     }
@@ -4206,6 +4966,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     self.viewingPresentTime =
         atNewestLoadedEdge &&
         !self.currentWindow.hasMoreAfter;
+    [self updateJumpToPresentButtonVisibility];
 }
 
 - (void)actionSheet:(UIActionSheet *)popup
@@ -4234,11 +4995,13 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                 self.editingMessage               = nil;
                 self.inputField.text              = @"";
                 self.inputFieldPlaceholder.hidden = NO;
+                [self updateSendButtonEnabledState];
                 [self resizeInputField];
             } else {
                 self.editingMessage               = self.selectedMessage;
                 self.inputField.text              = self.selectedMessage.rawContent;
                 self.inputFieldPlaceholder.hidden = YES;
+                [self updateSendButtonEnabledState];
                 [self resizeInputField];
             }
             NSIndexPath *indexPath = [NSIndexPath indexPathForRow:[self rowForModelIndex:[self.messages indexOfObject:self.selectedMessage]]
@@ -4307,6 +5070,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
             self.inputField.text = [NSString
                 stringWithFormat:@"%@<@%@> ", self.inputField.text,
                                  self.selectedMessage.author.snowflake];
+            [self updateSendButtonEnabledState];
         } else if (buttonIndex == 2 + addbut) {                        // Copy Message
             [[UIPasteboard generalPasteboard] setString:self.selectedMessage.rawContent];
         } else if (buttonIndex == 3 + addbut) {                        // Copy Message ID
@@ -4488,6 +5252,8 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
     self.viewingPresentTime =
         atNewestLoadedEdge && windowContainsLiveTail;
+
+    [self updateJumpToPresentButtonVisibility];
 
     if (self.messages.count == 0) {
         return;
@@ -4916,15 +5682,19 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     NSMutableSet *have =
         [NSMutableSet setWithCapacity:
             self.messages.count + incoming.count];
+    NSMutableDictionary *existingBySnowflake =
+        [NSMutableDictionary dictionaryWithCapacity:self.messages.count];
 
     for (DCMessage *message in self.messages) {
         if (message.snowflake.length) {
             [have addObject:message.snowflake];
+            [existingBySnowflake setObject:message forKey:message.snowflake];
         }
     }
 
     NSMutableArray *out =
         [NSMutableArray arrayWithCapacity:incoming.count];
+    BOOL refreshedPersistentPayload = NO;
 
     for (DCMessage *message in incoming) {
         NSString *snowflake = message.snowflake;
@@ -4936,6 +5706,16 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
         }
 
         if ([have containsObject:snowflake]) {
+            DCMessage *existing = [existingBySnowflake objectForKey:snowflake];
+            if (existing &&
+                [message.sourceJSON isKindOfClass:[NSDictionary class]] &&
+                ![existing.sourceJSON isEqual:message.sourceJSON]) {
+                /* Keep the existing rendered object/window position, but retain
+                 * the newest complete server payload. This refreshes expiring
+                 * attachment/media-proxy URLs for the next disk checkpoint. */
+                existing.sourceJSON = message.sourceJSON;
+                refreshedPersistentPayload = YES;
+            }
             continue;
         }
 
@@ -4945,6 +5725,10 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
          */
         [have addObject:snowflake];
         [out addObject:message];
+    }
+
+    if (refreshedPersistentPayload && self.currentWindow) {
+        [[DCMessageStore sharedInstance] scheduleCheckpointForWindow:self.currentWindow];
     }
 
     if (out.count != incoming.count) {
@@ -4957,55 +5741,74 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     return out;
 }
 
-- (BOOL)removeDuplicateMessagesFromWindow:
-    (DCChannelWindow *)window {
+- (BOOL)removeDuplicateMessagesFromWindow:(DCChannelWindow *)window {
+    if (!window) return NO;
 
-    if (!window || window.messages.count < 2) {
-        return NO;
-    }
+    NSArray *original = [window.messages copy];
+    NSMutableDictionary *bySnowflake =
+        [NSMutableDictionary dictionaryWithCapacity:original.count];
+    NSUInteger rejectedCount = 0;
 
-    NSMutableSet *seen = [NSMutableSet set];
-    NSMutableIndexSet *indexesToRemove =
-        [NSMutableIndexSet indexSet];
-
-    /*
-     * Walk newest -> oldest and keep the newest object for each snowflake.
-     * A later gateway copy may contain fresher user/member information than
-     * the earlier REST-created object.
-     */
-    for (NSInteger index =
-             (NSInteger)window.messages.count - 1;
-         index >= 0;
-         index--) {
-
-        DCMessage *message = window.messages[index];
+    for (DCMessage *message in original) {
         NSString *snowflake = message.snowflake;
-
         if (!snowflake.length) {
+            rejectedCount++;
             continue;
         }
 
-        if ([seen containsObject:snowflake]) {
-            [indexesToRemove addIndex:(NSUInteger)index];
-        } else {
-            [seen addObject:snowflake];
+        id sourceChannelValue = [message.sourceJSON objectForKey:@"channel_id"];
+        NSString *sourceChannelID =
+            [sourceChannelValue isKindOfClass:[NSString class]]
+                ? sourceChannelValue : nil;
+        if (sourceChannelID.length && window.channelSnowflake.length &&
+            ![sourceChannelID isEqualToString:window.channelSnowflake]) {
+            NSLog(@"%s: Dropping message %@ from channel %@ in window %@",
+                  __PRETTY_FUNCTION__, snowflake, sourceChannelID, window.channelSnowflake);
+            rejectedCount++;
+            continue;
+        }
+
+        if ([bySnowflake objectForKey:snowflake]) {
+            rejectedCount++;
+        }
+        [bySnowflake setObject:message forKey:snowflake];
+    }
+
+    NSArray *normalized = [[bySnowflake allValues]
+        sortedArrayUsingComparator:^NSComparisonResult(DCMessage *left, DCMessage *right) {
+            return DCCompareChatSnowflakes(left.snowflake, right.snowflake);
+        }];
+
+    BOOL changed = normalized.count != original.count;
+    if (!changed) {
+        for (NSUInteger i = 0; i < normalized.count; i++) {
+            if ([normalized objectAtIndex:i] != [original objectAtIndex:i]) {
+                changed = YES;
+                break;
+            }
         }
     }
 
-    if (indexesToRemove.count == 0) {
+    if (!changed) {
+        if (window.hasMoreAfter) window.atPresentTime = NO;
         return NO;
     }
 
-    NSLog(@"%s: Removing %lu existing duplicate message(s)",
+    NSLog(@"%s: Repairing message window %@ (%lu messages, %lu rejected)",
           __PRETTY_FUNCTION__,
-          (unsigned long)indexesToRemove.count);
+          window.channelSnowflake,
+          (unsigned long)original.count,
+          (unsigned long)rejectedCount);
 
-    [window.messages
-        removeObjectsAtIndexes:indexesToRemove];
+    [window.messages removeAllObjects];
+    [window.messages addObjectsFromArray:normalized];
 
-    [[DCCacheManager sharedInstance]
-        invalidateAllMessages];
+    window.hasSavedContentOffset = NO;
+    window.savedContentOffsetY = 0.0f;
+    if (rejectedCount > 0) window.hasMoreBefore = YES;
+    if (window.hasMoreAfter) window.atPresentTime = NO;
 
+    [[DCCacheManager sharedInstance] invalidateAllMessages];
     return YES;
 }
 
@@ -5056,12 +5859,14 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
         toolbarFrame.origin.y    = self.view.bounds.size.height
                                    - self.keyboardHeight - _baseToolbarHeight;
         self.toolbar.frame = toolbarFrame;
+        [self updateJumpToPresentButtonFrame];
 
         CGFloat typingOffset = (self.typingUsers.count > 0) ? 20.0f : 0.0f;
         [self.chatTableView setHeight:self.view.bounds.size.height
                                       - self.keyboardHeight
                                       - _baseToolbarHeight
                                       - typingOffset];
+        [self layoutEmptyChatLoadingIndicator];
         if (self.typingUsers.count > 0) {
             [self.typingIndicatorView setY:self.view.bounds.size.height
                                            - self.keyboardHeight
@@ -5089,12 +5894,14 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     toolbarFrame.origin.y    = self.view.bounds.size.height
                                - self.keyboardHeight - newToolbarHeight;
     self.toolbar.frame = toolbarFrame;
+    [self updateJumpToPresentButtonFrame];
 
     CGFloat typingOffset = (self.typingUsers.count > 0) ? 20.0f : 0.0f;
     [self.chatTableView setHeight:self.view.bounds.size.height
                                   - self.keyboardHeight
                                   - newToolbarHeight
                                   - typingOffset];
+    [self layoutEmptyChatLoadingIndicator];
     if (self.typingUsers.count > 0) {
         [self.typingIndicatorView setY:self.view.bounds.size.height
                                        - self.keyboardHeight
@@ -5125,6 +5932,8 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
         [self.typingIndicatorView setY:self.view.height - self.keyboardHeight - self.toolbar.height - 20];
     }
     [self.toolbar setY:self.view.height - self.keyboardHeight - self.toolbar.height];
+    [self updateJumpToPresentButtonFrame];
+    [self layoutEmptyChatLoadingIndicator];
     [UIView commitAnimations];
 
     if (self.viewingPresentTime) {
@@ -5148,6 +5957,8 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
         [self.typingIndicatorView setY:self.view.height - self.toolbar.height - 20];
     }
     [self.toolbar setY:self.view.height - self.toolbar.height];
+    [self updateJumpToPresentButtonFrame];
+    [self layoutEmptyChatLoadingIndicator];
     [UIView commitAnimations];
 }
 
@@ -5169,7 +5980,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
        shouldReceiveTouch:(UITouch *)touch {
     UIView *v = touch.view;
     while (v) {
-        if (v == self.toolbar) return NO;
+        if (v == self.toolbar || v == self.jumpToPresentButton) return NO;
         v = v.superview;
     }
     return YES;
@@ -5244,6 +6055,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
             }
             self.disablePing = NO;
             [self.inputField setText:@""];
+            [self updateSendButtonEnabledState];
             self.inputField.scrollEnabled = NO;
             [self resizeInputField];
             self.inputFieldPlaceholder.hidden = NO;
@@ -5294,64 +6106,126 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 - (void)tappedImage:(UITapGestureRecognizer *)sender {
     assertMainThread();
     [self.inputField resignFirstResponder];
-    self.selectedImageURL = ((UILazyImageView *)sender.view).imageURL;
-    SDWebImageManager *manager = [SDWebImageManager sharedManager];
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [UIApplication.sharedApplication setNetworkActivityIndicatorVisible:YES];
-    });
-    [manager downloadImageWithURL:((UILazyImageView *)sender.view).imageURL
-                          options:0
-                         progress:nil
-                        completed:^(UIImage *image, NSError *error, SDImageCacheType cacheType, BOOL finished, NSURL *imageURL) {
-                            dispatch_async(dispatch_get_main_queue(), ^{
-                                [UIApplication.sharedApplication setNetworkActivityIndicatorVisible:NO];
-                                if (image) {
-                                    self.selectedImage = image;
-                                    [self performSegueWithIdentifier:@"Chat to Gallery" sender:self];
-                                }
-                            });
-                        }];
+
+    UILazyImageView *imageView = (UILazyImageView *)sender.view;
+    self.selectedImageURL = imageView.imageURL;
+    self.selectedImage = imageView.image;
+    self.selectedImageMessage = nil;
+
+    UIView *ancestor = imageView;
+    while (ancestor && ![ancestor isKindOfClass:[DCChatTableCell class]]) {
+        ancestor = ancestor.superview;
+    }
+    DCChatTableCell *sourceCell = (DCChatTableCell *)ancestor;
+    if (sourceCell.messageSnowflake.length) {
+        NSUInteger messageIndex = [self.messages indexOfObjectPassingTest:
+            ^BOOL(DCMessage *message, NSUInteger idx, BOOL *stop) {
+                return [message.snowflake isEqualToString:sourceCell.messageSnowflake];
+            }];
+        if (messageIndex != NSNotFound) {
+            self.selectedImageMessage = [self.messages objectAtIndex:messageIndex];
+            [self ensureAvatarForUser:self.selectedImageMessage.author];
+        }
+    }
+
+    [self performSegueWithIdentifier:@"Chat to Gallery" sender:self];
 }
 
 - (void)tappedVideo:(UITapGestureRecognizer *)sender {
     assertMainThread();
     [self.inputField resignFirstResponder];
     DBGLOG(@"Tapped video!");
-    dispatch_async(dispatch_get_main_queue(), ^{
-        DCChatVideoAttachment *video = (DCChatVideoAttachment *)sender.view;
 
-        // YouTube (or any embed with a linkURL): open in browser / YouTube app
-        if (video.linkURL) {
-            [[UIApplication sharedApplication] openURL:video.linkURL];
+    DCChatVideoAttachment *video = (DCChatVideoAttachment *)sender.view;
+    if (video.linkURL) {
+        [[UIApplication sharedApplication] openURL:video.linkURL];
+        return;
+    }
+
+    NSURL *sourceURL = video.videoURL;
+    if (!sourceURL) return;
+    self.activeVideoSourceURL = sourceURL;
+    self.activeVideoSignatureRetryUsed = NO;
+
+    __weak DCChatViewController *weakSelf = self;
+    [[DCChatMediaManager sharedManager]
+        resolveMediaURL:sourceURL
+             completion:^(NSURL *resolvedURL, NSError *resolutionError) {
+        DCChatViewController *strongSelf = weakSelf;
+        if (!strongSelf || ![strongSelf.activeVideoSourceURL isEqual:sourceURL]) return;
+        if (resolutionError &&
+            [[DCChatMediaManager sharedManager] mediaURLNeedsRefresh:resolvedURL]) {
+            NSLog(@"[Video] signature resolution failed %@: %@", sourceURL, resolutionError);
+            strongSelf.activeVideoSourceURL = nil;
             return;
         }
+        [strongSelf dc_presentResolvedVideoURL:resolvedURL sourceURL:sourceURL];
+    }];
+}
 
-        // All other video embeds — play inline
-        NSURL *url = video.videoURL;
-        MPMoviePlayerViewController *player = [[MPMoviePlayerViewController alloc] initWithContentURL:url];
-        [[NSNotificationCenter defaultCenter] addObserver:self
-                                                 selector:@selector(moviePlaybackDidFinish:)
-                                                     name:MPMoviePlayerPlaybackDidFinishNotification
-                                                   object:player.moviePlayer];
-        player.moviePlayer.repeatMode = MPMovieRepeatModeOne;
-        UIWindow *backgroundWindow    = [UIApplication sharedApplication].keyWindow;
-        player.view.frame             = backgroundWindow.frame;
-        [self presentMoviePlayerViewControllerAnimated:player];
-        [player.moviePlayer play];
-    });
+- (void)dc_presentResolvedVideoURL:(NSURL *)resolvedURL sourceURL:(NSURL *)sourceURL {
+    if (!resolvedURL || ![self.activeVideoSourceURL isEqual:sourceURL]) return;
+
+    MPMoviePlayerViewController *player =
+        [[MPMoviePlayerViewController alloc] initWithContentURL:resolvedURL];
+    self.activeVideoPlayerController = player;
+    player.moviePlayer.useApplicationAudioSession = YES;
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(moviePlaybackDidFinish:)
+                                                 name:MPMoviePlayerPlaybackDidFinishNotification
+                                               object:player.moviePlayer];
+    player.moviePlayer.repeatMode = MPMovieRepeatModeOne;
+    UIWindow *backgroundWindow = [UIApplication sharedApplication].keyWindow;
+    player.view.frame = backgroundWindow.frame;
+    [self presentMoviePlayerViewControllerAnimated:player];
+    [player.moviePlayer play];
 }
 
 - (void)moviePlaybackDidFinish:(NSNotification *)notification {
-    NSNumber *reason = notification.userInfo[MPMoviePlayerPlaybackDidFinishReasonUserInfoKey];
+    MPMoviePlayerController *moviePlayer = notification.object;
+    if (self.activeVideoPlayerController &&
+        moviePlayer != self.activeVideoPlayerController.moviePlayer) {
+        return;
+    }
 
+    NSNumber *reason = notification.userInfo[MPMoviePlayerPlaybackDidFinishReasonUserInfoKey];
     if ([reason intValue] == MPMovieFinishReasonPlaybackError) {
         NSError *error = notification.userInfo[@"error"];
+        NSURL *sourceURL = self.activeVideoSourceURL;
+        if (sourceURL && !self.activeVideoSignatureRetryUsed) {
+            self.activeVideoSignatureRetryUsed = YES;
+            __weak DCChatViewController *weakSelf = self;
+            [[DCChatMediaManager sharedManager]
+                refreshMediaURL:sourceURL
+                     completion:^(NSURL *retryURL, NSError *refreshError) {
+                DCChatViewController *strongSelf = weakSelf;
+                if (!strongSelf || ![strongSelf.activeVideoSourceURL isEqual:sourceURL] ||
+                    strongSelf.activeVideoPlayerController.moviePlayer != moviePlayer) return;
+                if (!refreshError && retryURL) {
+                    NSLog(@"[Video] retrying playback with refreshed media signature");
+                    moviePlayer.contentURL = retryURL;
+                    [moviePlayer prepareToPlay];
+                    [moviePlayer play];
+                    return;
+                }
+                NSLog(@"Playback error occurred: %@ (signature refresh: %@)",
+                      error, refreshError);
+            }];
+            return;
+        }
         NSLog(@"Playback error occurred: %@", error);
     } else if ([reason intValue] == MPMovieFinishReasonUserExited) {
         DBGLOG(@"User exited playback");
     } else if ([reason intValue] == MPMovieFinishReasonPlaybackEnded) {
         DBGLOG(@"Playback ended normally");
     }
+
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                    name:MPMoviePlayerPlaybackDidFinishNotification
+                                                  object:moviePlayer];
+    self.activeVideoPlayerController = nil;
+    self.activeVideoSourceURL = nil;
+    self.activeVideoSignatureRetryUsed = NO;
 }
 
 - (void)prepareForSegue:(UIStoryboardSegue *)segue sender:(id)sender {
@@ -5359,10 +6233,11 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
         DCImageViewController *imageViewController =
             [segue destinationViewController];
         if ([imageViewController isKindOfClass:[DCImageViewController class]]) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [imageViewController.imageView setImage:self.selectedImage];
-            });
+            imageViewController.previewImage = self.selectedImage;
             imageViewController.fullResURL = self.selectedImageURL;
+            imageViewController.sourceMessage = self.selectedImageMessage;
+            self.selectedImage = nil;
+            self.selectedImageMessage = nil;
         }
     } else if ([segue.identifier isEqualToString:@"Chat to Right Sidebar"]) {
         DCCInfoViewController *rightSidebar = [segue destinationViewController];
@@ -5539,7 +6414,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     }
 }
 
-- (void)didRotateFromInterfaceOrientation:(UIInterfaceOrientation)fromInterfaceOrientation {
+- (void)dc_repairGeometryForCurrentBounds {
     CGFloat typingOffset = (self.typingUsers.count > 0) ? 20.0f : 0.0f;
     self.chatTableView.frame = CGRectMake(
         0, 0,
@@ -5552,17 +6427,40 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
         self.view.bounds.size.width,
         self.toolbar.height
     );
+    [self updateJumpToPresentButtonFrame];
+    [self layoutEmptyChatLoadingIndicator];
     [[DCCacheManager sharedInstance] invalidateAllMessages];
+    [self.chatTableView reloadData];
+    [self.chatTableView layoutIfNeeded];
+}
+
+- (void)handleImageViewerGeometryChanged:(NSNotification *)notification {
+    if (!self.isViewLoaded || !self.view.window) return;
+
     dispatch_async(dispatch_get_main_queue(), ^{
-        [self.chatTableView reloadData];
+        [self.navigationController.view setNeedsLayout];
+        [self.navigationController.view layoutIfNeeded];
+        [self.navigationController.navigationBar setNeedsLayout];
+        [self.navigationController.navigationBar layoutIfNeeded];
+        [self.view setNeedsLayout];
+        [self.view layoutIfNeeded];
+        [self dc_repairGeometryForCurrentBounds];
+    });
+}
+
+- (void)didRotateFromInterfaceOrientation:(UIInterfaceOrientation)fromInterfaceOrientation {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self dc_repairGeometryForCurrentBounds];
     });
 }
 
 - (void)navigateToChannel:(DCChannel *)channel {
     if (!channel) return;
-    
+    if (channel.parentGuild.snowflake.length > 0 && !channel.readable) return;
+
     DCServerCommunicator.sharedInstance.selectedChannel = channel;
-    
+    DCServerCommunicator.sharedInstance.selectedGuild = channel.parentGuild;
+
     // Update DCMenuViewController state without seguing
     [[NSNotificationCenter defaultCenter]
         postNotificationName:@"CHANNEL_CONTEXT_CHANGED"
@@ -5603,6 +6501,8 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     [self.typingIndicatorView removeFromSuperview];
     self.typingIndicatorView = nil;
     self.typingLabel         = nil;
+    [self.jumpToPresentButton removeFromSuperview];
+    self.jumpToPresentButton = nil;
 
     // Nil weak IBOutlets — non-ARC __unsafe_unretained outlets are
     // never zeroed automatically on view unload
