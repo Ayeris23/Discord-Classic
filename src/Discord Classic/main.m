@@ -18,6 +18,9 @@ int main(int argc, char *argv[]) {
     setenv("NSAutoreleaseFreedObjectCheckEnabled", "YES", 1);
 #endif
     @autoreleasepool {
+        [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"UIUseLegacyUI"];
+        [[NSUserDefaults standardUserDefaults] synchronize];
+
         return UIApplicationMain(
             argc,
             argv,

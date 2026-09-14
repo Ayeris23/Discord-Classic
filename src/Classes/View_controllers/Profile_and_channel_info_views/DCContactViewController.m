@@ -6,6 +6,7 @@
 //  Copyright (c) 2024 bag.xml. All rights reserved.
 //
 
+#import "DCInterfaceStyle.h"
 #import "DCContactViewController.h"
 #include "DCUser.h"
 #include <objc/NSObjCRuntime.h>
@@ -51,12 +52,12 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    [self.navBar setBackgroundImage:[UIImage imageNamed:@"TbarBG"]
+    [self.navBar setBackgroundImage:[DCInterfaceStyle navigationBarBackgroundImage]
                       forBarMetrics:UIBarMetricsDefault];
-    [self.doneButton setBackgroundImage:[UIImage imageNamed:@"BarButtonDone"]
+    [self.doneButton setBackgroundImage:[DCInterfaceStyle primaryBarButtonBackgroundImage]
                                forState:UIControlStateNormal
                              barMetrics:UIBarMetricsDefault];
-    [self.doneButton setBackgroundImage:[UIImage imageNamed:@"BarButtonDonePressed"]
+    [self.doneButton setBackgroundImage:[DCInterfaceStyle primaryBarButtonPressedBackgroundImage]
                                forState:UIControlStateHighlighted
                              barMetrics:UIBarMetricsDefault];
 
@@ -73,7 +74,7 @@
     self.handleLable.text     = user.username;
     self.snowflake            = user.snowflake;
     self.statusIcon.image =
-        [UIImage imageNamed:[self imageNameForStatus:user.status]];
+        [DCInterfaceStyle statusImageForStatus:user.status];
     // image
     if (user.profileImage) {
         self.profileImageView.image = [DCContentManager processedAvatarForUser:user context:DCAssetContextProfile];
@@ -192,55 +193,44 @@
         NSArray *accountsArray    = (NSArray *)self.connectedAccounts;
         NSDictionary *accountDict = accountsArray[indexPath.row];
         cell.name.text            = accountDict[@"name"];
+        cell.typeIcon.image       = [DCInterfaceStyle connectedAccountIconForType:accountDict[@"type"]];
 
         // steam, playstation, domain
 
         if ([accountDict[@"type"] isEqualToString:@"youtube"]) {
             cell.type.text      = @"YouTube";
-            cell.typeIcon.image = [UIImage imageNamed:@"C-YouTube"];
 
         } else if ([accountDict[@"type"] isEqualToString:@"twitter"]) {
             cell.type.text      = @"Twitter";
-            cell.typeIcon.image = [UIImage imageNamed:@"C-Twitter"];
 
         } else if ([accountDict[@"type"] isEqualToString:@"bluesky"]) {
             cell.type.text      = @"BlueSky";
-            cell.typeIcon.image = [UIImage imageNamed:@"C-BlueSky"];
 
         } else if ([accountDict[@"type"] isEqualToString:@"twitch"]) {
             cell.type.text      = @"Twitch";
-            cell.typeIcon.image = [UIImage imageNamed:@"C-Twitch"];
 
         } else if ([accountDict[@"type"] isEqualToString:@"reddit"]) {
             cell.type.text      = @"Reddit";
-            cell.typeIcon.image = [UIImage imageNamed:@"C-Reddit"];
 
         } else if ([accountDict[@"type"] isEqualToString:@"xbox"]) {
             cell.type.text      = @"Xbox-Live";
-            cell.typeIcon.image = [UIImage imageNamed:@"C-Xbox"];
 
         } else if ([accountDict[@"type"] isEqualToString:@"steam"]) {
             cell.type.text      = @"Steam";
-            cell.typeIcon.image = [UIImage imageNamed:@"C-Steam"];
 
         } else if ([accountDict[@"type"] isEqualToString:@"playstation"]) {
             cell.type.text      = @"PlayStationNetwork";
-            cell.typeIcon.image = [UIImage imageNamed:@"C-PSN"];
 
         } else if ([accountDict[@"type"] isEqualToString:@"domain"]) {
             cell.type.text      = @"Domain/Website";
-            cell.typeIcon.image = [UIImage imageNamed:@"C-Web"];
 
         } else if ([accountDict[@"type"] isEqualToString:@"spotify"]) {
             cell.type.text      = @"Spotify";
-            cell.typeIcon.image = [UIImage imageNamed:@"C-Spotify"];
 
         } else if ([accountDict[@"type"] isEqualToString:@"github"]) {
             cell.type.text      = @"GitHub";
-            cell.typeIcon.image = [UIImage imageNamed:@"C-GitHub"];
 
         } else {
-            cell.typeIcon.image = [UIImage imageNamed:@"C-Web"];
             cell.type.text      = accountDict[@"type"];
         }
 
@@ -267,19 +257,6 @@
 }
 
 
-- (NSString *)imageNameForStatus:(DCUserStatus)status {
-    switch (status) {
-        case DCUserStatusOnline:
-            return @"online";
-        case DCUserStatusDoNotDisturb:
-            return @"dnd";
-        case DCUserStatusIdle:
-            return @"absent";
-        case DCUserStatusOffline:
-        default:
-            return @"offline";
-    }
-}
 
 - (void)prepareForSegue:(UIStoryboardSegue *)segue sender:(id)sender {
     if ([segue.identifier isEqualToString:@"about to chat"]) {

@@ -16,6 +16,137 @@
 #import "DCTools.h"
 #import "NSString+Emojize.h"
 
+@interface DCAttachmentUploadConnection : NSObject <NSURLConnectionDataDelegate>
+@property (nonatomic, strong) NSURLConnection *connection;
+@property (nonatomic, strong) NSHTTPURLResponse *response;
+@property (nonatomic, strong) NSMutableData *responseData;
+@property (nonatomic, strong) NSURL *bodyFileURL;
+@property (nonatomic, copy) DCAttachmentUploadProgressBlock progressBlock;
+@property (nonatomic, copy) DCAttachmentUploadCompletionBlock completionBlock;
+- (id)initWithRequest:(NSURLRequest *)request
+           bodyFileURL:(NSURL *)bodyFileURL
+             progress:(DCAttachmentUploadProgressBlock)progress
+           completion:(DCAttachmentUploadCompletionBlock)completion;
+- (void)start;
+@end
+
+static NSMutableSet *DCActiveAttachmentUploads(void) {
+    static NSMutableSet *uploads = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        uploads = [NSMutableSet set];
+    });
+    return uploads;
+}
+
+@implementation DCAttachmentUploadConnection
+
+- (id)initWithRequest:(NSURLRequest *)request
+           bodyFileURL:(NSURL *)bodyFileURL
+             progress:(DCAttachmentUploadProgressBlock)progress
+           completion:(DCAttachmentUploadCompletionBlock)completion {
+    self = [super init];
+    if (!self) return nil;
+
+    _responseData = [NSMutableData data];
+    _bodyFileURL = [bodyFileURL copy];
+    _progressBlock = [progress copy];
+    _completionBlock = [completion copy];
+    _connection = [[NSURLConnection alloc] initWithRequest:request
+                                                   delegate:self
+                                           startImmediately:NO];
+    return self;
+}
+
+- (void)start {
+    NSAssert([NSThread isMainThread], @"Attachment uploads must start on the main thread");
+    if (!self.connection) {
+        NSError *error = [NSError errorWithDomain:NSURLErrorDomain
+                                             code:NSURLErrorUnknown
+                                         userInfo:nil];
+        if (self.completionBlock) self.completionBlock(nil, error);
+        return;
+    }
+
+    [DCActiveAttachmentUploads() addObject:self];
+    [UIApplication sharedApplication].networkActivityIndicatorVisible = YES;
+    [self.connection start];
+}
+
+- (NSInputStream *)connection:(NSURLConnection *)connection
+                 needNewBodyStream:(NSURLRequest *)request {
+    if (!self.bodyFileURL.path.length) return nil;
+    return [NSInputStream inputStreamWithFileAtPath:self.bodyFileURL.path];
+}
+
+- (void)connection:(NSURLConnection *)connection
+   didSendBodyData:(NSInteger)bytesWritten
+ totalBytesWritten:(NSInteger)totalBytesWritten
+totalBytesExpectedToWrite:(NSInteger)totalBytesExpectedToWrite {
+    if (!self.progressBlock || totalBytesExpectedToWrite <= 0) return;
+    CGFloat progress = (CGFloat)totalBytesWritten / (CGFloat)totalBytesExpectedToWrite;
+    self.progressBlock(MIN(1.0f, MAX(0.0f, progress)));
+}
+
+- (void)connection:(NSURLConnection *)connection
+ didReceiveResponse:(NSURLResponse *)response {
+    if ([response isKindOfClass:[NSHTTPURLResponse class]]) {
+        self.response = (NSHTTPURLResponse *)response;
+    }
+    [self.responseData setLength:0];
+}
+
+- (void)connection:(NSURLConnection *)connection didReceiveData:(NSData *)data {
+    if (data.length) [self.responseData appendData:data];
+}
+
+- (void)dc_finishWithMessageSnowflake:(NSString *)messageSnowflake
+                                error:(NSError *)error {
+    DCAttachmentUploadCompletionBlock completion = self.completionBlock;
+    self.progressBlock = nil;
+    self.completionBlock = nil;
+    self.connection = nil;
+    self.bodyFileURL = nil;
+
+    [DCActiveAttachmentUploads() removeObject:self];
+    [UIApplication sharedApplication].networkActivityIndicatorVisible =
+        DCActiveAttachmentUploads().count > 0;
+
+    if (completion) completion(messageSnowflake, error);
+}
+
+- (void)connectionDidFinishLoading:(NSURLConnection *)connection {
+    NSInteger statusCode = self.response.statusCode;
+    if (statusCode < 200 || statusCode >= 300) {
+        NSError *error = [NSError errorWithDomain:@"DiscordClassicAttachmentUpload"
+                                             code:statusCode ?: NSURLErrorBadServerResponse
+                                         userInfo:nil];
+        [self dc_finishWithMessageSnowflake:nil error:error];
+        return;
+    }
+
+    NSString *messageSnowflake = nil;
+    if (self.responseData.length) {
+        id responseObject =
+            [NSJSONSerialization JSONObjectWithData:self.responseData options:0 error:nil];
+        if ([responseObject isKindOfClass:[NSDictionary class]]) {
+            id value = [(NSDictionary *)responseObject objectForKey:@"id"];
+            if ([value isKindOfClass:[NSString class]]) {
+                messageSnowflake = value;
+            }
+        }
+    }
+
+    if (self.progressBlock) self.progressBlock(1.0f);
+    [self dc_finishWithMessageSnowflake:messageSnowflake error:nil];
+}
+
+- (void)connection:(NSURLConnection *)connection didFailWithError:(NSError *)error {
+    [self dc_finishWithMessageSnowflake:nil error:error];
+}
+
+@end
+
 @interface DCChannel ()
 
 @property NSURLConnection *connection;
@@ -46,6 +177,52 @@ static UIImage *DCNormalizedUploadImage(UIImage *image) {
     UIImage *normalized = UIGraphicsGetImageFromCurrentImageContext();
     UIGraphicsEndImageContext();
     return normalized ?: image;
+}
+
+static BOOL DCWriteBytesToStream(NSOutputStream *stream,
+                                 const uint8_t *bytes,
+                                 NSUInteger length) {
+    NSUInteger offset = 0;
+    while (offset < length) {
+        NSInteger written = [stream write:&bytes[offset] maxLength:length - offset];
+        if (written <= 0) return NO;
+        offset += (NSUInteger)written;
+    }
+    return YES;
+}
+
+static BOOL DCWriteDataToStream(NSOutputStream *stream, NSData *data) {
+    if (!data.length) return YES;
+    return DCWriteBytesToStream(stream, data.bytes, data.length);
+}
+
+static BOOL DCWriteStringToStream(NSOutputStream *stream, NSString *string) {
+    return DCWriteDataToStream(stream, [string dataUsingEncoding:NSUTF8StringEncoding]);
+}
+
+static BOOL DCAppendFileToStream(NSOutputStream *output, NSURL *fileURL) {
+    NSInputStream *input = [NSInputStream inputStreamWithFileAtPath:fileURL.path];
+    if (!input) return NO;
+
+    [input open];
+    uint8_t buffer[64 * 1024];
+    BOOL success = YES;
+
+    while (YES) {
+        NSInteger count = [input read:buffer maxLength:sizeof(buffer)];
+        if (count < 0) {
+            success = NO;
+            break;
+        }
+        if (count == 0) break;
+        if (!DCWriteBytesToStream(output, buffer, (NSUInteger)count)) {
+            success = NO;
+            break;
+        }
+    }
+
+    [input close];
+    return success;
 }
 
 static dispatch_queue_t channel_send_queue;
@@ -317,17 +494,231 @@ static dispatch_queue_t channel_send_queue;
     });
 }
 
-- (void)sendImage:(UIImage *)image mimeType:(NSString *)type {
-    if (!image) return;
+- (NSMutableURLRequest *)dc_attachmentRequestForChannelID:(NSString *)channelID
+                                                      data:(NSData *)data
+                                                  mimeType:(NSString *)mimeType
+                                                  filename:(NSString *)filename {
+    if (!channelID.length || !data.length || !mimeType.length || !filename.length) {
+        return nil;
+    }
+
+    NSMutableURLRequest *urlRequest = [DCServerCommunicator
+        requestWithPath:[NSString stringWithFormat:@"/channels/%@/messages", channelID]
+                  token:DCServerCommunicator.sharedInstance.token];
+    [urlRequest setValue:@"no-store" forHTTPHeaderField:@"Cache-Control"];
+    [urlRequest setHTTPMethod:@"POST"];
+
+    NSString *boundary = @"---------------------------14737809831466499882746641449";
+    NSString *contentType = [NSString stringWithFormat:@"multipart/form-data; boundary=%@", boundary];
+    [urlRequest setValue:contentType forHTTPHeaderField:@"Content-Type"];
+
+    NSMutableData *postbody = [NSMutableData data];
+    [postbody appendData:[[NSString stringWithFormat:@"\r\n--%@\r\n", boundary]
+                             dataUsingEncoding:NSUTF8StringEncoding]];
+    [postbody appendData:[[NSString stringWithFormat:
+        @"Content-Disposition: form-data; name=\"file\"; filename=\"%@\"\r\n",
+        filename] dataUsingEncoding:NSUTF8StringEncoding]];
+    [postbody appendData:[[NSString stringWithFormat:@"Content-Type: %@\r\n\r\n", mimeType]
+                             dataUsingEncoding:NSUTF8StringEncoding]];
+    [postbody appendData:data];
+    [postbody appendData:[[NSString stringWithFormat:@"\r\n--%@\r\n", boundary]
+                             dataUsingEncoding:NSUTF8StringEncoding]];
+    [postbody appendData:[@"Content-Disposition: form-data; name=\"content\"\r\n\r\n "
+                             dataUsingEncoding:NSUTF8StringEncoding]];
+    [postbody appendData:[[NSString stringWithFormat:@"\r\n--%@--", boundary]
+                             dataUsingEncoding:NSUTF8StringEncoding]];
+    [urlRequest setHTTPBody:postbody];
+    return urlRequest;
+}
+
+- (NSMutableURLRequest *)dc_attachmentRequestForChannelID:(NSString *)channelID
+                                                 fileURLs:(NSArray *)fileURLs
+                                                mimeTypes:(NSArray *)mimeTypes
+                                                filenames:(NSArray *)filenames
+                                                  content:(NSString *)content
+                                       referencingMessage:(DCMessage *)referencedMessage
+                                             disablePing:(BOOL)disablePing
+                                              bodyFileURL:(NSURL **)bodyFileURL {
+    NSUInteger count = fileURLs.count;
+    if (!channelID.length || count == 0 || count > 10 ||
+        mimeTypes.count != count || filenames.count != count) {
+        return nil;
+    }
+
+    NSString *boundary = [NSString stringWithFormat:@"DiscordClassic-%@",
+                          [[NSProcessInfo processInfo] globallyUniqueString]];
+    NSString *bodyFilename = [NSString stringWithFormat:@"discord-upload-%@.multipart",
+                              [[NSProcessInfo processInfo] globallyUniqueString]];
+    NSString *bodyPath = [NSTemporaryDirectory() stringByAppendingPathComponent:bodyFilename];
+    NSOutputStream *output = [NSOutputStream outputStreamToFileAtPath:bodyPath append:NO];
+    [output open];
+
+    NSMutableArray *attachments = [NSMutableArray arrayWithCapacity:count];
+    for (NSUInteger i = 0; i < count; i++) {
+        NSString *filename = [filenames objectAtIndex:i];
+        if (![filename isKindOfClass:[NSString class]] || !filename.length) {
+            [output close];
+            [[NSFileManager defaultManager] removeItemAtPath:bodyPath error:nil];
+            return nil;
+        }
+        [attachments addObject:@{ @"id" : @(i), @"filename" : filename }];
+    }
+
+    NSMutableDictionary *payload = [@{
+        @"content" : content ?: @"",
+        @"attachments" : attachments
+    } mutableCopy];
+
+    if (referencedMessage.snowflake.length) {
+        [payload addEntriesFromDictionary:@{
+            @"type" : @(DCMessageTypeReply),
+            @"message_reference" : @{
+                @"type" : @(DCMessageReferenceTypeDefault),
+                @"message_id" : referencedMessage.snowflake,
+                @"channel_id" : channelID,
+                @"fail_if_not_exists" : @YES
+            }
+        }];
+        if (disablePing) {
+            [payload setObject:@{
+                @"parse" : @[ @"users", @"roles", @"everyone" ],
+                @"replied_user" : @NO
+            } forKey:@"allowed_mentions"];
+        }
+    } else {
+        [payload setObject:@(DCMessageTypeDefault) forKey:@"type"];
+    }
+
+    NSData *payloadData = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
+    BOOL success = payloadData != nil;
+
+    if (success) {
+        success = DCWriteStringToStream(output,
+            [NSString stringWithFormat:@"--%@\r\n"
+                                       "Content-Disposition: form-data; name=\"payload_json\"\r\n"
+                                       "Content-Type: application/json\r\n\r\n",
+                                       boundary]);
+    }
+    if (success) success = DCWriteDataToStream(output, payloadData);
+    if (success) success = DCWriteStringToStream(output, @"\r\n");
+
+    for (NSUInteger i = 0; success && i < count; i++) {
+        NSURL *fileURL = [fileURLs objectAtIndex:i];
+        NSString *mimeType = [mimeTypes objectAtIndex:i];
+        NSString *filename = [filenames objectAtIndex:i];
+        if (![fileURL isKindOfClass:[NSURL class]] ||
+            ![mimeType isKindOfClass:[NSString class]] || !mimeType.length) {
+            success = NO;
+            break;
+        }
+
+        success = DCWriteStringToStream(output,
+            [NSString stringWithFormat:@"--%@\r\n"
+                                       "Content-Disposition: form-data; name=\"files[%lu]\"; filename=\"%@\"\r\n"
+                                       "Content-Type: %@\r\n\r\n",
+                                       boundary,
+                                       (unsigned long)i,
+                                       filename,
+                                       mimeType]);
+        if (success) success = DCAppendFileToStream(output, fileURL);
+        if (success) success = DCWriteStringToStream(output, @"\r\n");
+    }
+
+    if (success) {
+        success = DCWriteStringToStream(output,
+            [NSString stringWithFormat:@"--%@--\r\n", boundary]);
+    }
+    [output close];
+
+    if (!success) {
+        [[NSFileManager defaultManager] removeItemAtPath:bodyPath error:nil];
+        return nil;
+    }
+
+    NSDictionary *attributes = [[NSFileManager defaultManager] attributesOfItemAtPath:bodyPath
+                                                                                 error:nil];
+    unsigned long long bodyLength = [[attributes objectForKey:NSFileSize] unsignedLongLongValue];
+    if (bodyLength == 0) {
+        [[NSFileManager defaultManager] removeItemAtPath:bodyPath error:nil];
+        return nil;
+    }
+
+    NSMutableURLRequest *request = [DCServerCommunicator
+        requestWithPath:[NSString stringWithFormat:@"/channels/%@/messages", channelID]
+                  token:DCServerCommunicator.sharedInstance.token];
+    [request setValue:@"no-store" forHTTPHeaderField:@"Cache-Control"];
+    [request setHTTPMethod:@"POST"];
+    request.timeoutInterval = 120.0;
+    [request setValue:[NSString stringWithFormat:@"multipart/form-data; boundary=%@", boundary]
+   forHTTPHeaderField:@"Content-Type"];
+    [request setValue:[NSString stringWithFormat:@"%llu", bodyLength]
+   forHTTPHeaderField:@"Content-Length"];
+    [request setHTTPBodyStream:[NSInputStream inputStreamWithFileAtPath:bodyPath]];
+
+    if (bodyFileURL) *bodyFileURL = [NSURL fileURLWithPath:bodyPath];
+    return request;
+}
+
+- (void)dc_startAttachmentRequest:(NSURLRequest *)request
+                       bodyFileURL:(NSURL *)bodyFileURL
+                         progress:(DCAttachmentUploadProgressBlock)progress
+                       completion:(DCAttachmentUploadCompletionBlock)completion {
+    dispatch_semaphore_t finished = dispatch_semaphore_create(0);
 
     dispatch_async(dispatch_get_main_queue(), ^{
-        [UIApplication sharedApplication].networkActivityIndicatorVisible = YES;
+        DCAttachmentUploadCompletionBlock finishedBlock =
+            ^(NSString *messageSnowflake, NSError *error) {
+                if (completion) completion(messageSnowflake, error);
+                dispatch_semaphore_signal(finished);
+            };
+
+        if (!request) {
+            NSError *error = [NSError errorWithDomain:@"DiscordClassicAttachmentUpload"
+                                                 code:NSURLErrorUnknown
+                                             userInfo:nil];
+            finishedBlock(nil, error);
+            return;
+        }
+
+        DCAttachmentUploadConnection *upload =
+            [[DCAttachmentUploadConnection alloc] initWithRequest:request
+                                                      bodyFileURL:bodyFileURL
+                                                         progress:progress
+                                                       completion:finishedBlock];
+        [upload start];
     });
 
+    dispatch_semaphore_wait(finished, DISPATCH_TIME_FOREVER);
+#if !OS_OBJECT_USE_OBJC
+    dispatch_release(finished);
+#endif
+}
+
+- (void)sendImage:(UIImage *)image mimeType:(NSString *)type {
+    [self sendImage:image mimeType:type progress:nil completion:nil];
+}
+
+- (void)sendImage:(UIImage *)image
+         mimeType:(NSString *)type
+         progress:(DCAttachmentUploadProgressBlock)progress
+       completion:(DCAttachmentUploadCompletionBlock)completion {
+    if (!image) {
+        if (completion) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                NSError *error = [NSError errorWithDomain:@"DiscordClassicAttachmentUpload"
+                                                     code:NSURLErrorUnknown
+                                                 userInfo:nil];
+                completion(nil, error);
+            });
+        }
+        return;
+    }
+
     NSString *channelID = [self.snowflake copy];
+    __block UIImage *sourceImage = image;
     dispatch_async([self get_channel_send_queue], ^{
         @autoreleasepool {
-            UIImage *uploadImage = DCNormalizedUploadImage(image);
+            UIImage *uploadImage = DCNormalizedUploadImage(sourceImage);
             NSData *imageData = nil;
             NSString *extension = @"jpg";
             NSString *uploadType = @"image/jpeg";
@@ -340,175 +731,164 @@ static dispatch_queue_t channel_send_queue;
                 imageData = UIImageJPEGRepresentation(uploadImage, 0.8f);
             }
 
-            if (!imageData.length) {
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    [UIApplication sharedApplication].networkActivityIndicatorVisible = NO;
-                });
-                return;
-            }
-
-            NSMutableURLRequest *urlRequest = [DCServerCommunicator
-                requestWithPath:[NSString stringWithFormat:@"/channels/%@/messages", channelID]
-                          token:DCServerCommunicator.sharedInstance.token];
-            [urlRequest setValue:@"no-store" forHTTPHeaderField:@"Cache-Control"];
-            [urlRequest setHTTPMethod:@"POST"];
-
-            NSString *boundary = @"---------------------------14737809831466499882746641449";
-            NSString *contentType = [NSString stringWithFormat:@"multipart/form-data; boundary=%@", boundary];
-            [urlRequest setValue:contentType forHTTPHeaderField:@"Content-Type"];
-
-            NSMutableData *postbody = NSMutableData.new;
-            [postbody appendData:[[NSString stringWithFormat:@"\r\n--%@\r\n", boundary]
-                                     dataUsingEncoding:NSUTF8StringEncoding]];
-            [postbody appendData:[[NSString stringWithFormat:
-                @"Content-Disposition: form-data; name=\"file\"; filename=\"upload.%@\"\r\n",
-                extension] dataUsingEncoding:NSUTF8StringEncoding]];
-            [postbody appendData:[[NSString stringWithFormat:@"Content-Type: %@\r\n\r\n", uploadType]
-                                     dataUsingEncoding:NSUTF8StringEncoding]];
-            [postbody appendData:imageData];
-            [postbody appendData:[[NSString stringWithFormat:@"\r\n--%@\r\n", boundary]
-                                     dataUsingEncoding:NSUTF8StringEncoding]];
-            [postbody appendData:[@"Content-Disposition: form-data; name=\"content\"\r\n\r\n "
-                                     dataUsingEncoding:NSUTF8StringEncoding]];
-            [postbody appendData:[[NSString stringWithFormat:@"\r\n--%@--", boundary]
-                                     dataUsingEncoding:NSUTF8StringEncoding]];
-            [urlRequest setHTTPBody:postbody];
-
-            NSError *error = nil;
-            NSHTTPURLResponse *responseCode = nil;
-            [DCTools checkData:[NSURLConnection sendSynchronousRequest:urlRequest
-                                                     returningResponse:&responseCode
-                                                                 error:&error]
-                     withError:error];
-
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [UIApplication sharedApplication].networkActivityIndicatorVisible = NO;
-            });
+            NSMutableURLRequest *request =
+                [self dc_attachmentRequestForChannelID:channelID
+                                                  data:imageData
+                                              mimeType:uploadType
+                                              filename:[NSString stringWithFormat:@"upload.%@", extension]];
+            uploadImage = nil;
+            imageData = nil;
+            sourceImage = nil;
+            [self dc_startAttachmentRequest:request
+                                bodyFileURL:nil
+                                   progress:progress
+                                 completion:completion];
         }
     });
 }
 
 - (void)sendData:(NSData *)data mimeType:(NSString *)type {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [UIApplication sharedApplication].networkActivityIndicatorVisible = YES;
-    });
-    NSMutableURLRequest *urlRequest = [DCServerCommunicator
-            requestWithPath:[NSString stringWithFormat:@"/channels/%@/messages", self.snowflake]
-                      token:DCServerCommunicator.sharedInstance.token];
-    [urlRequest setValue:@"no-store" forHTTPHeaderField:@"Cache-Control"];
-    [urlRequest setHTTPMethod:@"POST"];
-    NSString *boundary = @"---------------------------14737809831466499882746641449";
-    NSString *contentType = [NSString stringWithFormat:@"multipart/form-data; boundary=%@", boundary];
-    [urlRequest setValue:contentType forHTTPHeaderField:@"Content-Type"];
+    [self sendData:data mimeType:type progress:nil completion:nil];
+}
 
-    NSMutableData *postbody = NSMutableData.new;
-    [postbody appendData:[[NSString stringWithFormat:@"\r\n--%@\r\n", boundary]
-                             dataUsingEncoding:NSUTF8StringEncoding]];
-    NSString *extension = [type componentsSeparatedByString:@"/"][1];
-    [postbody
-        appendData:[[NSString stringWithFormat:
-                                  @"Content-Disposition: form-data; "
-                                  @"name=\"file\"; filename=\"upload.%@\"\r\n",
-                                  extension]
-                       dataUsingEncoding:NSUTF8StringEncoding]];
-
-    [postbody appendData:[[NSString
-                             stringWithFormat:@"Content-Type: %@\r\n\r\n", type]
-                             dataUsingEncoding:NSUTF8StringEncoding]];
-    [postbody appendData:data];
-
-    [postbody appendData:[[NSString stringWithFormat:@"\r\n--%@\r\n", boundary]
-                             dataUsingEncoding:NSUTF8StringEncoding]];
-    [postbody
-        appendData:[@"Content-Disposition: form-data; name=\"content\"\r\n\r\n "
-                       dataUsingEncoding:NSUTF8StringEncoding]];
-    [postbody appendData:[[NSString stringWithFormat:@"\r\n--%@--", boundary]
-                             dataUsingEncoding:NSUTF8StringEncoding]];
-
-    [urlRequest setHTTPBody:postbody];
+- (void)sendData:(NSData *)data
+        mimeType:(NSString *)type
+        progress:(DCAttachmentUploadProgressBlock)progress
+      completion:(DCAttachmentUploadCompletionBlock)completion {
+    NSString *channelID = [self.snowflake copy];
+    __block NSData *uploadData = [data copy];
+    NSString *uploadType = [type copy];
 
     dispatch_async([self get_channel_send_queue], ^{
-        NSError *error                  = nil;
-        NSHTTPURLResponse *responseCode = nil;
+        @autoreleasepool {
+            NSString *extension = [[uploadType componentsSeparatedByString:@"/"] lastObject];
+            if (!extension.length) extension = @"bin";
 
-        [DCTools checkData:[NSURLConnection sendSynchronousRequest:urlRequest
-                                                 returningResponse:&responseCode
-                                                             error:&error]
-                 withError:error];
-        dispatch_sync(dispatch_get_main_queue(), ^{
-            [UIApplication sharedApplication].networkActivityIndicatorVisible =
-                NO;
-        });
+            NSMutableURLRequest *request =
+                [self dc_attachmentRequestForChannelID:channelID
+                                                  data:uploadData
+                                              mimeType:uploadType
+                                              filename:[NSString stringWithFormat:@"upload.%@", extension]];
+            uploadData = nil;
+            [self dc_startAttachmentRequest:request
+                                bodyFileURL:nil
+                                   progress:progress
+                                 completion:completion];
+        }
     });
 }
 
 - (void)sendVideo:(NSURL *)videoURL mimeType:(NSString *)type {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [UIApplication sharedApplication].networkActivityIndicatorVisible = YES;
-    });
-    NSMutableURLRequest *urlRequest = [DCServerCommunicator
-            requestWithPath:[NSString stringWithFormat:@"/channels/%@/messages", self.snowflake]
-                      token:DCServerCommunicator.sharedInstance.token];
-    [urlRequest setValue:@"no-store" forHTTPHeaderField:@"Cache-Control"];
-    [urlRequest setHTTPMethod:@"POST"];
-    NSString *boundary = @"---------------------------14737809831466499882746641449";
-    NSString *contentType = [NSString stringWithFormat:@"multipart/form-data; boundary=%@", boundary];
-    [urlRequest setValue:contentType forHTTPHeaderField:@"Content-Type"];
+    [self sendVideo:videoURL mimeType:type progress:nil completion:nil];
+}
 
-    NSMutableData *postbody = NSMutableData.new;
-
-    NSData *videoData = [NSData dataWithContentsOfURL:videoURL];
-    NSString *filename =
-        [type isEqualToString:@"mov"] ? @"upload.mov" : @"upload.mp4";
-    NSString *videoContentType =
-        [type isEqualToString:@"mov"] ? @"video/quicktime" : @"video/mp4";
-
-    [postbody appendData:[[NSString stringWithFormat:@"\r\n--%@\r\n", boundary]
-                             dataUsingEncoding:NSUTF8StringEncoding]];
-    [postbody
-        appendData:[[NSString
-                       stringWithFormat:@"Content-Disposition: form-data; "
-                                        @"name=\"file\"; filename=\"%@\"\r\n",
-                                        filename]
-                       dataUsingEncoding:NSUTF8StringEncoding]];
-    [postbody
-        appendData:[[NSString stringWithFormat:@"Content-Type: %@\r\n\r\n",
-                                               videoContentType]
-                       dataUsingEncoding:NSUTF8StringEncoding]];
-    [postbody appendData:videoData];
-    [postbody appendData:[[NSString stringWithFormat:@"\r\n--%@\r\n", boundary]
-                             dataUsingEncoding:NSUTF8StringEncoding]];
-    [postbody
-        appendData:[@"Content-Disposition: form-data; name=\"content\"\r\n\r\n "
-                       dataUsingEncoding:NSUTF8StringEncoding]];
-    [postbody appendData:[[NSString stringWithFormat:@"\r\n--%@--", boundary]
-                             dataUsingEncoding:NSUTF8StringEncoding]];
-
-    [urlRequest setHTTPBody:postbody];
+- (void)sendVideo:(NSURL *)videoURL
+         mimeType:(NSString *)type
+         progress:(DCAttachmentUploadProgressBlock)progress
+       completion:(DCAttachmentUploadCompletionBlock)completion {
+    NSString *channelID = [self.snowflake copy];
+    NSURL *uploadURL = [videoURL copy];
+    NSString *requestedType = [type copy];
 
     dispatch_async([self get_channel_send_queue], ^{
-        NSError *error                  = nil;
-        NSHTTPURLResponse *responseCode = nil;
+        @autoreleasepool {
+            NSData *videoData = [NSData dataWithContentsOfURL:uploadURL];
+            BOOL isQuickTime =
+                [requestedType isEqualToString:@"mov"] ||
+                [requestedType isEqualToString:@"video/mov"] ||
+                [requestedType isEqualToString:@"video/quicktime"] ||
+                [[uploadURL.pathExtension lowercaseString] isEqualToString:@"mov"];
 
-        NSData __unused *responseData =
-            [NSURLConnection sendSynchronousRequest:urlRequest
-                                  returningResponse:&responseCode
-                                              error:&error];
+            NSString *filename = isQuickTime ? @"upload.mov" : @"upload.mp4";
+            NSString *videoContentType = isQuickTime ? @"video/quicktime" : @"video/mp4";
 
-        if (error) {
-            DBGLOG(@"Error sending video: %@", error.localizedDescription);
-        } else {
-            DBGLOG(
-                @"Response: %@",
-                [[NSString alloc] initWithData:responseData
-                                      encoding:NSUTF8StringEncoding]
-            );
+            NSMutableURLRequest *request =
+                [self dc_attachmentRequestForChannelID:channelID
+                                                  data:videoData
+                                              mimeType:videoContentType
+                                              filename:filename];
+            videoData = nil;
+            [self dc_startAttachmentRequest:request
+                                bodyFileURL:nil
+                                   progress:progress
+                                 completion:completion];
         }
+    });
+}
 
-        dispatch_sync(dispatch_get_main_queue(), ^{
-            [UIApplication sharedApplication].networkActivityIndicatorVisible =
-                NO;
-        });
+- (void)sendTemporaryFileURLs:(NSArray *)fileURLs
+           mimeTypes:(NSArray *)mimeTypes
+           filenames:(NSArray *)filenames
+            progress:(DCAttachmentUploadProgressBlock)progress
+          completion:(DCAttachmentUploadCompletionBlock)completion {
+    [self sendTemporaryFileURLs:fileURLs
+                      mimeTypes:mimeTypes
+                      filenames:filenames
+                        content:@""
+             referencingMessage:nil
+                    disablePing:NO
+                       progress:progress
+                     completion:completion];
+}
+
+- (void)sendTemporaryFileURLs:(NSArray *)fileURLs
+           mimeTypes:(NSArray *)mimeTypes
+           filenames:(NSArray *)filenames
+             content:(NSString *)content
+  referencingMessage:(DCMessage *)referencedMessage
+         disablePing:(BOOL)disablePing
+            progress:(DCAttachmentUploadProgressBlock)progress
+          completion:(DCAttachmentUploadCompletionBlock)completion {
+    if (fileURLs.count == 0 || fileURLs.count > 10 ||
+        mimeTypes.count != fileURLs.count || filenames.count != fileURLs.count) {
+        for (NSURL *URL in fileURLs) {
+            if ([URL isKindOfClass:[NSURL class]]) {
+                [[NSFileManager defaultManager] removeItemAtURL:URL error:nil];
+            }
+        }
+        if (completion) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                NSError *error = [NSError errorWithDomain:@"DiscordClassicAttachmentUpload"
+                                                     code:NSURLErrorBadURL
+                                                 userInfo:nil];
+                completion(nil, error);
+            });
+        }
+        return;
+    }
+
+    NSString *channelID = [self.snowflake copy];
+    NSArray *URLs = [fileURLs copy];
+    NSArray *types = [mimeTypes copy];
+    NSArray *names = [filenames copy];
+    NSString *messageContent = [content copy] ?: @"";
+    DCMessage *reference = referencedMessage;
+
+    dispatch_async([self get_channel_send_queue], ^{
+        @autoreleasepool {
+            NSURL *bodyFileURL = nil;
+            NSMutableURLRequest *request =
+                [self dc_attachmentRequestForChannelID:channelID
+                                              fileURLs:URLs
+                                             mimeTypes:types
+                                             filenames:names
+                                               content:messageContent
+                                    referencingMessage:reference
+                                          disablePing:disablePing
+                                           bodyFileURL:&bodyFileURL];
+            for (NSURL *URL in URLs) {
+                if ([URL isKindOfClass:[NSURL class]]) {
+                    [[NSFileManager defaultManager] removeItemAtURL:URL error:nil];
+                }
+            }
+            [self dc_startAttachmentRequest:request
+                                bodyFileURL:bodyFileURL
+                                   progress:progress
+                                 completion:completion];
+            if (bodyFileURL) {
+                [[NSFileManager defaultManager] removeItemAtURL:bodyFileURL error:nil];
+            }
+        }
     });
 }
 

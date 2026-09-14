@@ -6,6 +6,7 @@
 //  Copyright (c) 2026 Ayeris All rights reserved.
 //
 
+#import "DCInterfaceStyle.h"
 #import "MentionBadge.h"
 
 @implementation MentionBadge {
@@ -17,7 +18,7 @@
     self = [super initWithFrame:frame];
     if (self) {
         // Stretchable badge image — 9pt caps left/right, 0 top/bottom
-        UIImage *badgeImage = [[UIImage imageNamed:@"Badge"] 
+        UIImage *badgeImage = [[DCInterfaceStyle mentionBadgeImage] 
                                 resizableImageWithCapInsets:UIEdgeInsetsMake(0, 9, 0, 9)];
         
         _backgroundImageView = [[UIImageView alloc] initWithImage:badgeImage];

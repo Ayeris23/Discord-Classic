@@ -6,12 +6,12 @@
 //  Copyright (c) 2023 bag.xml. All rights reserved.
 //
 
+#import "DCInterfaceStyle.h"
 #import "DCCInfoViewController.h"
 #include "DCUser.h"
 #include "DCGuild.h"
 #include "DCServerCommunicator.h"
 #include <CoreGraphics/CGGeometry.h>
-#include "DCMenuViewController.h"
 #include "DCTools.h"
 #include "DCRecipientTableCell.h"
 #include "DCRole.h"
@@ -144,7 +144,7 @@
             }
             if ([DCServerCommunicator.sharedInstance.selectedChannel.parentGuild.snowflake length] > 0) {
                 cell.statusLight.hidden = NO;
-                cell.statusLight.image  = [UIImage imageNamed:[DCMenuViewController imageNameForStatus:user.status]];
+                cell.statusLight.image  = [DCInterfaceStyle statusImageForStatus:user.status];
             } else {
                 cell.statusLight.hidden = YES;
             }

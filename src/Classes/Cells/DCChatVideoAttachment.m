@@ -6,6 +6,7 @@
 //  Copyright (c) 2022 Toru the Red Fox. All rights reserved.
 //
 
+#import "DCInterfaceStyle.h"
 #import "DCChatVideoAttachment.h"
 #import "DCChatMediaManager.h"
 #import "DCServerCommunicator.h"
@@ -48,7 +49,7 @@
         playButton.contentMode = UIViewContentModeCenter;
         playButton.userInteractionEnabled = NO;
         playButton.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-        playButton.image = [UIImage imageNamed:@"PLVideoOverlayPlay.png"];
+        playButton.image = [DCInterfaceStyle videoPlayOverlayImage];
         [self addSubview:playButton];
         self.playButton = playButton;
     }

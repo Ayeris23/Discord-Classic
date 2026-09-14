@@ -6,6 +6,7 @@
 //  Copyright (c) 2018 bag.xml. All rights reserved.
 //
 
+#import "DCInterfaceStyle.h"
 #import "DCAppDelegate.h"
 #include "SDWebImageManager.h"
 #include <UIKit/UIKit.h>
@@ -380,10 +381,6 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
     self.window.opaque          = NO;
     self.shouldReload           = false;
     [[NSUserDefaults standardUserDefaults] synchronize];
-    if (VERSION_MIN(@"7.0")) {
-        [[NSUserDefaults standardUserDefaults] setBool:YES
-                                                forKey:@"UIUseLegacyUI"];
-    }
 
     self.experimental = [[NSUserDefaults standardUserDefaults] boolForKey:@"experimentalMode"];
     self.hackyMode = [[NSUserDefaults standardUserDefaults] boolForKey:@"hackyMode"];
@@ -526,7 +523,7 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
                 // guilds show this default only until SDWebImage hydrates the real
                 // icon below.
                 if (isPrivateGuild) {
-                    guild.icon = [UIImage imageNamed:@"privateGuildLogo"];
+                    guild.icon = [DCInterfaceStyle privateGuildIconImage];
                 } else if (guild.snowflake.length > 0) {
                     unsigned long long value = [guild.snowflake longLongValue];
                     NSUInteger selector = (NSUInteger)((value >> 22) % 6);
@@ -611,7 +608,7 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
             // DM icon is synchronous — safe to set immediately
             DCGuild *dmGuild = DCServerCommunicator.sharedInstance.guilds.firstObject;
             if ([dmGuild.name isEqualToString:@"Direct Messages"]) {
-                dmGuild.icon = [UIImage imageNamed:@"privateGuildLogo"];
+                dmGuild.icon = [DCInterfaceStyle privateGuildIconImage];
             }
 
             // Defer icon fetches until after handleReady's reloadData has run.
@@ -667,20 +664,6 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
         [DCServerCommunicator.sharedInstance restorePersistedGatewaySessionIfPossible];
         [DCServerCommunicator.sharedInstance startCommunicator];
     }
-    
-    UIImage *backNormal = [[UIImage imageNamed:@"NavigationButton"]
-     resizableImageWithCapInsets:UIEdgeInsetsMake(0, 14, 0, 6)];
-    
-    UIImage *backPressed = [[UIImage imageNamed:@"NavigationButtonPressed"]
-     resizableImageWithCapInsets:UIEdgeInsetsMake(0, 14, 0, 6)];
-    
-    [[UIBarButtonItem appearance] setBackButtonBackgroundImage:backNormal
-                                                      forState:UIControlStateNormal
-                                                    barMetrics:UIBarMetricsDefault];
-    
-    [[UIBarButtonItem appearance] setBackButtonBackgroundImage:backPressed
-                                                      forState:UIControlStateHighlighted
-                                                    barMetrics:UIBarMetricsDefault];
     
     [[UIApplication sharedApplication] registerForRemoteNotificationTypes:
      UIRemoteNotificationTypeBadge |

@@ -15,6 +15,9 @@
 #import "DCGuild.h"
 #import "DCMessage.h"
 
+typedef void (^DCAttachmentUploadProgressBlock)(CGFloat progress);
+typedef void (^DCAttachmentUploadCompletionBlock)(NSString *messageSnowflake, NSError *error);
+
 typedef NS_ENUM(NSInteger, DCChannelType) {
     DCChannelTypeGuildText          = 0,  // A text channel within a server
     DCChannelTypeDM                 = 1,  // A direct message between users
@@ -65,8 +68,33 @@ typedef NS_ENUM(NSInteger, DCChannelType) {
 - (void)deleteMessage:(DCMessage *)message;
 - (void)ackMessage:(NSString*)message;
 - (void)sendImage:(UIImage*)image mimeType:(NSString*)type;
+- (void)sendImage:(UIImage*)image
+         mimeType:(NSString*)type
+         progress:(DCAttachmentUploadProgressBlock)progress
+       completion:(DCAttachmentUploadCompletionBlock)completion;
 - (void)sendData:(NSData*)data mimeType:(NSString*)type;
+- (void)sendData:(NSData*)data
+        mimeType:(NSString*)type
+        progress:(DCAttachmentUploadProgressBlock)progress
+      completion:(DCAttachmentUploadCompletionBlock)completion;
 - (void)sendVideo:(NSURL*)videoURL mimeType:(NSString*)type;
+- (void)sendVideo:(NSURL*)videoURL
+         mimeType:(NSString*)type
+         progress:(DCAttachmentUploadProgressBlock)progress
+       completion:(DCAttachmentUploadCompletionBlock)completion;
+- (void)sendTemporaryFileURLs:(NSArray*)fileURLs
+           mimeTypes:(NSArray*)mimeTypes
+           filenames:(NSArray*)filenames
+            progress:(DCAttachmentUploadProgressBlock)progress
+          completion:(DCAttachmentUploadCompletionBlock)completion;
+- (void)sendTemporaryFileURLs:(NSArray*)fileURLs
+           mimeTypes:(NSArray*)mimeTypes
+           filenames:(NSArray*)filenames
+             content:(NSString*)content
+  referencingMessage:(DCMessage*)referencedMessage
+         disablePing:(BOOL)disablePing
+            progress:(DCAttachmentUploadProgressBlock)progress
+          completion:(DCAttachmentUploadCompletionBlock)completion;
 - (NSArray*)getMessages:(int)numberOfMessages beforeMessage:(DCMessage*)message;
 - (NSArray*)getMessages:(int)numberOfMessages afterMessage:(DCMessage*)message;
 @end

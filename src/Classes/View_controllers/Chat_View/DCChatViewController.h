@@ -13,6 +13,7 @@
 #import "DCChannel.h"
 #import "DCContactViewController.h"
 #import "DCMessage.h"
+#import "DCMultiAttachmentPickerController.h"
 #import "ODCContactViewController.h"
 #import "CKRefreshControl.h"
 #import "DTAttributedLabel.h"
@@ -25,6 +26,7 @@
                                       UITableViewDataSource,
                                       UITableViewDelegate,
                                       UIImagePickerControllerDelegate,
+                                      DCMultiAttachmentPickerControllerDelegate,
                                       UIActionSheetDelegate,
                                       UIGestureRecognizerDelegate,
                                       DTAttributedTextContentViewDelegate>

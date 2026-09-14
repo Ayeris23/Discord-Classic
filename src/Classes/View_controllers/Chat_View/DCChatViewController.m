@@ -6,6 +6,7 @@
 //  Copyright (c) 2018 bag.xml. All rights reserved.
 //
 
+#import "DCInterfaceStyle.h"
 #import "DCChatViewController.h"
 #include <dispatch/dispatch.h>
 #include <objc/runtime.h>
@@ -55,6 +56,16 @@
 @end
 
 @implementation DCChatReferencePresentation
+@end
+
+@interface DCPendingAttachmentUpload : NSObject
+@property (nonatomic, copy) NSString *channelSnowflake;
+@property (nonatomic, copy) NSString *messageSnowflake;
+@property (nonatomic, retain) DCChatTableCell *cell;
+@property (nonatomic, retain) UIProgressView *progressView;
+@end
+
+@implementation DCPendingAttachmentUpload
 @end
 
 @interface DCChatViewController ()
@@ -124,6 +135,12 @@
 @property (nonatomic, assign) CGFloat jumpToPresentMessageFieldRightInset;
 @property (nonatomic, assign) CGFloat jumpToPresentInputFieldRightInset;
 @property (nonatomic, assign) CGFloat jumpToPresentPlaceholderRightInset;
+@property (nonatomic, retain) NSMutableArray *pendingAttachmentUploads;
+@property (nonatomic, retain) NSMutableDictionary *stagedAttachmentAssetsByChannel;
+@property (nonatomic, retain) UILabel *stagedAttachmentCountLabel;
+@property (nonatomic, assign) CGFloat attachmentComposerBaseOriginX;
+@property (nonatomic, assign) CGFloat attachmentCameraButtonBaseWidth;
+@property (nonatomic, retain) ALAssetsLibrary *attachmentAssetLibrary;
 - (void)setupJumpToPresentButton;
 - (void)updateJumpToPresentButtonFrame;
 - (void)updateJumpToPresentButtonVisibility;
@@ -148,6 +165,27 @@
 - (dispatch_queue_t)get_chat_presentation_queue;
 - (void)dc_presentResolvedVideoURL:(NSURL *)resolvedURL sourceURL:(NSURL *)sourceURL;
 - (void)dc_openResolvedExternalURL:(NSURL *)url;
+- (DCPendingAttachmentUpload *)beginPendingAttachmentUploadForChannel:(DCChannel *)channel;
+- (void)updatePendingAttachmentUpload:(DCPendingAttachmentUpload *)upload progress:(CGFloat)progress;
+- (void)finishPendingAttachmentUpload:(DCPendingAttachmentUpload *)upload
+                       messageSnowflake:(NSString *)messageSnowflake
+                                  error:(NSError *)error;
+- (void)removePendingAttachmentUpload:(DCPendingAttachmentUpload *)upload;
+- (void)completePendingAttachmentForMessageSnowflake:(NSString *)messageSnowflake;
+- (void)rebuildPendingAttachmentUploadHeader;
+- (void)presentMultiAttachmentPickerFromView:(UIView *)sourceView;
+- (NSMutableArray *)stagedAttachmentAssetsForChannelSnowflake:(NSString *)channelSnowflake
+                                                         create:(BOOL)create;
+- (NSArray *)currentStagedAttachmentAssets;
+- (void)setupStagedAttachmentCountLabel;
+- (void)updateStagedAttachmentComposerState;
+- (void)stageCapturedAssetAtURL:(NSURL *)assetURL
+            forChannelSnowflake:(NSString *)channelSnowflake;
+- (void)uploadSelectedAssets:(NSArray *)assets
+                     content:(NSString *)content
+          referencingMessage:(DCMessage *)referencedMessage
+                 disablePing:(BOOL)disablePing;
+- (void)updatePendingAttachmentUpload:(DCPendingAttachmentUpload *)upload status:(NSString *)status;
 @end
 
 // dynamic message box vars
@@ -155,6 +193,107 @@ CGFloat _baseToolbarHeight;
 CGFloat _baseInputHeight;
 CGFloat _baseMsgFieldBGHeight;
 CGFloat _baseInputOriginY;
+
+static const CGFloat DCPendingAttachmentCellHeight = 53.0f;
+
+static NSString *DCMimeTypeForAttachmentExtension(NSString *extension, NSString *assetType) {
+    NSString *lowercase = [extension lowercaseString];
+    if ([lowercase isEqualToString:@"png"]) return @"image/png";
+    if ([lowercase isEqualToString:@"gif"]) return @"image/gif";
+    if ([lowercase isEqualToString:@"jpg"] || [lowercase isEqualToString:@"jpeg"]) return @"image/jpeg";
+    if ([lowercase isEqualToString:@"mp4"] || [lowercase isEqualToString:@"m4v"]) return @"video/mp4";
+    if ([lowercase isEqualToString:@"mov"]) return @"video/quicktime";
+    return [assetType isEqualToString:ALAssetTypeVideo] ? @"video/quicktime" : @"image/jpeg";
+}
+
+static BOOL DCWriteAssetBytes(NSOutputStream *output,
+                              ALAssetRepresentation *representation,
+                              NSError **error) {
+    const NSUInteger bufferSize = 64 * 1024;
+    uint8_t *buffer = malloc(bufferSize);
+    if (!buffer) return NO;
+
+    long long offset = 0;
+    long long total = representation.size;
+    BOOL success = YES;
+
+    while (offset < total) {
+        NSUInteger requested = (NSUInteger)MIN((long long)bufferSize, total - offset);
+        NSError *readError = nil;
+        NSUInteger count = [representation getBytes:buffer
+                                         fromOffset:offset
+                                             length:requested
+                                              error:&readError];
+        if (readError || count == 0) {
+            if (error) *error = readError;
+            success = NO;
+            break;
+        }
+
+        NSUInteger writtenOffset = 0;
+        while (writtenOffset < count) {
+            NSInteger written = [output write:&buffer[writtenOffset]
+                                    maxLength:count - writtenOffset];
+            if (written <= 0) {
+                if (error) *error = output.streamError;
+                success = NO;
+                break;
+            }
+            writtenOffset += (NSUInteger)written;
+        }
+        if (!success) break;
+        offset += count;
+    }
+
+    free(buffer);
+    return success;
+}
+
+static NSURL *DCCopyAssetToTemporaryFile(ALAsset *asset,
+                                          NSUInteger index,
+                                          NSString **mimeType,
+                                          NSString **filename,
+                                          NSError **error) {
+    ALAssetRepresentation *representation = [asset defaultRepresentation];
+    if (!representation || representation.size <= 0) return nil;
+
+    NSString *assetType = [asset valueForProperty:ALAssetPropertyType];
+    NSString *extension = [[representation.filename pathExtension] lowercaseString];
+    if (!extension.length) {
+        extension = [assetType isEqualToString:ALAssetTypeVideo] ? @"mov" : @"jpg";
+    }
+
+    NSString *safeFilename = [NSString stringWithFormat:@"attachment-%lu.%@",
+                              (unsigned long)index,
+                              extension];
+    NSString *temporaryFilename = [NSString stringWithFormat:@"discord-attachment-%@-%@",
+                                   [[NSProcessInfo processInfo] globallyUniqueString],
+                                   safeFilename];
+    NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:temporaryFilename];
+    NSOutputStream *output = [NSOutputStream outputStreamToFileAtPath:path append:NO];
+    [output open];
+    BOOL success = DCWriteAssetBytes(output, representation, error);
+    [output close];
+
+    if (!success) {
+        [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+        return nil;
+    }
+
+    if (mimeType) *mimeType = DCMimeTypeForAttachmentExtension(extension, assetType);
+    if (filename) *filename = safeFilename;
+    return [NSURL fileURLWithPath:path];
+}
+
+static void DCRemoveTemporaryAttachmentFiles(NSArray *fileURLs) {
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        for (NSURL *URL in fileURLs) {
+            if ([URL isKindOfClass:[NSURL class]]) {
+                [[NSFileManager defaultManager] removeItemAtURL:URL error:nil];
+            }
+        }
+    });
+}
 
 // Message residency is determined by the device memory class.
 static NSInteger DCChatWindowCeiling(void) {
@@ -479,7 +618,10 @@ static dispatch_queue_t chat_presentation_queue;
     BOOL hasChannel =
         DCServerCommunicator.sharedInstance.selectedChannel.snowflake.length > 0;
     BOOL isLoading = self.loadingOlderMessages || self.loadingNewerMessages;
-    BOOL shouldShow = hasChannel && _currentWindow.messages.count == 0 && isLoading;
+    BOOL shouldShow = hasChannel &&
+        _currentWindow.messages.count == 0 &&
+        self.chatTableView.tableHeaderView == nil &&
+        isLoading;
 
     if (shouldShow) {
         [self layoutEmptyChatLoadingIndicator];
@@ -521,12 +663,12 @@ static dispatch_queue_t chat_presentation_queue;
 
     [[UIApplication sharedApplication] setStatusBarHidden:NO];
 
-    if ([[NSUserDefaults standardUserDefaults]
-            boolForKey:@"experimentalMode"]) {
-        [self.navigationController.navigationBar
-            setBackgroundImage:[UIImage imageNamed:@"TbarBG"]
-                 forBarMetrics:UIBarMetricsDefault];
-    }
+    UIImage *navigationBackground = [DCInterfaceStyle navigationBarBackgroundImage];
+    [self.navigationController.navigationBar
+        setBackgroundImage:navigationBackground
+             forBarMetrics:UIBarMetricsDefault];
+    [self.nbbar setBackgroundImage:navigationBackground
+                     forBarMetrics:UIBarMetricsDefault];
 
     [self activateSelectedChannel];
 }
@@ -775,17 +917,17 @@ static dispatch_queue_t chat_presentation_queue;
     self.oldMode =
         [[NSUserDefaults standardUserDefaults] boolForKey:@"hackyMode"];
     if (self.oldMode == NO) {
-        [self.nbbar setBackgroundImage:[UIImage imageNamed:@"TbarBG"]
+        [self.nbbar setBackgroundImage:[DCInterfaceStyle navigationBarBackgroundImage]
                          forBarMetrics:UIBarMetricsDefault];
-        [self.nbmodaldone setBackgroundImage:[UIImage imageNamed:@"BarButtonDone"]
+        [self.nbmodaldone setBackgroundImage:[DCInterfaceStyle primaryBarButtonBackgroundImage]
                                     forState:UIControlStateNormal
                                   barMetrics:UIBarMetricsDefault];
         [self.nbmodaldone
-            setBackgroundImage:[UIImage imageNamed:@"BarButtonDonePressed"]
+            setBackgroundImage:[DCInterfaceStyle primaryBarButtonPressedBackgroundImage]
                       forState:UIControlStateHighlighted
                     barMetrics:UIBarMetricsDefault];
 
-        UIImage *toolbarBG = [UIImage imageNamed:@"ToolbarBG"];
+        UIImage *toolbarBG = [DCInterfaceStyle toolbarBackgroundImage];
         UIEdgeInsets toolbarCaps = UIEdgeInsetsMake(23, 0, 20, 0); // top/bottom caps, full width stretches center
         UIImage *stretchableToolbarBG;
         if ([toolbarBG respondsToSelector:@selector(resizableImageWithCapInsets:resizingMode:)]) {
@@ -803,33 +945,33 @@ static dispatch_queue_t chat_presentation_queue;
                           (id)[UIColor colorWithWhite:0 alpha:0.15].CGColor];
         [self.toolbar.layer insertSublayer:shadow atIndex:0];
 
-        [self.sidebarButton setBackgroundImage:[UIImage imageNamed:@"BarButton"]
+        [self.sidebarButton setBackgroundImage:[DCInterfaceStyle barButtonBackgroundImage]
                                       forState:UIControlStateNormal
                                     barMetrics:UIBarMetricsDefault];
         [self.sidebarButton
-            setBackgroundImage:[UIImage imageNamed:@"BarButtonPressed"]
+            setBackgroundImage:[DCInterfaceStyle barButtonPressedBackgroundImage]
                       forState:UIControlStateHighlighted
                     barMetrics:UIBarMetricsDefault];
 
-        [self.memberButton setBackgroundImage:[UIImage imageNamed:@"BarButton"]
+        [self.memberButton setBackgroundImage:[DCInterfaceStyle barButtonBackgroundImage]
                                      forState:UIControlStateNormal
                                    barMetrics:UIBarMetricsDefault];
         [self.memberButton
-            setBackgroundImage:[UIImage imageNamed:@"BarButtonPressed"]
+            setBackgroundImage:[DCInterfaceStyle barButtonPressedBackgroundImage]
                       forState:UIControlStateHighlighted
                     barMetrics:UIBarMetricsDefault];
 
 
-        [self.sendButton setBackgroundImage:[UIImage imageNamed:@"SendMessageButton"]
+        [self.sendButton setBackgroundImage:[DCInterfaceStyle sendButtonBackgroundImage]
                                    forState:UIControlStateNormal];
-        [self.sendButton setBackgroundImage:[UIImage imageNamed:@"SendMessageButtonPressed"]
+        [self.sendButton setBackgroundImage:[DCInterfaceStyle sendButtonPressedBackgroundImage]
                                    forState:UIControlStateHighlighted];
-        [self.sendButton setBackgroundImage:[UIImage imageNamed:@"SendMessageButton-Disabled"]
+        [self.sendButton setBackgroundImage:[DCInterfaceStyle sendButtonDisabledBackgroundImage]
                                    forState:UIControlStateDisabled];
 
-        [self.photoButton setBackgroundImage:[UIImage imageNamed:@"CameraButton"]
+        [self.photoButton setBackgroundImage:[DCInterfaceStyle cameraButtonBackgroundImage]
                                     forState:UIControlStateNormal];
-        [self.photoButton setBackgroundImage:[UIImage imageNamed:@"CameraButtonPressed"]
+        [self.photoButton setBackgroundImage:[DCInterfaceStyle cameraButtonPressedBackgroundImage]
                                     forState:UIControlStateHighlighted];
     }
 
@@ -843,6 +985,8 @@ static dispatch_queue_t chat_presentation_queue;
     _baseMsgFieldBGHeight = self.messageFieldBG.frame.size.height;
     _baseToolbarHeight    = self.toolbar.frame.size.height;
     _baseInputOriginY = self.inputField.frame.origin.y;
+    self.attachmentComposerBaseOriginX = self.messageFieldBG.superview.frame.origin.x;
+    [self setupStagedAttachmentCountLabel];
 
     self.inputField.scrollEnabled = NO;
 
@@ -874,7 +1018,7 @@ static dispatch_queue_t chat_presentation_queue;
     self.typingUsers = [NSMutableDictionary dictionary];
     
     // Message Input bitmap
-    UIImage *img = [UIImage imageNamed:@"MessageField"];
+    UIImage *img = [DCInterfaceStyle messageFieldBackgroundImage];
     UIEdgeInsets caps = UIEdgeInsetsMake(15, 15, 15, 15);
     
     UIImage *stretch;
@@ -941,9 +1085,9 @@ static dispatch_queue_t chat_presentation_queue;
     button.accessibilityLabel = @"Jump to present";
     button.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin |
                               UIViewAutoresizingFlexibleTopMargin;
-    [button setBackgroundImage:[UIImage imageNamed:@"Down"]
+    [button setBackgroundImage:[DCInterfaceStyle downButtonBackgroundImage]
                       forState:UIControlStateNormal];
-    [button setBackgroundImage:[UIImage imageNamed:@"DownPressed"]
+    [button setBackgroundImage:[DCInterfaceStyle downButtonPressedBackgroundImage]
                       forState:UIControlStateHighlighted];
     [button addTarget:self
                action:@selector(didTapJumpToPresent)
@@ -995,7 +1139,7 @@ static dispatch_queue_t chat_presentation_queue;
     }
 
     if (!self.oldMode && self.sendButton) {
-        [self.sendButton setBackgroundImage:[UIImage imageNamed:@"SendMessageButton-Disabled"]
+        [self.sendButton setBackgroundImage:[DCInterfaceStyle sendButtonDisabledBackgroundImage]
                                    forState:UIControlStateDisabled];
     }
 
@@ -1151,6 +1295,7 @@ static dispatch_queue_t chat_presentation_queue;
     if (!channel) {
         self.inputFieldPlaceholder.text = @"Select a Channel";
         self.toolbar.userInteractionEnabled = NO;
+        [self updateStagedAttachmentComposerState];
         return;
     }
 
@@ -1162,6 +1307,7 @@ static dispatch_queue_t chat_presentation_queue;
         ? [NSString stringWithFormat:@"Message%@%@", prefix, channel.name ?: @""]
         : @"No Permission";
     self.toolbar.userInteractionEnabled = channel.writeable;
+    [self updateStagedAttachmentComposerState];
 }
 
 - (void)refreshSelectedChannelChrome {
@@ -1222,7 +1368,8 @@ static dispatch_queue_t chat_presentation_queue;
 }
 
 - (void)updateSendButtonEnabledState {
-    self.sendButton.enabled = self.inputField.text.length != 0;
+    BOOL hasStagedAttachments = !self.editingMessage && [self currentStagedAttachmentAssets].count > 0;
+    self.sendButton.enabled = self.inputField.text.length != 0 || hasStagedAttachments;
 }
 
 - (BOOL)textViewShouldBeginEditing:(UITextView *)textView {
@@ -1660,6 +1807,7 @@ static dispatch_queue_t chat_presentation_queue;
      * viewport bookkeeping and pagination until restoration is finished.
      */
     self.restoringWindowPosition = YES;
+    [self rebuildPendingAttachmentUploadHeader];
 
     // Immediately display cached content.  At the normal live-tail position,
     // do not force UITableView to synchronously lay out the entire visible pass
@@ -2102,14 +2250,16 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     NSString *messageID = payload[@"id"];
     DCChannel *selectedChannel = DCServerCommunicator.sharedInstance.selectedChannel;
 
-    if (![channelID isEqualToString:self.currentWindow.channelSnowflake] ||
-        ![channelID isEqualToString:selectedChannel.snowflake]) {
-        return;
-    }
-
     if (!messageID.length) {
         NSLog(@"%s: MESSAGE_CREATE had no message ID",
               __PRETTY_FUNCTION__);
+        return;
+    }
+
+    [self completePendingAttachmentForMessageSnowflake:messageID];
+
+    if (![channelID isEqualToString:self.currentWindow.channelSnowflake] ||
+        ![channelID isEqualToString:selectedChannel.snowflake]) {
         return;
     }
 
@@ -4334,15 +4484,15 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
             cell.universalImageView.image = nil;
             if (messageAtRowIndex.messageType == DCMessageTypeRecipientAdd || messageAtRowIndex.messageType == DCMessageTypeUserJoin) {
-                cell.universalImageView.image = [UIImage imageNamed:@"U-Add"];
+                cell.universalImageView.image = [DCInterfaceStyle universalAddImage];
             } else if (messageAtRowIndex.messageType == DCMessageTypeRecipientRemove) {
-                cell.universalImageView.image = [UIImage imageNamed:@"U-Remove"];
+                cell.universalImageView.image = [DCInterfaceStyle universalRemoveImage];
             } else if (messageAtRowIndex.messageType == DCMessageTypeChannelNameChange || messageAtRowIndex.messageType == DCMessageTypeChannelIconChange) {
-                cell.universalImageView.image = [UIImage imageNamed:@"U-Pen"];
+                cell.universalImageView.image = [DCInterfaceStyle universalEditImage];
             } else if (messageAtRowIndex.messageType == DCMessageTypeChannelPinnedMessage) {
-                cell.universalImageView.image = [UIImage imageNamed:@"U-Pin"];
+                cell.universalImageView.image = [DCInterfaceStyle universalPinImage];
             } else if (messageAtRowIndex.messageType == DCMessageTypeGuildBoost || messageAtRowIndex.messageType == DCMessageTypeThreadCreated) {
-                cell.universalImageView.image = [UIImage imageNamed:@"U-Boost"];
+                cell.universalImageView.image = [DCInterfaceStyle universalBoostImage];
             }
             cellPerfHeaderEnd = CFAbsoluteTimeGetCurrent();
 
@@ -5026,28 +5176,47 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
         }
 
     } else if ([popup tag] == 2) {                                      // Image source picker
-        UIImagePickerController *picker = UIImagePickerController.new;
-        picker.mediaTypes = [UIImagePickerController
-            availableMediaTypesForSourceType:
-                UIImagePickerControllerSourceTypeCamera];
-        picker.delegate = (id)self;
-
-        if (buttonIndex == 0) {
-            if ([UIImagePickerController
-                    isSourceTypeAvailable:
-                        UIImagePickerControllerSourceTypeCamera]) {
-                picker.sourceType = UIImagePickerControllerSourceTypeCamera;
-            } else {
-                return;
+        if (popup.destructiveButtonIndex != -1
+            && buttonIndex == popup.destructiveButtonIndex) {
+            NSString *channelID = DCServerCommunicator.sharedInstance.selectedChannel.snowflake;
+            if (channelID.length) {
+                [self.stagedAttachmentAssetsByChannel removeObjectForKey:channelID];
             }
-        } else if (buttonIndex == 1) {
-            picker.sourceType = UIImagePickerControllerSourceTypePhotoLibrary;
-        } else {
+            [self updateStagedAttachmentComposerState];
             return;
         }
-        [picker viewWillAppear:YES];
-        [self presentViewController:picker animated:YES completion:nil];
-        [picker viewWillAppear:YES];
+
+        NSString *buttonTitle = [popup buttonTitleAtIndex:buttonIndex];
+        if ([buttonTitle isEqualToString:@"Take Photo or Video"]) {
+            if ([self currentStagedAttachmentAssets].count >= 10) {
+                UIAlertView *alert = [[UIAlertView alloc]
+                    initWithTitle:@"Too Many Attachments"
+                          message:@"You can attach up to 10 photos or videos per message."
+                         delegate:nil
+                cancelButtonTitle:@"OK"
+                otherButtonTitles:nil];
+                [alert show];
+                return;
+            }
+
+            if (![UIImagePickerController
+                    isSourceTypeAvailable:
+                        UIImagePickerControllerSourceTypeCamera]) {
+                return;
+            }
+
+            UIImagePickerController *picker = UIImagePickerController.new;
+            picker.mediaTypes = [UIImagePickerController
+                availableMediaTypesForSourceType:
+                    UIImagePickerControllerSourceTypeCamera];
+            picker.delegate = (id)self;
+            picker.sourceType = UIImagePickerControllerSourceTypeCamera;
+            [picker viewWillAppear:YES];
+            [self presentViewController:picker animated:YES completion:nil];
+            [picker viewWillAppear:YES];
+        } else if ([buttonTitle isEqualToString:@"Choose Existing"]) {
+            [self presentMultiAttachmentPickerFromView:nil];
+        }
 
     } else if ([popup tag] == 3) {
         int addbut = self.replyingToMessage
@@ -6017,52 +6186,70 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
 - (IBAction)sendMessage:(id)sender {
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (![self.inputField.text isEqual:@""]) {
-            NSString *msg = [DCTools parseMessage:self.inputField.text
-                                        withGuild:DCServerCommunicator.sharedInstance.selectedChannel.parentGuild];
-            if (self.editingMessage) {
-                [DCServerCommunicator.sharedInstance.selectedChannel
-                    editMessage:self.editingMessage
-                    withContent:msg];
-            } else {
-                [DCServerCommunicator.sharedInstance.selectedChannel
-                           sendMessage:msg
-                    referencingMessage:self.replyingToMessage ? self.replyingToMessage : nil
+        NSArray *stagedAttachments = [self currentStagedAttachmentAssets];
+        BOOL hasAttachments = !self.editingMessage && stagedAttachments.count > 0;
+        BOOL hasText = self.inputField.text.length != 0;
+
+        if (!hasText && !hasAttachments) {
+            [self.inputField resignFirstResponder];
+            return;
+        }
+
+        NSString *msg = hasText
+            ? [DCTools parseMessage:self.inputField.text
+                          withGuild:DCServerCommunicator.sharedInstance.selectedChannel.parentGuild]
+            : @"";
+        DCMessage *replyTarget = self.replyingToMessage;
+        DCMessage *editingTarget = self.editingMessage;
+
+        if (editingTarget) {
+            [DCServerCommunicator.sharedInstance.selectedChannel
+                editMessage:editingTarget
+                withContent:msg];
+        } else if (hasAttachments) {
+            [self uploadSelectedAssets:stagedAttachments
+                               content:msg
+                    referencingMessage:replyTarget
                            disablePing:self.disablePing];
+
+            NSString *channelID = DCServerCommunicator.sharedInstance.selectedChannel.snowflake;
+            if (channelID.length) {
+                [self.stagedAttachmentAssetsByChannel removeObjectForKey:channelID];
             }
-            if (self.replyingToMessage || self.editingMessage) {
-                DCMessage *target = self.replyingToMessage ?: self.editingMessage;
-                NSUInteger idx = [self.messages indexOfObject:target];
+            [self updateStagedAttachmentComposerState];
+        } else {
+            [DCServerCommunicator.sharedInstance.selectedChannel
+                       sendMessage:msg
+                referencingMessage:replyTarget
+                       disablePing:self.disablePing];
+        }
 
-                /*
-                 * Clear these before reloading so the cell is configured
-                 * without its reply/editing state.
-                 */
-                self.replyingToMessage = nil;
-                self.editingMessage = nil;
+        if (replyTarget || editingTarget) {
+            DCMessage *target = replyTarget ?: editingTarget;
+            NSUInteger idx = [self.messages indexOfObject:target];
 
-                if (idx != NSNotFound && idx < self.messages.count) {
-                    NSInteger row = [self rowForModelIndex:idx];
+            self.replyingToMessage = nil;
+            self.editingMessage = nil;
 
-                    if (row >= 0 && row < [self.chatTableView numberOfRowsInSection:0]) {
-                        NSIndexPath *indexPath = [NSIndexPath indexPathForRow:row
-                                                                    inSection:0];
+            if (idx != NSNotFound && idx < self.messages.count) {
+                NSInteger row = [self rowForModelIndex:idx];
 
-                        [self.chatTableView reloadRowsAtIndexPaths:@[ indexPath ]
-                                                  withRowAnimation:UITableViewRowAnimationNone];
-                    }
+                if (row >= 0 && row < [self.chatTableView numberOfRowsInSection:0]) {
+                    NSIndexPath *indexPath = [NSIndexPath indexPathForRow:row
+                                                                inSection:0];
+                    [self.chatTableView reloadRowsAtIndexPaths:@[ indexPath ]
+                                              withRowAnimation:UITableViewRowAnimationNone];
                 }
             }
-            self.disablePing = NO;
-            [self.inputField setText:@""];
-            [self updateSendButtonEnabledState];
-            self.inputField.scrollEnabled = NO;
-            [self resizeInputField];
-            self.inputFieldPlaceholder.hidden = NO;
-            lastTimeInterval = 0;
-        } else {
-            [self.inputField resignFirstResponder];
         }
+
+        self.disablePing = NO;
+        [self.inputField setText:@""];
+        [self updateSendButtonEnabledState];
+        self.inputField.scrollEnabled = NO;
+        [self resizeInputField];
+        self.inputFieldPlaceholder.hidden = NO;
+        lastTimeInterval = 0;
 
         [self.chatTableView setContentOffset:CGPointZero animated:YES];
     });
@@ -6266,145 +6453,698 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
 - (IBAction)chooseImage:(id)sender {
     [self.inputField resignFirstResponder];
-        
-    // Dismiss existing popover if already showing
+
     if (self.imagePopoverController.popoverVisible) {
         [self.imagePopoverController dismissPopoverAnimated:YES];
         self.imagePopoverController = nil;
         return;
     }
 
-    if ([UIDevice currentDevice].userInterfaceIdiom
-        == UIUserInterfaceIdiomPad) {
-        // iPad-specific implementation using UIPopoverController
-        if ([UIImagePickerController
-                isSourceTypeAvailable:
-                    UIImagePickerControllerSourceTypePhotoLibrary]) {
-            UIImagePickerController *picker = UIImagePickerController.new;
-            picker.sourceType               = UIImagePickerControllerSourceTypePhotoLibrary;
-            picker.delegate                 = self;
+    BOOL cameraAvailable = [UIImagePickerController
+        isSourceTypeAvailable:UIImagePickerControllerSourceTypeCamera];
+    BOOL libraryAvailable = [UIImagePickerController
+        isSourceTypeAvailable:UIImagePickerControllerSourceTypePhotoLibrary];
 
-            // Initialize UIPopoverController
-            UIPopoverController *popoverController =
-                [[UIPopoverController alloc]
-                    initWithContentViewController:picker];
-            self.imagePopoverController = popoverController;
+    if (!cameraAvailable && !libraryAvailable) {
+        return;
+    }
 
-            if ([sender isKindOfClass:[UIButton class]]) {
-                // Use the button's view for popover presentation
-                UIButton *button = (UIButton *)sender;
-                [popoverController
-                    presentPopoverFromRect:button.bounds
-                                    inView:button
-                  permittedArrowDirections:UIPopoverArrowDirectionAny
-                                  animated:YES];
+    NSString *removeAttachmentsTitle =
+        [self currentStagedAttachmentAssets].count > 0 ? @"Remove Attachments" : nil;
+    UIActionSheet *imageSourceActionSheet = nil;
+
+    if (cameraAvailable && libraryAvailable) {
+        imageSourceActionSheet = [[UIActionSheet alloc]
+            initWithTitle:nil
+                 delegate:self
+        cancelButtonTitle:@"Cancel"
+   destructiveButtonTitle:removeAttachmentsTitle
+        otherButtonTitles:@"Take Photo or Video", @"Choose Existing", nil];
+    } else if (cameraAvailable) {
+        imageSourceActionSheet = [[UIActionSheet alloc]
+            initWithTitle:nil
+                 delegate:self
+        cancelButtonTitle:@"Cancel"
+   destructiveButtonTitle:removeAttachmentsTitle
+        otherButtonTitles:@"Take Photo or Video", nil];
+    } else {
+        imageSourceActionSheet = [[UIActionSheet alloc]
+            initWithTitle:nil
+                 delegate:self
+        cancelButtonTitle:@"Cancel"
+   destructiveButtonTitle:removeAttachmentsTitle
+        otherButtonTitles:@"Choose Existing", nil];
+    }
+
+    imageSourceActionSheet.tag = 2;
+
+    if ([UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad) {
+        UIView *sourceView = [sender isKindOfClass:[UIView class]] ? sender : self.photoButton;
+        [imageSourceActionSheet showFromRect:sourceView.bounds
+                                      inView:sourceView
+                                    animated:YES];
+    } else {
+        [imageSourceActionSheet showFromRect:self.toolbar.frame
+                                      inView:self.view
+                                    animated:YES];
+    }
+}
+
+- (NSMutableArray *)stagedAttachmentAssetsForChannelSnowflake:(NSString *)channelSnowflake
+                                                         create:(BOOL)create {
+    if (!channelSnowflake.length) return nil;
+
+    if (!self.stagedAttachmentAssetsByChannel && create) {
+        self.stagedAttachmentAssetsByChannel = [NSMutableDictionary dictionary];
+    }
+
+    NSMutableArray *assets = [self.stagedAttachmentAssetsByChannel objectForKey:channelSnowflake];
+    if (!assets && create) {
+        assets = [NSMutableArray array];
+        [self.stagedAttachmentAssetsByChannel setObject:assets forKey:channelSnowflake];
+    }
+    return assets;
+}
+
+- (NSArray *)currentStagedAttachmentAssets {
+    NSString *channelID = DCServerCommunicator.sharedInstance.selectedChannel.snowflake;
+    NSMutableArray *assets = [self stagedAttachmentAssetsForChannelSnowflake:channelID create:NO];
+    return assets ?: @[];
+}
+
+- (void)setupStagedAttachmentCountLabel {
+    if (self.stagedAttachmentCountLabel || !self.photoButton) return;
+
+    self.attachmentCameraButtonBaseWidth = self.photoButton.frame.size.width;
+
+    UILabel *label = [[UILabel alloc] initWithFrame:CGRectZero];
+    label.backgroundColor = [UIColor clearColor];
+    label.textColor = [UIColor colorWithWhite:(233.0f / 255.0f) alpha:1.0f];
+    label.font = [UIFont boldSystemFontOfSize:15.0f];
+    label.textAlignment = UITextAlignmentCenter;
+    label.userInteractionEnabled = NO;
+    label.layer.shadowColor = [UIColor blackColor].CGColor;
+    label.layer.shadowOpacity = 0.30f;
+    label.layer.shadowOffset = CGSizeMake(0.0f, -1.0f);
+    label.layer.shadowRadius = 0.5f;
+    label.layer.masksToBounds = NO;
+    label.hidden = YES;
+    self.stagedAttachmentCountLabel = label;
+    [self.photoButton addSubview:label];
+    [self updateStagedAttachmentComposerState];
+}
+
+- (void)updateStagedAttachmentComposerState {
+    if (!self.stagedAttachmentCountLabel || !self.photoButton || !self.messageFieldBG.superview) {
+        [self updateSendButtonEnabledState];
+        return;
+    }
+
+    NSUInteger count = [self currentStagedAttachmentAssets].count;
+    BOOL hasAttachments = count > 0;
+    CGFloat baseWidth = self.attachmentCameraButtonBaseWidth;
+    if (baseWidth <= 0.0f) {
+        baseWidth = self.photoButton.frame.size.width;
+        self.attachmentCameraButtonBaseWidth = baseWidth;
+    }
+
+    CGRect buttonFrame = self.photoButton.frame;
+    buttonFrame.size.width = hasAttachments ? baseWidth * 2.0f : baseWidth;
+    self.photoButton.frame = buttonFrame;
+
+    if (!self.oldMode) {
+        UIImage *normalImage = hasAttachments
+            ? [DCInterfaceStyle cameraButtonStagedAttachmentsBackgroundImage]
+            : [DCInterfaceStyle cameraButtonBackgroundImage];
+        UIImage *pressedImage = hasAttachments
+            ? [DCInterfaceStyle cameraButtonStagedAttachmentsPressedBackgroundImage]
+            : [DCInterfaceStyle cameraButtonPressedBackgroundImage];
+        [self.photoButton setBackgroundImage:normalImage forState:UIControlStateNormal];
+        [self.photoButton setBackgroundImage:pressedImage forState:UIControlStateHighlighted];
+    }
+
+    UILabel *label = self.stagedAttachmentCountLabel;
+    label.hidden = !hasAttachments;
+    label.text = hasAttachments ? [NSString stringWithFormat:@"%lu", (unsigned long)count] : @"";
+
+    CGFloat rightInset = 9.0f;
+    CGFloat labelX = baseWidth;
+    CGFloat labelWidth = MAX(0.0f, buttonFrame.size.width - labelX - rightInset);
+    label.frame = CGRectMake(labelX,
+                             0.0f,
+                             labelWidth,
+                             buttonFrame.size.height);
+
+    UIView *composer = self.messageFieldBG.superview;
+    CGRect composerFrame = composer.frame;
+    composerFrame.origin.x = self.attachmentComposerBaseOriginX +
+        (buttonFrame.size.width - baseWidth);
+    composer.frame = composerFrame;
+
+    [self updateJumpToPresentButtonFrame];
+    [self updateSendButtonEnabledState];
+}
+
+- (void)stageCapturedAssetAtURL:(NSURL *)assetURL
+            forChannelSnowflake:(NSString *)channelSnowflake {
+    if (!assetURL || !channelSnowflake.length) return;
+
+    if (!self.attachmentAssetLibrary) {
+        self.attachmentAssetLibrary = [[ALAssetsLibrary alloc] init];
+    }
+
+    __weak DCChatViewController *weakSelf = self;
+    [self.attachmentAssetLibrary assetForURL:assetURL
+                              resultBlock:^(ALAsset *asset) {
+        DCChatViewController *strongSelf = weakSelf;
+        if (!strongSelf || !asset) return;
+
+        NSMutableArray *assets =
+            [strongSelf stagedAttachmentAssetsForChannelSnowflake:channelSnowflake create:YES];
+        if (assets.count >= 10) {
+            UIAlertView *alert = [[UIAlertView alloc]
+                initWithTitle:@"Too Many Attachments"
+                      message:@"You can attach up to 10 photos or videos per message."
+                     delegate:nil
+            cancelButtonTitle:@"OK"
+            otherButtonTitles:nil];
+            [alert show];
+            return;
+        }
+
+        NSURL *newAssetURL = [asset valueForProperty:ALAssetPropertyAssetURL];
+        NSString *newKey = newAssetURL.absoluteString;
+        for (ALAsset *existingAsset in assets) {
+            NSURL *existingURL = [existingAsset valueForProperty:ALAssetPropertyAssetURL];
+            if (newKey.length && [existingURL.absoluteString isEqualToString:newKey]) {
+                return;
             }
         }
-    } else {
-        if ([UIImagePickerController
-                isSourceTypeAvailable:
-                    UIImagePickerControllerSourceTypeCamera]) {
-            UIActionSheet *imageSourceActionSheet =
-                [[UIActionSheet alloc] initWithTitle:nil
-                                            delegate:self
-                                   cancelButtonTitle:@"Cancel"
-                              destructiveButtonTitle:nil
-                                   otherButtonTitles:@"Take Photo or Video",
-                                                     @"Choose Existing", nil];
-            [imageSourceActionSheet setTag:2];
-            [imageSourceActionSheet showFromRect:self.toolbar.frame inView:self.view animated:YES];
-        } else {
-            // Camera is not supported, use photo library
-            UIImagePickerController *picker = UIImagePickerController.new;
-            picker.sourceType               = UIImagePickerControllerSourceTypePhotoLibrary;
-            picker.delegate                 = self;
+        [assets addObject:asset];
 
-            [self presentViewController:picker animated:YES completion:nil];
+        if ([channelSnowflake isEqualToString:
+                DCServerCommunicator.sharedInstance.selectedChannel.snowflake]) {
+            [strongSelf updateStagedAttachmentComposerState];
+        }
+    } failureBlock:^(NSError *error) {
+        UIAlertView *alert = [[UIAlertView alloc]
+            initWithTitle:@"Attachment Failed"
+                  message:error.localizedDescription ?: @"The captured photo or video could not be attached."
+                 delegate:nil
+        cancelButtonTitle:@"OK"
+        otherButtonTitles:nil];
+        [alert show];
+    }];
+}
+
+- (void)presentMultiAttachmentPickerFromView:(UIView *)sourceView {
+    if (!self.attachmentAssetLibrary) {
+        self.attachmentAssetLibrary = [[ALAssetsLibrary alloc] init];
+    }
+
+    DCMultiAttachmentPickerController *picker = [[DCMultiAttachmentPickerController alloc]
+        initWithSelectedAssets:[self currentStagedAttachmentAssets]
+                    assetLibrary:self.attachmentAssetLibrary];
+    picker.pickerDelegate = self;
+    picker.maximumSelectionCount = 10;
+
+    if ([UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad) {
+        UIPopoverController *popover = [[UIPopoverController alloc]
+            initWithContentViewController:picker];
+        popover.popoverContentSize = CGSizeMake(360.0f, 520.0f);
+        self.imagePopoverController = popover;
+
+        UIView *anchorView = sourceView ?: self.photoButton;
+        [popover presentPopoverFromRect:anchorView.bounds
+                                 inView:anchorView
+               permittedArrowDirections:UIPopoverArrowDirectionAny
+                               animated:YES];
+    } else {
+        [self presentViewController:picker animated:YES completion:nil];
+    }
+}
+
+- (DCPendingAttachmentUpload *)beginPendingAttachmentUploadForChannel:(DCChannel *)channel {
+    if (!channel.snowflake.length) return nil;
+
+    if (!self.pendingAttachmentUploads) {
+        self.pendingAttachmentUploads = [NSMutableArray array];
+    }
+
+    NSArray *objects = [[NSBundle mainBundle] loadNibNamed:@"DCChatTableCell"
+                                                     owner:nil
+                                                   options:nil];
+    DCChatTableCell *cell = nil;
+    for (id object in objects) {
+        if ([object isKindOfClass:[DCChatTableCell class]]) {
+            cell = object;
+            break;
         }
     }
+    if (!cell) return nil;
+
+    cell.selectionStyle = UITableViewCellSelectionStyleNone;
+    cell.userInteractionEnabled = NO;
+    cell.transform = CGAffineTransformMakeScale(1.0f, -1.0f);
+    cell.contentTextView.hidden = YES;
+    cell.referencedProfileImage.hidden = YES;
+    cell.referencedAuthorLabel.hidden = YES;
+    cell.referencedMessage.hidden = YES;
+    cell.universalImageView.hidden = YES;
+    cell.avatarDecoration.image = nil;
+    cell.backgroundColor = [UIColor clearColor];
+    cell.contentView.backgroundColor =
+        [UIColor colorWithRed:40.0f / 255.0f
+                        green:41.0f / 255.0f
+                         blue:46.0f / 255.0f
+                        alpha:1.0f];
+
+    DCServerCommunicator *communicator = DCServerCommunicator.sharedInstance;
+    DCUser *currentUser = [communicator userForSnowflake:communicator.snowflake];
+    DCGuild *guild = channel.parentGuild;
+    NSString *displayName = [currentUser displayNameInGuild:guild];
+    if (!displayName.length) {
+        displayName = communicator.currentUserInfo.globalName;
+    }
+    if (!displayName.length) {
+        displayName = communicator.currentUserInfo.username ?: @"";
+    }
+
+    UIImage *avatar = currentUser
+        ? [DCTools cachedUserAvatar:currentUser inGuild:guild]
+        : nil;
+    cell.profileImage.image = avatar ?: currentUser.profileImage;
+    cell.authorLabel.text = displayName;
+    cell.timestampLabel.text = @"Uploading…";
+
+    CGFloat width = MAX(80.0f, self.chatTableView.bounds.size.width);
+    CGFloat authorOriginX = cell.authorLabel.frame.origin.x;
+    CGFloat gap = 8.0f;
+    CGFloat rightPadding = 8.0f;
+    CGSize statusSize = [cell.timestampLabel.text sizeWithFont:cell.timestampLabel.font];
+    CGSize nameSize = [displayName sizeWithFont:cell.authorLabel.font];
+    CGFloat maxRightEdge = MAX(authorOriginX, width - rightPadding);
+    CGFloat naturalStatusX = authorOriginX + nameSize.width + gap;
+    CGFloat maxStatusX = MAX(authorOriginX, maxRightEdge - statusSize.width);
+    CGFloat actualStatusX = MIN(naturalStatusX, maxStatusX);
+    CGFloat actualNameWidth = MAX(0.0f, actualStatusX - authorOriginX - gap);
+
+    cell.authorLabel.frame = CGRectMake(authorOriginX,
+                                        cell.authorLabel.frame.origin.y,
+                                        actualNameWidth,
+                                        cell.authorLabel.frame.size.height);
+    cell.timestampLabel.frame = CGRectMake(actualStatusX,
+                                           cell.timestampLabel.frame.origin.y,
+                                           statusSize.width,
+                                           cell.timestampLabel.frame.size.height);
+
+    UIProgressView *progressView = [[UIProgressView alloc]
+        initWithProgressViewStyle:UIProgressViewStyleDefault];
+    progressView.frame = CGRectMake(55.0f,
+                                    35.0f,
+                                    MIN(200.0f, MAX(40.0f, width - 66.0f)),
+                                    progressView.frame.size.height);
+    progressView.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    progressView.progress = 0.0f;
+    [cell addSubview:progressView];
+
+    DCPendingAttachmentUpload *upload = [DCPendingAttachmentUpload new];
+    upload.channelSnowflake = channel.snowflake;
+    upload.cell = cell;
+    upload.progressView = progressView;
+    [self.pendingAttachmentUploads addObject:upload];
+
+    [self rebuildPendingAttachmentUploadHeader];
+    return upload;
+}
+
+- (void)updatePendingAttachmentUpload:(DCPendingAttachmentUpload *)upload status:(NSString *)status {
+    if (!upload || !status.length) return;
+
+    DCChatTableCell *cell = upload.cell;
+    cell.timestampLabel.text = status;
+
+    CGFloat width = MAX(80.0f, self.chatTableView.bounds.size.width);
+    CGFloat authorOriginX = cell.authorLabel.frame.origin.x;
+    CGFloat gap = 8.0f;
+    CGFloat rightPadding = 8.0f;
+    CGSize statusSize = [status sizeWithFont:cell.timestampLabel.font];
+    CGSize nameSize = [cell.authorLabel.text sizeWithFont:cell.authorLabel.font];
+    CGFloat maxRightEdge = MAX(authorOriginX, width - rightPadding);
+    CGFloat naturalStatusX = authorOriginX + nameSize.width + gap;
+    CGFloat maxStatusX = MAX(authorOriginX, maxRightEdge - statusSize.width);
+    CGFloat actualStatusX = MIN(naturalStatusX, maxStatusX);
+    CGFloat actualNameWidth = MAX(0.0f, actualStatusX - authorOriginX - gap);
+
+    cell.authorLabel.frame = CGRectMake(authorOriginX,
+                                        cell.authorLabel.frame.origin.y,
+                                        actualNameWidth,
+                                        cell.authorLabel.frame.size.height);
+    cell.timestampLabel.frame = CGRectMake(actualStatusX,
+                                           cell.timestampLabel.frame.origin.y,
+                                           statusSize.width,
+                                           cell.timestampLabel.frame.size.height);
+}
+
+- (void)updatePendingAttachmentUpload:(DCPendingAttachmentUpload *)upload
+                             progress:(CGFloat)progress {
+    if (!upload || ![self.pendingAttachmentUploads containsObject:upload]) return;
+    CGFloat clamped = MIN(1.0f, MAX(0.0f, progress));
+    upload.progressView.progress = clamped;
+}
+
+- (void)finishPendingAttachmentUpload:(DCPendingAttachmentUpload *)upload
+                       messageSnowflake:(NSString *)messageSnowflake
+                                  error:(NSError *)error {
+    if (!upload || ![self.pendingAttachmentUploads containsObject:upload]) return;
+
+    if (error) {
+        [self updatePendingAttachmentUpload:upload status:@"Upload failed"];
+        upload.progressView.progress = 0.0f;
+
+        UIAlertView *alert = [[UIAlertView alloc]
+            initWithTitle:@"Upload Failed"
+                  message:error.localizedDescription ?: @"The attachment could not be uploaded."
+                 delegate:nil
+        cancelButtonTitle:@"OK"
+        otherButtonTitles:nil];
+        [alert show];
+
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            [self removePendingAttachmentUpload:upload];
+        });
+        return;
+    }
+
+    upload.messageSnowflake = messageSnowflake;
+    [self updatePendingAttachmentUpload:upload status:@"Finishing…"];
+    upload.progressView.progress = 1.0f;
+
+    NSString *selectedChannelID =
+        DCServerCommunicator.sharedInstance.selectedChannel.snowflake;
+    if (![upload.channelSnowflake isEqualToString:selectedChannelID]) {
+        [self removePendingAttachmentUpload:upload];
+        return;
+    }
+
+    if (messageSnowflake.length &&
+        [self modelIndexForMessageSnowflake:messageSnowflake] != NSNotFound) {
+        [self removePendingAttachmentUpload:upload];
+        return;
+    }
+
+    NSTimeInterval fallbackDelay = messageSnowflake.length ? 6.0 : 1.5;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                 (int64_t)(fallbackDelay * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        if (![self.pendingAttachmentUploads containsObject:upload]) return;
+
+        BOOL messageAlreadyVisible =
+            upload.messageSnowflake.length &&
+            [self modelIndexForMessageSnowflake:upload.messageSnowflake] != NSNotFound;
+        [self removePendingAttachmentUpload:upload];
+
+        if (!messageAlreadyVisible &&
+            [upload.channelSnowflake isEqualToString:
+                DCServerCommunicator.sharedInstance.selectedChannel.snowflake]) {
+            [self handleForwardReconcile];
+        }
+    });
+}
+
+- (void)removePendingAttachmentUpload:(DCPendingAttachmentUpload *)upload {
+    if (!upload) return;
+
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self removePendingAttachmentUpload:upload];
+        });
+        return;
+    }
+
+    if (![self.pendingAttachmentUploads containsObject:upload]) return;
+
+    [self.pendingAttachmentUploads removeObject:upload];
+    [self rebuildPendingAttachmentUploadHeader];
+
+    upload.progressView = nil;
+    upload.cell = nil;
+}
+
+- (void)completePendingAttachmentForMessageSnowflake:(NSString *)messageSnowflake {
+    if (!messageSnowflake.length || self.pendingAttachmentUploads.count == 0) return;
+
+    DCPendingAttachmentUpload *matched = nil;
+    for (DCPendingAttachmentUpload *upload in self.pendingAttachmentUploads) {
+        if ([upload.messageSnowflake isEqualToString:messageSnowflake]) {
+            matched = upload;
+            break;
+        }
+    }
+    if (matched) [self removePendingAttachmentUpload:matched];
+}
+
+- (void)rebuildPendingAttachmentUploadHeader {
+    if (!self.chatTableView) return;
+
+    NSString *channelID = DCServerCommunicator.sharedInstance.selectedChannel.snowflake;
+    NSMutableArray *visibleUploads = [NSMutableArray array];
+    for (DCPendingAttachmentUpload *upload in self.pendingAttachmentUploads) {
+        if ([upload.channelSnowflake isEqualToString:channelID]) {
+            [visibleUploads addObject:upload];
+        }
+    }
+
+    BOOL followLiveTail =
+        self.currentWindow &&
+        !self.currentWindow.hasMoreAfter &&
+        self.chatTableView.contentOffset.y <= 10.0f;
+    CGFloat previousContentHeight = self.chatTableView.contentSize.height;
+    CGPoint previousOffset = self.chatTableView.contentOffset;
+
+    if (visibleUploads.count == 0) {
+        self.chatTableView.tableHeaderView = nil;
+    } else {
+        CGFloat width = MAX(80.0f, self.chatTableView.bounds.size.width);
+        UIView *header = [[UIView alloc]
+            initWithFrame:CGRectMake(0.0f,
+                                     0.0f,
+                                     width,
+                                     DCPendingAttachmentCellHeight * visibleUploads.count)];
+        header.backgroundColor = [UIColor clearColor];
+        header.userInteractionEnabled = NO;
+
+        CGFloat y = 0.0f;
+        for (DCPendingAttachmentUpload *upload in [visibleUploads reverseObjectEnumerator]) {
+            DCChatTableCell *cell = upload.cell;
+            cell.frame = CGRectMake(0.0f,
+                                    y,
+                                    width,
+                                    DCPendingAttachmentCellHeight);
+            cell.contentView.frame = cell.bounds;
+            upload.progressView.frame = CGRectMake(55.0f,
+                                                   35.0f,
+                                                   MIN(200.0f, MAX(40.0f, width - 66.0f)),
+                                                   upload.progressView.frame.size.height);
+            [header addSubview:cell];
+            y += DCPendingAttachmentCellHeight;
+        }
+        self.chatTableView.tableHeaderView = header;
+    }
+
+    [self.chatTableView layoutIfNeeded];
+    [self updateEmptyChatLoadingIndicator];
+    if (self.restoringWindowPosition) return;
+
+    if (followLiveTail) {
+        [self.chatTableView setContentOffset:CGPointZero animated:NO];
+    } else {
+        CGFloat contentHeightDelta =
+            self.chatTableView.contentSize.height - previousContentHeight;
+        CGFloat targetOffsetY = [self clampedOffsetY:previousOffset.y + contentHeightDelta];
+        [self.chatTableView setContentOffset:CGPointMake(previousOffset.x, targetOffsetY)
+                                    animated:NO];
+    }
+}
+
+- (void)multiAttachmentPickerControllerDidCancel:(DCMultiAttachmentPickerController *)picker {
+    if (self.imagePopoverController) {
+        [self.imagePopoverController dismissPopoverAnimated:YES];
+        self.imagePopoverController = nil;
+    } else {
+        [picker dismissViewControllerAnimated:YES completion:nil];
+    }
+}
+
+- (void)multiAttachmentPickerController:(DCMultiAttachmentPickerController *)picker
+                    didFinishWithAssets:(NSArray *)assets {
+    NSString *channelID = DCServerCommunicator.sharedInstance.selectedChannel.snowflake;
+    if (channelID.length) {
+        if (!self.stagedAttachmentAssetsByChannel) {
+            self.stagedAttachmentAssetsByChannel = [NSMutableDictionary dictionary];
+        }
+        [self.stagedAttachmentAssetsByChannel
+            setObject:[NSMutableArray arrayWithArray:assets]
+               forKey:channelID];
+    }
+
+    if (self.imagePopoverController) {
+        [self.imagePopoverController dismissPopoverAnimated:YES];
+        self.imagePopoverController = nil;
+    } else {
+        [picker dismissViewControllerAnimated:YES completion:nil];
+    }
+    [self updateStagedAttachmentComposerState];
+}
+
+- (void)uploadSelectedAssets:(NSArray *)assets
+                     content:(NSString *)content
+          referencingMessage:(DCMessage *)referencedMessage
+                 disablePing:(BOOL)disablePing {
+    if (assets.count == 0) return;
+
+    DCChannel *uploadChannel = DCServerCommunicator.sharedInstance.selectedChannel;
+    DCPendingAttachmentUpload *pending =
+        [self beginPendingAttachmentUploadForChannel:uploadChannel];
+    [self updatePendingAttachmentUpload:pending status:@"Preparing…"];
+
+    NSArray *assetSnapshot = [NSArray arrayWithArray:assets];
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        NSMutableArray *fileURLs = [NSMutableArray arrayWithCapacity:assetSnapshot.count];
+        NSMutableArray *mimeTypes = [NSMutableArray arrayWithCapacity:assetSnapshot.count];
+        NSMutableArray *filenames = [NSMutableArray arrayWithCapacity:assetSnapshot.count];
+        NSError *preparationError = nil;
+
+        for (NSUInteger i = 0; i < assetSnapshot.count; i++) {
+            ALAsset *asset = [assetSnapshot objectAtIndex:i];
+            NSString *mimeType = nil;
+            NSString *filename = nil;
+            NSURL *fileURL = DCCopyAssetToTemporaryFile(asset,
+                                                        i,
+                                                        &mimeType,
+                                                        &filename,
+                                                        &preparationError);
+            if (!fileURL || !mimeType.length || !filename.length) break;
+            [fileURLs addObject:fileURL];
+            [mimeTypes addObject:mimeType];
+            [filenames addObject:filename];
+        }
+
+        if (fileURLs.count != assetSnapshot.count) {
+            DCRemoveTemporaryAttachmentFiles(fileURLs);
+            dispatch_async(dispatch_get_main_queue(), ^{
+                NSError *error = preparationError ?: [NSError
+                    errorWithDomain:@"DiscordClassicAttachmentUpload"
+                               code:NSURLErrorCannotOpenFile
+                           userInfo:nil];
+                [self finishPendingAttachmentUpload:pending
+                                    messageSnowflake:nil
+                                               error:error];
+            });
+            return;
+        }
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self updatePendingAttachmentUpload:pending status:@"Uploading…"];
+        });
+
+        [uploadChannel sendTemporaryFileURLs:fileURLs
+                          mimeTypes:mimeTypes
+                          filenames:filenames
+                            content:content ?: @""
+                 referencingMessage:referencedMessage
+                        disablePing:disablePing
+                           progress:^(CGFloat progress) {
+                               [self updatePendingAttachmentUpload:pending progress:progress];
+                           }
+                         completion:^(NSString *messageSnowflake, NSError *error) {
+                             [self finishPendingAttachmentUpload:pending
+                                                messageSnowflake:messageSnowflake
+                                                           error:error];
+                         }];
+    });
+}
+
+- (void)imagePickerControllerDidCancel:(UIImagePickerController *)picker {
+    [picker dismissViewControllerAnimated:YES completion:nil];
+    [self.imagePopoverController dismissPopoverAnimated:YES];
+    self.imagePopoverController = nil;
 }
 
 - (void)imagePickerController:(UIImagePickerController *)picker
     didFinishPickingMediaWithInfo:(NSDictionary *)info {
+    NSString *channelID = [DCServerCommunicator.sharedInstance.selectedChannel.snowflake copy];
+    NSString *mediaType = [info objectForKey:UIImagePickerControllerMediaType];
+
     [picker dismissViewControllerAnimated:YES completion:nil];
     [self.imagePopoverController dismissPopoverAnimated:YES];
     self.imagePopoverController = nil;
 
-    NSString *mediaType = [info objectForKey:UIImagePickerControllerMediaType];
+    if (!channelID.length) return;
+    if (!self.attachmentAssetLibrary) {
+        self.attachmentAssetLibrary = [[ALAssetsLibrary alloc] init];
+    }
 
-    if ([mediaType isEqualToString:@"public.movie"]) { // Check if it's a video
-        NSURL *videoURL     = [info objectForKey:UIImagePickerControllerMediaURL];
-        NSString *extension = [videoURL pathExtension];
+    __weak DCChatViewController *weakSelf = self;
+    if ([mediaType isEqualToString:@"public.movie"]) {
+        NSURL *videoURL = [info objectForKey:UIImagePickerControllerMediaURL];
+        if (!videoURL) return;
 
-        NSString *mimeType;
-        if ([extension caseInsensitiveCompare:@"mov"] == NSOrderedSame) {
-            mimeType = @"video/mov";
-        } else if ([extension caseInsensitiveCompare:@"mp4"] == NSOrderedSame) {
-            mimeType = @"video/mp4";
-        } else {
+        if (![self.attachmentAssetLibrary videoAtPathIsCompatibleWithSavedPhotosAlbum:videoURL]) {
+            UIAlertView *alert = [[UIAlertView alloc]
+                initWithTitle:@"Video Unavailable"
+                      message:@"This video could not be saved to the photo library."
+                     delegate:nil
+            cancelButtonTitle:@"OK"
+            otherButtonTitles:nil];
+            [alert show];
             return;
         }
 
+        [self.attachmentAssetLibrary writeVideoAtPathToSavedPhotosAlbum:videoURL
+                                                     completionBlock:^(NSURL *assetURL, NSError *error) {
+            DCChatViewController *strongSelf = weakSelf;
+            if (!strongSelf) return;
+            if (error || !assetURL) {
+                UIAlertView *alert = [[UIAlertView alloc]
+                    initWithTitle:@"Attachment Failed"
+                          message:error.localizedDescription ?: @"The captured video could not be saved."
+                         delegate:nil
+                cancelButtonTitle:@"OK"
+                otherButtonTitles:nil];
+                [alert show];
+                return;
+            }
+            [strongSelf stageCapturedAssetAtURL:assetURL forChannelSnowflake:channelID];
+        }];
+        return;
+    }
 
-        // Use the sendVideo:mimeType: function to send the video
-        [DCServerCommunicator.sharedInstance.selectedChannel
-            sendVideo:videoURL
-             mimeType:mimeType];
-
-    } else if ([mediaType
-                   isEqualToString:@"public.image"]) { // Check if it's an image
-        UIImage *originalImage =
-            [info objectForKey:UIImagePickerControllerEditedImage];
-        if (!originalImage) {
-            originalImage =
-                [info objectForKey:UIImagePickerControllerOriginalImage];
+    if ([mediaType isEqualToString:@"public.image"]) {
+        UIImage *image = [info objectForKey:UIImagePickerControllerEditedImage];
+        if (!image) {
+            image = [info objectForKey:UIImagePickerControllerOriginalImage];
         }
-        if (!originalImage) {
-            originalImage = [info objectForKey:UIImagePickerControllerCropRect];
-        }
+        if (!image.CGImage) return;
 
-        // Determine the MIME type for the image based on the data
-        NSString *mimeType = @"image/jpeg";
-
-        NSString *extension =
-            [info[UIImagePickerControllerReferenceURL] pathExtension];
-        if ([extension caseInsensitiveCompare:@"png"] == NSOrderedSame) {
-            mimeType = @"image/png";
-        } else if ([extension caseInsensitiveCompare:@"gif"] == NSOrderedSame) {
-            mimeType = @"image/gif";
-        }
-        if ([mimeType isEqualToString:@"image/gif"]) {
-            ALAssetsLibrary *library = [[ALAssetsLibrary alloc] init];
-            [library assetForURL:
-                         [info objectForKey:UIImagePickerControllerReferenceURL]
-                     resultBlock:^(ALAsset *asset) {
-                         ALAssetRepresentation *representation =
-                             [asset defaultRepresentation];
-
-                         Byte *buffer =
-                             (Byte *)malloc((NSUInteger)representation.size);
-                         NSUInteger buffered = [representation
-                               getBytes:buffer
-                             fromOffset:0
-                                 length:(NSUInteger)representation.size
-                                  error:nil];
-                         NSData *data        = [NSData dataWithBytesNoCopy:buffer
-                                                             length:buffered
-                                                       freeWhenDone:YES];
-
-                         [DCServerCommunicator.sharedInstance.selectedChannel
-                             sendData:data
-                             mimeType:mimeType];
-                     }
-                    failureBlock:^(NSError *error){
-
-                    }];
-
-        } else {
-            [DCServerCommunicator.sharedInstance.selectedChannel
-                sendImage:originalImage
-                 mimeType:mimeType];
-        }
+        [self.attachmentAssetLibrary writeImageToSavedPhotosAlbum:image.CGImage
+                                                    orientation:(ALAssetOrientation)image.imageOrientation
+                                                completionBlock:^(NSURL *assetURL, NSError *error) {
+            DCChatViewController *strongSelf = weakSelf;
+            if (!strongSelf) return;
+            if (error || !assetURL) {
+                UIAlertView *alert = [[UIAlertView alloc]
+                    initWithTitle:@"Attachment Failed"
+                          message:error.localizedDescription ?: @"The captured photo could not be saved."
+                         delegate:nil
+                cancelButtonTitle:@"OK"
+                otherButtonTitles:nil];
+                [alert show];
+                return;
+            }
+            [strongSelf stageCapturedAssetAtURL:assetURL forChannelSnowflake:channelID];
+        }];
     }
 }
 
@@ -6427,6 +7167,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
         self.view.bounds.size.width,
         self.toolbar.height
     );
+    [self rebuildPendingAttachmentUploadHeader];
     [self updateJumpToPresentButtonFrame];
     [self layoutEmptyChatLoadingIndicator];
     [[DCCacheManager sharedInstance] invalidateAllMessages];

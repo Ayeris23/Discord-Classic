@@ -10,8 +10,29 @@
 #import "DCGuildListViewController.h"
 #import "DCServerCommunicator.h"
 #import "DCImageViewController.h"
+#import "DCInterfaceStyle.h"
 
 @implementation DCViewController
+
++ (void)initialize {
+    if (self != [DCViewController class]) {
+        return;
+    }
+
+    UIBarButtonItem *navigationBarButtons =
+        [UIBarButtonItem appearanceWhenContainedIn:[UINavigationBar class],
+                                                [DCViewController class],
+                                                nil];
+
+    [navigationBarButtons
+        setBackButtonBackgroundImage:[DCInterfaceStyle navigationBackButtonBackgroundImage]
+                            forState:UIControlStateNormal
+                          barMetrics:UIBarMetricsDefault];
+    [navigationBarButtons
+        setBackButtonBackgroundImage:[DCInterfaceStyle navigationBackButtonPressedBackgroundImage]
+                            forState:UIControlStateHighlighted
+                          barMetrics:UIBarMetricsDefault];
+}
 
 - (void)viewDidLoad {
     [super viewDidLoad];

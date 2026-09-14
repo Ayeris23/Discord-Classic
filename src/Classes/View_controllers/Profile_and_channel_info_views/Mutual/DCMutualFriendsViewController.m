@@ -6,6 +6,7 @@
 //  Copyright (c) 2025 bag.xml. All rights reserved.
 //
 
+#import "DCInterfaceStyle.h"
 #import "DCMutualFriendsViewController.h"
 #include <UIKit/UIKit.h>
 #import "DCContentManager.h"
@@ -37,12 +38,12 @@
 - (void)viewDidLoad {
     [super viewDidLoad];
 
-    [self.titleBar setBackgroundImage:[UIImage imageNamed:@"TbarBG"]
+    [self.titleBar setBackgroundImage:[DCInterfaceStyle navigationBarBackgroundImage]
                         forBarMetrics:UIBarMetricsDefault];
-    [self.doneButton setBackgroundImage:[UIImage imageNamed:@"BarButtonDone"]
+    [self.doneButton setBackgroundImage:[DCInterfaceStyle primaryBarButtonBackgroundImage]
                                forState:UIControlStateNormal
                              barMetrics:UIBarMetricsDefault];
-    [self.doneButton setBackgroundImage:[UIImage imageNamed:@"BarButtonDonePressed"]
+    [self.doneButton setBackgroundImage:[DCInterfaceStyle primaryBarButtonPressedBackgroundImage]
                                forState:UIControlStateHighlighted
                              barMetrics:UIBarMetricsDefault];
 

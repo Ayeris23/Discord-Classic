@@ -6,6 +6,7 @@
 //  Copyright (c) 2025 bag.xml. All rights reserved.
 //
 
+#import "DCInterfaceStyle.h"
 #import "DCOwnAccountInfoManagementController.h"
 #include "DCUser.h"
 #include <Foundation/Foundation.h>
@@ -68,21 +69,21 @@
 - (void)viewDidLoad {
     [super viewDidLoad];
     [self.navigationController.navigationBar
-        setBackgroundImage:[UIImage imageNamed:@"TbarBG"]
+        setBackgroundImage:[DCInterfaceStyle navigationBarBackgroundImage]
              forBarMetrics:UIBarMetricsDefault];
     self.navigationItem.title = [NSString
         stringWithFormat:@"Me (%@)", DCServerCommunicator.sharedInstance.currentUserInfo.globalName];
-    [self.doneButton setBackgroundImage:[UIImage imageNamed:@"BarButtonDone"]
+    [self.doneButton setBackgroundImage:[DCInterfaceStyle primaryBarButtonBackgroundImage]
                                forState:UIControlStateNormal
                              barMetrics:UIBarMetricsDefault];
-    [self.doneButton setBackgroundImage:[UIImage imageNamed:@"BarButtonDonePressed"]
+    [self.doneButton setBackgroundImage:[DCInterfaceStyle primaryBarButtonPressedBackgroundImage]
                                forState:UIControlStateHighlighted
                              barMetrics:UIBarMetricsDefault];
-    [self.settingsButton setBackgroundImage:[UIImage imageNamed:@"BarButton"]
+    [self.settingsButton setBackgroundImage:[DCInterfaceStyle barButtonBackgroundImage]
                                   forState:UIControlStateNormal
                                 barMetrics:UIBarMetricsDefault];
     [self.settingsButton
-     setBackgroundImage:[UIImage imageNamed:@"BarButtonPressed"]
+     setBackgroundImage:[DCInterfaceStyle barButtonPressedBackgroundImage]
      forState:UIControlStateHighlighted
      barMetrics:UIBarMetricsDefault];
 
@@ -184,59 +185,47 @@
         NSArray *accountsArray    = (NSArray *)self.activeConnections;
         NSDictionary *accountDict = accountsArray[indexPath.row];
         cell.name.text            = accountDict[@"name"];
+        cell.typeIcon.image       = [DCInterfaceStyle connectedAccountIconForType:accountDict[@"type"]];
 
         // steam, playstation, domain
 
         if ([accountDict[@"type"] isEqualToString:@"youtube"]) {
             cell.type.text      = @"YouTube";
-            cell.typeIcon.image = [UIImage imageNamed:@"C-YouTube"];
 
         } else if ([accountDict[@"type"] isEqualToString:@"twitter"]) {
             cell.type.text      = @"Twitter";
-            cell.typeIcon.image = [UIImage imageNamed:@"C-Twitter"];
 
         } else if ([accountDict[@"type"] isEqualToString:@"bluesky"]) {
             cell.type.text      = @"BlueSky";
-            cell.typeIcon.image = [UIImage imageNamed:@"C-BlueSky"];
 
         } else if ([accountDict[@"type"] isEqualToString:@"twitch"]) {
             cell.type.text      = @"Twitch";
-            cell.typeIcon.image = [UIImage imageNamed:@"C-Twitch"];
 
         } else if ([accountDict[@"type"] isEqualToString:@"reddit"]) {
             cell.type.text      = @"Reddit";
-            cell.typeIcon.image = [UIImage imageNamed:@"C-Reddit"];
 
         } else if ([accountDict[@"type"] isEqualToString:@"xbox"]) {
             cell.type.text      = @"Xbox-Live";
-            cell.typeIcon.image = [UIImage imageNamed:@"C-Xbox"];
 
         } else if ([accountDict[@"type"] isEqualToString:@"steam"]) {
             cell.type.text      = @"Steam";
-            cell.typeIcon.image = [UIImage imageNamed:@"C-Steam"];
 
         } else if ([accountDict[@"type"] isEqualToString:@"playstation"]) {
             cell.type.text      = @"PlayStationNetwork";
-            cell.typeIcon.image = [UIImage imageNamed:@"C-PSN"];
 
         } else if ([accountDict[@"type"] isEqualToString:@"domain"]) {
             cell.type.text      = @"Domain/Website";
-            cell.typeIcon.image = [UIImage imageNamed:@"C-Web"];
 
         } else if ([accountDict[@"type"] isEqualToString:@"spotify"]) {
             cell.type.text      = @"Spotify";
-            cell.typeIcon.image = [UIImage imageNamed:@"C-Spotify"];
 
         } else if ([accountDict[@"type"] isEqualToString:@"github"]) {
             cell.type.text      = @"GitHub";
-            cell.typeIcon.image = [UIImage imageNamed:@"C-GitHub"];
 
         } else if ([accountDict[@"type"] isEqualToString:@"contacts"]) {
             cell.type.text      = @"Contacts";
-            cell.typeIcon.image = [UIImage imageNamed:@"C-Contacts"];
 
         } else {
-            cell.typeIcon.image = [UIImage imageNamed:@"C-Web"];
             cell.type.text      = accountDict[@"type"];
         }
 

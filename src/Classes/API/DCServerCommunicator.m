@@ -6,6 +6,7 @@
 //  Copyright (c) 2018 bag.xml. All rights reserved.
 //
 
+#import "DCInterfaceStyle.h"
 #include "DCServerCommunicator.h"
 #include <malloc/malloc.h>
 #include <objc/NSObjCRuntime.h>
@@ -1170,7 +1171,7 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
 
         // Create a container view for masking and rounding
         UIView *maskView             = [[UIView alloc] initWithFrame:self.notificationView.bounds];
-        maskView.backgroundColor     = [UIColor colorWithPatternImage:[UIImage imageNamed:@"No-header"]];
+        maskView.backgroundColor     = [UIColor colorWithPatternImage:[DCInterfaceStyle notificationBackgroundImage]];
         maskView.layer.cornerRadius  = 15;
         maskView.layer.masksToBounds = YES; // Important: Masking the view to fix corner clipping
 
@@ -2184,7 +2185,7 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
         privateGuild.snowflake = nil;
         privateGuild.channels = [NSMutableArray array];
         if (self.oldMode == NO)
-            privateGuild.icon = [UIImage imageNamed:@"privateGuildLogo"];
+            privateGuild.icon = [DCInterfaceStyle privateGuildIconImage];
     }
 
     if (!self.channels)

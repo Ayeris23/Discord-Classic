@@ -6,6 +6,7 @@
 //  Copyright (c) 2024 bag.xml. All rights reserved.
 //
 
+#import "DCInterfaceStyle.h"
 #import "DCIntroductionPage.h"
 #import "DCAppDelegate.h"
 #import "DCLoginManager.h"
@@ -51,7 +52,7 @@
     
     if ([[NSUserDefaults standardUserDefaults] boolForKey:@"experimentalMode"]) {
         [self.navigationController.navigationBar
-         setBackgroundImage:[UIImage imageNamed:@"TbarBG"]
+         setBackgroundImage:[DCInterfaceStyle navigationBarBackgroundImage]
          forBarMetrics:UIBarMetricsDefault];
     }
 }
@@ -69,15 +70,15 @@
     self.view.backgroundColor = [UIColor colorWithRed:40/255.0f green:41/255.0f blue:46/255.0f alpha:1.0f];
 
     // Create a button sized to the bar button item
-    [self.loginButton setBackgroundImage:[UIImage imageNamed:@"BarButtonDone"]
+    [self.loginButton setBackgroundImage:[DCInterfaceStyle primaryBarButtonBackgroundImage]
                                forState:UIControlStateNormal
                              barMetrics:UIBarMetricsDefault];
-    [self.loginButton setBackgroundImage:[UIImage imageNamed:@"BarButtonDonePressed"]
+    [self.loginButton setBackgroundImage:[DCInterfaceStyle primaryBarButtonPressedBackgroundImage]
                                forState:UIControlStateHighlighted
                              barMetrics:UIBarMetricsDefault];
     
     // Message Input bitmap
-    UIImage *img = [UIImage imageNamed:@"MessageField"];
+    UIImage *img = [DCInterfaceStyle messageFieldBackgroundImage];
     UIEdgeInsets caps = UIEdgeInsetsMake(15, 15, 15, 15);
     
     UIImage *stretch;
@@ -93,7 +94,7 @@
     UIView *spinnerContainer = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 52, 30)];
     
     UIImageView *bgImageView = [[UIImageView alloc] initWithFrame:spinnerContainer.bounds];
-    UIImage *btnImage = [UIImage imageNamed:@"BarButtonDone"];
+    UIImage *btnImage = [DCInterfaceStyle primaryBarButtonBackgroundImage];
     UIEdgeInsets insets = UIEdgeInsetsMake(0, 5, 0, 5);
     UIImage *stretchedBg;
     if ([btnImage respondsToSelector:@selector(resizableImageWithCapInsets:resizingMode:)]) {

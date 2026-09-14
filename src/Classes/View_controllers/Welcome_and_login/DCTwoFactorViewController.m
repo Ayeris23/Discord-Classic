@@ -6,6 +6,7 @@
 //  Copyright (c) 2026 bag.xml. All rights reserved.
 //
 
+#import "DCInterfaceStyle.h"
 #import "DCTwoFactorViewController.h"
 #import "DCLoginManager.h"
 
@@ -41,29 +42,29 @@
     
     self.buttonVerify.enabled = NO;
     
-    [self.navBar setBackgroundImage:[UIImage imageNamed:@"TbarBG"]
+    [self.navBar setBackgroundImage:[DCInterfaceStyle navigationBarBackgroundImage]
                      forBarMetrics:UIBarMetricsDefault];
     
     // Skin the verify button
-    [self.buttonVerify setBackgroundImage:[UIImage imageNamed:@"BarButtonDone"]
+    [self.buttonVerify setBackgroundImage:[DCInterfaceStyle primaryBarButtonBackgroundImage]
                                 forState:UIControlStateNormal
                               barMetrics:UIBarMetricsDefault];
-    [self.buttonVerify setBackgroundImage:[UIImage imageNamed:@"BarButtonDonePressed"]
+    [self.buttonVerify setBackgroundImage:[DCInterfaceStyle primaryBarButtonPressedBackgroundImage]
                                 forState:UIControlStateHighlighted
                               barMetrics:UIBarMetricsDefault];
     
     // Skin the cancel button
-    [self.buttonCancel setBackgroundImage:[UIImage imageNamed:@"BarButton"]
+    [self.buttonCancel setBackgroundImage:[DCInterfaceStyle barButtonBackgroundImage]
                                  forState:UIControlStateNormal
                                barMetrics:UIBarMetricsDefault];
-    [self.buttonCancel setBackgroundImage:[UIImage imageNamed:@"BarButtonPressed"]
+    [self.buttonCancel setBackgroundImage:[DCInterfaceStyle barButtonPressedBackgroundImage]
                                  forState:UIControlStateHighlighted
                                barMetrics:UIBarMetricsDefault];
     
     UIView *spinnerContainer = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 56, 30)];
     
     UIImageView *bgImageView = [[UIImageView alloc] initWithFrame:spinnerContainer.bounds];
-    UIImage *btnImage = [UIImage imageNamed:@"BarButtonDone"];
+    UIImage *btnImage = [DCInterfaceStyle primaryBarButtonBackgroundImage];
     UIEdgeInsets insets = UIEdgeInsetsMake(0, 5, 0, 5);
     UIImage *stretchedBg;
     if ([btnImage respondsToSelector:@selector(resizableImageWithCapInsets:resizingMode:)]) {
@@ -87,7 +88,7 @@
     
     
     // Code Field Styling
-    UIImage *fieldImg = [UIImage imageNamed:@"MessageField"];
+    UIImage *fieldImg = [DCInterfaceStyle messageFieldBackgroundImage];
     UIEdgeInsets caps  = UIEdgeInsetsMake(15, 15, 15, 15);
     
     UIImage *stretchedField;

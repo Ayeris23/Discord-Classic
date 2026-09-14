@@ -6,6 +6,7 @@
 //  Copyright (c) 2024 bag.xml. All rights reserved.
 //
 
+#import "DCInterfaceStyle.h"
 #import "DCMenuViewController.h"
 #include "DCTools.h"
 #include <Foundation/Foundation.h>
@@ -217,7 +218,7 @@
         self.globalName.text = [NSString stringWithFormat:@"@%@",
                                 DCServerCommunicator.sharedInstance.currentUserInfo.username ?: @""];
         self.guildTotalView.hidden = YES;
-        self.guildBanner.image = [UIImage imageNamed:@"No-Header"];
+        self.guildBanner.image = [DCInterfaceStyle guildBannerPlaceholderImage];
     } else {
         self.totalView.hidden = YES;
         self.guildTotalView.hidden = NO;
@@ -232,7 +233,7 @@
             [DCServerCommunicator.sharedInstance
                 loadGuildBannerHash:guild.bannerID forGuild:guild];
         }
-        self.guildBanner.image = guild.banner ?: [UIImage imageNamed:@"No-Header"];
+        self.guildBanner.image = guild.banner ?: [DCInterfaceStyle guildBannerPlaceholderImage];
     }
 }
 
@@ -316,7 +317,7 @@
                                                object:nil];
     // NOTIF OBSERVERS END
     [self.navigationController.navigationBar
-        setBackgroundImage:[UIImage imageNamed:@"TbarBG"]
+        setBackgroundImage:[DCInterfaceStyle navigationBarBackgroundImage]
              forBarMetrics:UIBarMetricsDefault];
 
     self.experimentalMode =
@@ -594,7 +595,7 @@
         self.selectedGuild = guild;
         [self.navigationItem setTitle:guild.name];
         self.guildLabel.text = guild.name;
-        self.guildBanner.image = guild.banner ?: [UIImage imageNamed:@"No-Header"];
+        self.guildBanner.image = guild.banner ?: [DCInterfaceStyle guildBannerPlaceholderImage];
     }
 
     if (self.displayGuilds == nil) {
@@ -605,7 +606,7 @@
         (self.selectedGuild.snowflake.length &&
          [self.selectedGuild.snowflake isEqualToString:guild.snowflake])) {
         if (![self isDirectMessagesGuild:guild]) {
-            self.guildBanner.image = guild.banner ?: [UIImage imageNamed:@"No-Header"];
+            self.guildBanner.image = guild.banner ?: [DCInterfaceStyle guildBannerPlaceholderImage];
         }
     }
 
@@ -1032,7 +1033,7 @@
 }
 
 - (UIImage *)compositeImageWithBaseImage:(UIImage *)baseImage icons:(NSArray *)icons {
-    // Compose GuildIconBase, the centered folder tile, then the 2x2 guild grid.
+    // Compose the guild base, centered folder tile, then the 2x2 guild grid.
     const CGFloat canvasSize = 48.0f;
     const CGFloat folderSize = 40.0f;
     const CGFloat folderInset = (canvasSize - folderSize) / 2.0f;
@@ -1142,7 +1143,7 @@
 
                 // The 48pt tile is precomposited when the guild icon changes.
                 cell.guildAvatar.image = guildAtRowIndex.compositedIcon
-                    ?: [UIImage imageNamed:@"GuildIconBase"];
+                    ?: [DCInterfaceStyle guildIconBaseImage];
             } else if ([objectAtRowIndex isKindOfClass:[DCGuildFolder class]]) {
                 DCGuildFolder *folderAtRowIndex = objectAtRowIndex;
                 
@@ -1196,7 +1197,7 @@
                     return cell;
                 }
 
-                UIImage *folderIcon   = [UIImage imageNamed:@"folder"];
+                UIImage *folderIcon   = [DCInterfaceStyle guildFolderImage];
                 NSMutableArray *icons = [NSMutableArray array];
                 BOOL allSourcesReady = YES;
                 NSUInteger expectedSources = MIN((NSUInteger)4, folderAtRowIndex.guildIds.count);
@@ -1253,7 +1254,7 @@
                     folderAtRowIndex.iconCacheKey = nil;
                     // Show the folder foundation while mini icons hydrate.
                     cell.guildAvatar.image = [DCContentManager processedGuildIcon:folderIcon]
-                        ?: [UIImage imageNamed:@"GuildIconBase"];
+                        ?: [DCInterfaceStyle guildIconBaseImage];
                     return cell;
                 }
 
@@ -1334,11 +1335,8 @@
                     && channelAtRowIndex.users.count == 2) {
                     DCUser *buddy = [channelAtRowIndex.users firstObject];
 
-                    // Update the status image based on the buddy's status
-                    NSString *statusImageName =
-                        [DCMenuViewController imageNameForStatus:buddy.status];
                     cell.statusImage.image =
-                        [UIImage imageNamed:statusImageName];
+                        [DCInterfaceStyle statusImageForStatus:buddy.status];
 
                     cell.statusImage.hidden = NO;
                 } else {
@@ -1443,7 +1441,7 @@
                                        blue:159.0 / 255.0
                                       alpha:1.0];
 
-    backgroundImageView.image = [UIImage imageNamed:@"headerSeparator"];
+    backgroundImageView.image = [DCInterfaceStyle sectionHeaderSeparatorImage];
     label.layer.shadowColor   = [UIColor blackColor].CGColor;
     label.layer.shadowOffset  = CGSizeMake(0, 1);
     label.backgroundColor     = [UIColor clearColor];
@@ -1460,19 +1458,6 @@
 }
 
 
-+ (NSString *)imageNameForStatus:(DCUserStatus)status {
-    switch (status) {
-        case DCUserStatusOnline:
-            return @"online";
-        case DCUserStatusDoNotDisturb:
-            return @"dnd";
-        case DCUserStatusIdle:
-            return @"absent";
-        case DCUserStatusOffline:
-        default:
-            return @"offline";
-    }
-}
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
     return 1;

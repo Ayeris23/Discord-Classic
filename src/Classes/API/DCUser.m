@@ -7,6 +7,7 @@
 //
 
 #import "DCUser.h"
+#import "DCInterfaceStyle.h"
 #import "DCGuild.h"
 
 @implementation DCUser
@@ -16,12 +17,12 @@
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
         _defaultAvatars = @[
-            [UIImage imageNamed:@"DefaultAvatar0"],
-            [UIImage imageNamed:@"DefaultAvatar1"],
-            [UIImage imageNamed:@"DefaultAvatar2"],
-            [UIImage imageNamed:@"DefaultAvatar3"],
-            [UIImage imageNamed:@"DefaultAvatar4"],
-            [UIImage imageNamed:@"DefaultAvatar5"],
+            [DCInterfaceStyle defaultAvatarImageAtIndex:0],
+            [DCInterfaceStyle defaultAvatarImageAtIndex:1],
+            [DCInterfaceStyle defaultAvatarImageAtIndex:2],
+            [DCInterfaceStyle defaultAvatarImageAtIndex:3],
+            [DCInterfaceStyle defaultAvatarImageAtIndex:4],
+            [DCInterfaceStyle defaultAvatarImageAtIndex:5],
         ];
     });
     return _defaultAvatars;

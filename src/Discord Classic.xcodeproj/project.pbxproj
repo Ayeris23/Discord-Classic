@@ -164,7 +164,6 @@
 		2F1121172F4E913F00159D64 /* Video-play-button.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F1120702F4E913F00159D64 /* Video-play-button.png */; };
 		2F1121182F4E913F00159D64 /* Video-play-button@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F1120712F4E913F00159D64 /* Video-play-button@2x.png */; };
 		2F11211A2F4E913F00159D64 /* Experimental.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 2F1120752F4E913F00159D64 /* Experimental.storyboard */; };
-		2F11211B2F4E913F00159D64 /* iOS-7.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 2F1120762F4E913F00159D64 /* iOS-7.storyboard */; };
 		2F11211C2F4E913F00159D64 /* Storyboard-iPad.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 2F1120772F4E913F00159D64 /* Storyboard-iPad.storyboard */; };
 		2F11211D2F4E913F00159D64 /* Storyboard.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 2F1120782F4E913F00159D64 /* Storyboard.storyboard */; };
 		2F11211E2F4E913F00159D64 /* Throwback.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 2F1120792F4E913F00159D64 /* Throwback.storyboard */; };
@@ -416,6 +415,11 @@
 		2F32F3F530563633003BF841 /* SendMessageButton-Disabled.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F32F3F330563633003BF841 /* SendMessageButton-Disabled.png */; };
 		2F32F3F630563633003BF841 /* SendMessageButton-Disabled@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F32F3F430563633003BF841 /* SendMessageButton-Disabled@2x.png */; };
 		2F32F3F830565B19003BF841 /* AudioToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2F32F3F730565B19003BF841 /* AudioToolbox.framework */; };
+		2F32F403305787C8003BF841 /* DCMultiAttachmentPickerController.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F32F402305787C8003BF841 /* DCMultiAttachmentPickerController.m */; };
+		2F32F4063057ACEB003BF841 /* CameraButtonWide.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F32F4043057ACEB003BF841 /* CameraButtonWide.png */; };
+		2F32F4073057ACEB003BF841 /* CameraButtonWide@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F32F4053057ACEB003BF841 /* CameraButtonWide@2x.png */; };
+		2F32F40A3057AF25003BF841 /* CameraButtonWidePressed.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F32F4083057AF25003BF841 /* CameraButtonWidePressed.png */; };
+		2F32F40B3057AF25003BF841 /* CameraButtonWidePressed@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F32F4093057AF25003BF841 /* CameraButtonWidePressed@2x.png */; };
 		2F7424082F70DA7E00FAF3D9 /* Settings.bundle in Resources */ = {isa = PBXBuildFile; fileRef = 2F7424072F70DA7E00FAF3D9 /* Settings.bundle */; };
 		2F74240A2F70E51B00FAF3D9 /* Storyboard-7.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 2F7424092F70E51B00FAF3D9 /* Storyboard-7.storyboard */; };
 		2F74240D2F7771D600FAF3D9 /* Badge.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F74240B2F7771D600FAF3D9 /* Badge.png */; };
@@ -556,6 +560,8 @@
 		2FFA3A7B2F98879E00E67A40 /* NSObject+DTRuntime.m in Sources */ = {isa = PBXBuildFile; fileRef = 2FFA3A372F98879E00E67A40 /* NSObject+DTRuntime.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
 		2FFA3A7E2F98899400E67A40 /* DTAnimatedGIF.m in Sources */ = {isa = PBXBuildFile; fileRef = 2FFA3A7D2F98899400E67A40 /* DTAnimatedGIF.m */; };
 		2FFA3A822F9B0AD600E67A40 /* default.css.c in Sources */ = {isa = PBXBuildFile; fileRef = 2FFA3A812F9B0AD600E67A40 /* default.css.c */; };
+		9FDE61CDBE304A9B989107DC /* DCInterfaceStyle.m in Sources */ = {isa = PBXBuildFile; fileRef = 7DFC9E25F7D54E268A2D0499 /* DCInterfaceStyle.m */; };
+		F22BFBD64E9A4137B1343EEC /* DCInterfaceAssetCatalog.m in Sources */ = {isa = PBXBuildFile; fileRef = 422F4AE731E2409BAE181FE0 /* DCInterfaceAssetCatalog.m */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -718,7 +724,6 @@
 		2F1120712F4E913F00159D64 /* Video-play-button@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "Video-play-button@2x.png"; sourceTree = "<group>"; };
 		2F1120732F4E913F00159D64 /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		2F1120752F4E913F00159D64 /* Experimental.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; path = Experimental.storyboard; sourceTree = "<group>"; };
-		2F1120762F4E913F00159D64 /* iOS-7.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; path = "iOS-7.storyboard"; sourceTree = "<group>"; };
 		2F1120772F4E913F00159D64 /* Storyboard-iPad.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; path = "Storyboard-iPad.storyboard"; sourceTree = "<group>"; };
 		2F1120782F4E913F00159D64 /* Storyboard.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; path = Storyboard.storyboard; sourceTree = "<group>"; };
 		2F1120792F4E913F00159D64 /* Throwback.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; path = Throwback.storyboard; sourceTree = "<group>"; };
@@ -1114,6 +1119,12 @@
 		2F32F3F330563633003BF841 /* SendMessageButton-Disabled.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "SendMessageButton-Disabled.png"; sourceTree = "<group>"; };
 		2F32F3F430563633003BF841 /* SendMessageButton-Disabled@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "SendMessageButton-Disabled@2x.png"; sourceTree = "<group>"; };
 		2F32F3F730565B19003BF841 /* AudioToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioToolbox.framework; path = System/Library/Frameworks/AudioToolbox.framework; sourceTree = SDKROOT; };
+		2F32F401305787C8003BF841 /* DCMultiAttachmentPickerController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCMultiAttachmentPickerController.h; sourceTree = "<group>"; };
+		2F32F402305787C8003BF841 /* DCMultiAttachmentPickerController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCMultiAttachmentPickerController.m; sourceTree = "<group>"; };
+		2F32F4043057ACEB003BF841 /* CameraButtonWide.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = CameraButtonWide.png; sourceTree = "<group>"; };
+		2F32F4053057ACEB003BF841 /* CameraButtonWide@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "CameraButtonWide@2x.png"; sourceTree = "<group>"; };
+		2F32F4083057AF25003BF841 /* CameraButtonWidePressed.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = CameraButtonWidePressed.png; sourceTree = "<group>"; };
+		2F32F4093057AF25003BF841 /* CameraButtonWidePressed@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "CameraButtonWidePressed@2x.png"; sourceTree = "<group>"; };
 		2F7424072F70DA7E00FAF3D9 /* Settings.bundle */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.plug-in"; path = Settings.bundle; sourceTree = "<group>"; };
 		2F7424092F70E51B00FAF3D9 /* Storyboard-7.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; path = "Storyboard-7.storyboard"; sourceTree = "<group>"; };
 		2F74240B2F7771D600FAF3D9 /* Badge.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = Badge.png; sourceTree = "<group>"; };
@@ -1374,7 +1385,11 @@
 		2FFA3A7C2F98899400E67A40 /* DTAnimatedGIF.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DTAnimatedGIF.h; sourceTree = "<group>"; };
 		2FFA3A7D2F98899400E67A40 /* DTAnimatedGIF.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DTAnimatedGIF.m; sourceTree = "<group>"; };
 		2FFA3A812F9B0AD600E67A40 /* default.css.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = default.css.c; sourceTree = "<group>"; };
+		422F4AE731E2409BAE181FE0 /* DCInterfaceAssetCatalog.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = DCInterfaceAssetCatalog.m; sourceTree = "<group>"; };
 		5BA0983D2D2058E4009F7726 /* discord.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = discord.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		7D2DF2048B574519BF851AA9 /* DCInterfaceAssetCatalog.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = DCInterfaceAssetCatalog.h; sourceTree = "<group>"; };
+		7DFC9E25F7D54E268A2D0499 /* DCInterfaceStyle.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = DCInterfaceStyle.m; sourceTree = "<group>"; };
+		9F3DA05C620C4AAD96BA0FB8 /* DCInterfaceStyle.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = DCInterfaceStyle.h; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1574,6 +1589,10 @@
 		2F111FEC2F4E913F00159D64 /* Buttons */ = {
 			isa = PBXGroup;
 			children = (
+				2F32F4083057AF25003BF841 /* CameraButtonWidePressed.png */,
+				2F32F4093057AF25003BF841 /* CameraButtonWidePressed@2x.png */,
+				2F32F4043057ACEB003BF841 /* CameraButtonWide.png */,
+				2F32F4053057ACEB003BF841 /* CameraButtonWide@2x.png */,
 				2F32F3F330563633003BF841 /* SendMessageButton-Disabled.png */,
 				2F32F3F430563633003BF841 /* SendMessageButton-Disabled@2x.png */,
 				2F32F3EB305635BA003BF841 /* Down.png */,
@@ -1806,7 +1825,6 @@
 			children = (
 				2F7424092F70E51B00FAF3D9 /* Storyboard-7.storyboard */,
 				2F1120752F4E913F00159D64 /* Experimental.storyboard */,
-				2F1120762F4E913F00159D64 /* iOS-7.storyboard */,
 				2F1120772F4E913F00159D64 /* Storyboard-iPad.storyboard */,
 				2F1120782F4E913F00159D64 /* Storyboard.storyboard */,
 				2F1120792F4E913F00159D64 /* Throwback.storyboard */,
@@ -2297,6 +2315,7 @@
 		2F1123052F4EB0AD00159D64 /* Classes */ = {
 			isa = PBXGroup;
 			children = (
+				9D43EA28E6394828AFD75534 /* Interface */,
 				2FD079AF2F6E79650021205C /* Content_Management */,
 				2F1123062F4EB0AD00159D64 /* API */,
 				2F11231E2F4EB0AD00159D64 /* Cells */,
@@ -2381,6 +2400,7 @@
 		2F1123362F4EB0AD00159D64 /* View_controllers */ = {
 			isa = PBXGroup;
 			children = (
+				2F32F400305787C8003BF841 /* Attachment_picker */,
 				2F1123372F4EB0AD00159D64 /* Account_Management */,
 				2F11233A2F4EB0AD00159D64 /* Base_view_controller */,
 				2F11233D2F4EB0AD00159D64 /* Chat_View */,
@@ -2514,6 +2534,15 @@
 				2F1123892F4EB15F00159D64 /* PSPDFUIKitMainThreadGuard.m */,
 			);
 			path = "Discord Classic";
+			sourceTree = "<group>";
+		};
+		2F32F400305787C8003BF841 /* Attachment_picker */ = {
+			isa = PBXGroup;
+			children = (
+				2F32F401305787C8003BF841 /* DCMultiAttachmentPickerController.h */,
+				2F32F402305787C8003BF841 /* DCMultiAttachmentPickerController.m */,
+			);
+			path = Attachment_picker;
 			sourceTree = "<group>";
 		};
 		2FD079AF2F6E79650021205C /* Content_Management */ = {
@@ -2859,6 +2888,17 @@
 			path = Runtime;
 			sourceTree = "<group>";
 		};
+		9D43EA28E6394828AFD75534 /* Interface */ = {
+			isa = PBXGroup;
+			children = (
+				7D2DF2048B574519BF851AA9 /* DCInterfaceAssetCatalog.h */,
+				422F4AE731E2409BAE181FE0 /* DCInterfaceAssetCatalog.m */,
+				9F3DA05C620C4AAD96BA0FB8 /* DCInterfaceStyle.h */,
+				7DFC9E25F7D54E268A2D0499 /* DCInterfaceStyle.m */,
+			);
+			path = Interface;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -2931,6 +2971,7 @@
 				2F11209B2F4E913F00159D64 /* BarButton@2x.png in Resources */,
 				2F1121212F4E913F00159D64 /* DCChatTableCell.xib in Resources */,
 				2F1120C02F4E913F00159D64 /* DefaultAvatar0.png in Resources */,
+				2F32F40B3057AF25003BF841 /* CameraButtonWidePressed@2x.png in Resources */,
 				2F1120F62F4E913F00159D64 /* pfpOverlay@2x.png in Resources */,
 				2F1120D72F4E913F00159D64 /* Group 99.png in Resources */,
 				2FFA38C02F95E11500E67A40 /* icon50.png in Resources */,
@@ -2939,10 +2980,12 @@
 				2F1120DA2F4E913F00159D64 /* GuildIconBase.png in Resources */,
 				2F1120AF2F4E913F00159D64 /* C-PSN@2x.png in Resources */,
 				2F1120B12F4E913F00159D64 /* C-Reddit@2x.png in Resources */,
+				2F32F4063057ACEB003BF841 /* CameraButtonWide.png in Resources */,
 				2F32F3DF302B0009003BF841 /* folder@2x.png in Resources */,
 				2F1121002F4E913F00159D64 /* offline@2x.png in Resources */,
 				2FFA38BD2F95E11500E67A40 /* icon114.png in Resources */,
 				2F11209C2F4E913F00159D64 /* BarButtonPressed.png in Resources */,
+				2F32F4073057ACEB003BF841 /* CameraButtonWide@2x.png in Resources */,
 				2F11210D2F4E913F00159D64 /* WelcomeBanner.png in Resources */,
 				2F1120D32F4E913F00159D64 /* U-Pin@2x.png in Resources */,
 				2F1121182F4E913F00159D64 /* Video-play-button@2x.png in Resources */,
@@ -2977,6 +3020,7 @@
 				2F11208D2F4E913F00159D64 /* No-header.png in Resources */,
 				2F1120B52F4E913F00159D64 /* C-Steam@2x.png in Resources */,
 				2F1120B42F4E913F00159D64 /* C-Steam.png in Resources */,
+				2F32F40A3057AF25003BF841 /* CameraButtonWidePressed.png in Resources */,
 				2F1121082F4E913F00159D64 /* ContactsBar.png in Resources */,
 				2F1121132F4E913F00159D64 /* TbarBG.png in Resources */,
 				2F32F3E1302D5903003BF841 /* GuildIconBase@2x.png in Resources */,
@@ -3122,7 +3166,6 @@
 				2F1120E22F4E913F00159D64 /* TestCallEmbed.png in Resources */,
 				2FFA38C92F95E11500E67A40 /* icon76-ios7.png in Resources */,
 				2F1120AA2F4E913F00159D64 /* C-BlueSky.png in Resources */,
-				2F11211B2F4E913F00159D64 /* iOS-7.storyboard in Resources */,
 				2FE82DDD2F5D363900375F28 /* separator@2x.png in Resources */,
 				2F1120D92F4E913F00159D64 /* Group_111.png in Resources */,
 			);
@@ -3164,6 +3207,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F22BFBD64E9A4137B1343EEC /* DCInterfaceAssetCatalog.m in Sources */,
+				9FDE61CDBE304A9B989107DC /* DCInterfaceStyle.m in Sources */,
 				2F11228E2F4EA03000159D64 /* enc_mips32.c in Sources */,
 				2F1123672F4EB0AD00159D64 /* DCUser.m in Sources */,
 				2F11227F2F4EA03000159D64 /* cost.c in Sources */,
@@ -3349,6 +3394,7 @@
 				2F1122812F4EA03000159D64 /* cost_mips_dsp_r2.c in Sources */,
 				2FFA39802F987C2C00E67A40 /* NSAttributedString+DTCoreText.m in Sources */,
 				2F11226E2F4EA03000159D64 /* io_dec.c in Sources */,
+				2F32F403305787C8003BF841 /* DCMultiAttachmentPickerController.m in Sources */,
 				2F1122EB2F4EA03000159D64 /* SDWebImageCompat.m in Sources */,
 				2FFA3A682F98879E00E67A40 /* UIView+DTFoundation.m in Sources */,
 				2FFA39552F987C2C00E67A40 /* DTAnchorHTMLElement.m in Sources */,
