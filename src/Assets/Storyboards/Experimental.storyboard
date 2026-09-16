@@ -135,7 +135,9 @@
                         <outlet property="inputFieldPlaceholder" destination="haY-CH-L34" id="ZAF-SE-EVV"/>
                         <outlet property="memberButton" destination="B9T-MA-QNp" id="7t0-nd-RIs"/>
                         <outlet property="messageFieldBG" destination="bis-CW-7lD" id="bSo-Mm-zJO"/>
+                        <outlet property="photoButton" destination="41s-pr-Vki" id="tbe-Tb-kiq"/>
                         <outlet property="searchDisplayController" destination="niR-m5-FP3" id="QQ4-gP-MNh"/>
+                        <outlet property="sendButton" destination="0Og-Jo-D8I" id="8Ma-Ho-E7R"/>
                         <outlet property="sidebarButton" destination="xY4-Ft-L19" id="0Mx-hu-DbZ"/>
                         <outlet property="toolbar" destination="Arg-00-qFy" id="B9N-g6-oEi"/>
                         <outlet property="toolbarBG" destination="FbZ-Ui-nx4" id="xaM-Pu-PZf"/>
@@ -2454,7 +2456,7 @@ Use only as a last resort.</string>
     </simulatedMetricsContainer>
     <inferredMetricsTieBreakers>
         <segue reference="Cm4-wn-GtC"/>
-        <segue reference="OiF-LA-8vg"/>
-        <segue reference="0nX-fC-Muh"/>
+        <segue reference="ZLN-09-gkt"/>
+        <segue reference="cdu-l6-Trp"/>
     </inferredMetricsTieBreakers>
 </document>

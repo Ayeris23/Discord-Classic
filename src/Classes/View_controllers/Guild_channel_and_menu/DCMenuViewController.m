@@ -534,21 +534,25 @@
 }
 
 - (void)handleChannelContextChanged:(NSNotification *)notification {
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self handleChannelContextChanged:notification];
+        });
+        return;
+    }
+
     NSString *channelId = notification.userInfo[@"channelId"];
     if (!channelId) return;
-    
+
     for (DCGuild *guild in DCServerCommunicator.sharedInstance.guilds) {
         for (DCChannel *channel in guild.channels) {
             if (![channel.snowflake isEqualToString:channelId]) continue;
-            
+
             self.selectedGuild = guild;
             self.selectedChannel = channel;
             DCServerCommunicator.sharedInstance.selectedGuild = guild;
-            
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [self synchronizeSelectedGuildUI];
-                [self.channelTableView reloadData];
-            });
+            [self synchronizeSelectedGuildUI];
+            [self.channelTableView reloadData];
             return;
         }
     }
@@ -680,9 +684,16 @@
 
     // If the DM list is not currently visible there is nothing to redraw now;
     // cellForRowAtIndexPath: will read the canonical user's status later.
-    if (![self isDirectMessagesGuild:self.selectedGuild] ||
-        idx >= (NSUInteger)[self.channelTableView numberOfRowsInSection:0])
+    if (![self isDirectMessagesGuild:self.selectedGuild]) return;
+
+    NSUInteger modelRowCount = self.selectedGuild.channels.count;
+    NSUInteger tableRowCount =
+        (NSUInteger)[self.channelTableView numberOfRowsInSection:0];
+    if (modelRowCount != tableRowCount) {
+        [self.channelTableView reloadData];
         return;
+    }
+    if (idx >= modelRowCount) return;
 
     NSIndexPath *indexPath = [NSIndexPath indexPathForRow:idx inSection:0];
     [self.channelTableView reloadRowsAtIndexPaths:@[ indexPath ]
@@ -710,109 +721,121 @@
 }
 
 - (void)handleMessageAck:(NSNotification *)notification {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        // Avoid rendering hidden tables; viewWillAppear: refreshes them later.
-        if (!self.isViewLoaded || self.view.window == nil) {
-            return;
-        }
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self handleMessageAck:notification];
+        });
+        return;
+    }
 
-        NSString *channelId = notification.userInfo[@"channelId"];
+    // Avoid rendering hidden tables; viewWillAppear: refreshes them later.
+    if (!self.isViewLoaded || self.view.window == nil) {
+        return;
+    }
 
-        // A channel-list refresh without an ID applies only to the visible channel pane.
-        if (![channelId isKindOfClass:[NSString class]] || channelId.length == 0) {
-            [self.channelTableView reloadData];
-            return;
-        }
+    NSString *channelId = notification.userInfo[@"channelId"];
 
-        DCChannel *incomingChannel =
-            [DCServerCommunicator.sharedInstance.channels objectForKey:channelId];
-        DCGuild *affectedGuild = incomingChannel.parentGuild;
+    // A channel-list refresh without an ID applies only to the visible channel pane.
+    if (![channelId isKindOfClass:[NSString class]] || channelId.length == 0) {
+        [self.channelTableView reloadData];
+        return;
+    }
 
-        // Refresh the changed guild and any folder row that aggregates its state.
-        if (affectedGuild && self.guildFolderAnimationInProgress) {
-            self.guildTableReloadPending = YES;
-        } else if (affectedGuild && self.displayGuilds &&
-                   DCServerCommunicator.sharedInstance.guildsIsSorted) {
-            NSMutableArray *guildIndexPaths = [NSMutableArray array];
+    DCChannel *incomingChannel =
+        [DCServerCommunicator.sharedInstance.channels objectForKey:channelId];
+    DCGuild *affectedGuild = incomingChannel.parentGuild;
 
-            for (NSUInteger idx = 0; idx < self.displayGuilds.count; idx++) {
-                id item = [self.displayGuilds objectAtIndex:idx];
-                BOOL matchesAffectedGuild = NO;
+    // Refresh the changed guild and any folder row that aggregates its state.
+    if (affectedGuild && self.guildFolderAnimationInProgress) {
+        self.guildTableReloadPending = YES;
+    } else if (affectedGuild && self.displayGuilds &&
+               DCServerCommunicator.sharedInstance.guildsIsSorted) {
+        NSMutableArray *guildIndexPaths = [NSMutableArray array];
 
-                if ([item isKindOfClass:[DCGuild class]]) {
-                    DCGuild *displayGuild = (DCGuild *)item;
-                    matchesAffectedGuild = (displayGuild == affectedGuild) ||
-                        (displayGuild.snowflake.length && affectedGuild.snowflake.length &&
-                         [displayGuild.snowflake isEqualToString:affectedGuild.snowflake]);
-                } else if ([item isKindOfClass:[DCGuildFolder class]] &&
-                           affectedGuild.snowflake.length) {
-                    DCGuildFolder *folder = (DCGuildFolder *)item;
-                    matchesAffectedGuild =
-                        [folder.guildIds containsObject:affectedGuild.snowflake];
-                }
+        for (NSUInteger idx = 0; idx < self.displayGuilds.count; idx++) {
+            id item = [self.displayGuilds objectAtIndex:idx];
+            BOOL matchesAffectedGuild = NO;
 
-                if (matchesAffectedGuild) {
-                    [guildIndexPaths addObject:
-                        [NSIndexPath indexPathForRow:idx inSection:0]];
-                }
+            if ([item isKindOfClass:[DCGuild class]]) {
+                DCGuild *displayGuild = (DCGuild *)item;
+                matchesAffectedGuild = (displayGuild == affectedGuild) ||
+                    (displayGuild.snowflake.length && affectedGuild.snowflake.length &&
+                     [displayGuild.snowflake isEqualToString:affectedGuild.snowflake]);
+            } else if ([item isKindOfClass:[DCGuildFolder class]] &&
+                       affectedGuild.snowflake.length) {
+                DCGuildFolder *folder = (DCGuildFolder *)item;
+                matchesAffectedGuild =
+                    [folder.guildIds containsObject:affectedGuild.snowflake];
             }
 
-            if (guildIndexPaths.count > 0 &&
-                self.displayGuilds.count ==
-                    (NSUInteger)[self.guildTableView numberOfRowsInSection:0]) {
-                [self.guildTableView reloadRowsAtIndexPaths:guildIndexPaths
-                                           withRowAnimation:UITableViewRowAnimationNone];
+            if (matchesAffectedGuild) {
+                [guildIndexPaths addObject:
+                    [NSIndexPath indexPathForRow:idx inSection:0]];
             }
         }
 
-        if (!incomingChannel || !self.selectedGuild) {
-            return;
+        if (guildIndexPaths.count > 0 &&
+            self.displayGuilds.count ==
+                (NSUInteger)[self.guildTableView numberOfRowsInSection:0]) {
+            [self.guildTableView reloadRowsAtIndexPaths:guildIndexPaths
+                                       withRowAnimation:UITableViewRowAnimationNone];
         }
+    }
 
-        BOOL viewingDMs = [self isDirectMessagesGuild:self.selectedGuild];
-        BOOL incomingIsDM = (incomingChannel.type == 1 || incomingChannel.type == 3);
+    if (!incomingChannel || !self.selectedGuild) {
+        return;
+    }
 
-        if (viewingDMs && incomingIsDM) {
-            // DM ordering is recency-based, so acknowledgements can reorder rows.
-            [self.selectedGuild.channels
-                sortUsingComparator:^NSComparisonResult(DCChannel *a, DCChannel *b) {
-                    NSString *idA = ([a.lastMessageId isKindOfClass:[NSString class]])
-                        ? a.lastMessageId : @"0";
-                    NSString *idB = ([b.lastMessageId isKindOfClass:[NSString class]])
-                        ? b.lastMessageId : @"0";
-                    return [idB localizedStandardCompare:idA];
-                }];
-            [self.channelTableView reloadData];
-            return;
-        }
+    BOOL viewingDMs = [self isDirectMessagesGuild:self.selectedGuild];
+    BOOL incomingIsDM = (incomingChannel.type == 1 || incomingChannel.type == 3);
 
-        // Guild-channel acknowledgements only change row presentation.
-        BOOL belongsToSelectedGuild =
-            (incomingChannel.parentGuild == self.selectedGuild) ||
-            (incomingChannel.parentGuild.snowflake.length && self.selectedGuild.snowflake.length &&
-             [incomingChannel.parentGuild.snowflake
-                 isEqualToString:self.selectedGuild.snowflake]);
-        if (!belongsToSelectedGuild) {
-            return;
-        }
+    if (viewingDMs && incomingIsDM) {
+        // DM ordering is recency-based, so acknowledgements can reorder rows.
+        [self.selectedGuild.channels
+            sortUsingComparator:^NSComparisonResult(DCChannel *a, DCChannel *b) {
+                NSString *idA = ([a.lastMessageId isKindOfClass:[NSString class]])
+                    ? a.lastMessageId : @"0";
+                NSString *idB = ([b.lastMessageId isKindOfClass:[NSString class]])
+                    ? b.lastMessageId : @"0";
+                return [idB localizedStandardCompare:idA];
+            }];
+        [self.channelTableView reloadData];
+        return;
+    }
 
-        NSUInteger channelIndex = [self.selectedGuild.channels indexOfObject:incomingChannel];
-        if (channelIndex == NSNotFound) {
-            channelIndex = [self.selectedGuild.channels
-                indexOfObjectPassingTest:^BOOL(DCChannel *channel, NSUInteger idx, BOOL *stop) {
-                    return channel.snowflake.length &&
-                        [channel.snowflake isEqualToString:channelId];
-                }];
-        }
+    // Guild-channel acknowledgements only change row presentation.
+    BOOL belongsToSelectedGuild =
+        (incomingChannel.parentGuild == self.selectedGuild) ||
+        (incomingChannel.parentGuild.snowflake.length && self.selectedGuild.snowflake.length &&
+         [incomingChannel.parentGuild.snowflake
+             isEqualToString:self.selectedGuild.snowflake]);
+    if (!belongsToSelectedGuild) {
+        return;
+    }
 
-        if (channelIndex != NSNotFound &&
-            channelIndex < (NSUInteger)[self.channelTableView numberOfRowsInSection:0]) {
-            NSIndexPath *indexPath =
-                [NSIndexPath indexPathForRow:channelIndex inSection:0];
-            [self.channelTableView reloadRowsAtIndexPaths:@[ indexPath ]
-                                         withRowAnimation:UITableViewRowAnimationNone];
-        }
-    });
+    NSUInteger channelIndex = [self.selectedGuild.channels indexOfObject:incomingChannel];
+    if (channelIndex == NSNotFound) {
+        channelIndex = [self.selectedGuild.channels
+            indexOfObjectPassingTest:^BOOL(DCChannel *channel, NSUInteger idx, BOOL *stop) {
+                return channel.snowflake.length &&
+                    [channel.snowflake isEqualToString:channelId];
+            }];
+    }
+
+    NSUInteger modelRowCount = self.selectedGuild.channels.count;
+    NSUInteger tableRowCount =
+        (NSUInteger)[self.channelTableView numberOfRowsInSection:0];
+    if (modelRowCount != tableRowCount) {
+        [self.channelTableView reloadData];
+        return;
+    }
+
+    if (channelIndex != NSNotFound && channelIndex < modelRowCount) {
+        NSIndexPath *indexPath =
+            [NSIndexPath indexPathForRow:channelIndex inSection:0];
+        [self.channelTableView reloadRowsAtIndexPaths:@[ indexPath ]
+                                     withRowAnimation:UITableViewRowAnimationNone];
+    }
 }
 
 // Keep the menu's visible chrome derived from the selected guild model.

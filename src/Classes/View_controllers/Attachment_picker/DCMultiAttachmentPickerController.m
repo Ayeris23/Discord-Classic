@@ -10,6 +10,10 @@
 #import <QuartzCore/QuartzCore.h>
 #include <math.h>
 
+static CGSize DCMultiAttachmentPickerPopoverSize(void) {
+    return CGSizeMake(360.0f, 520.0f);
+}
+
 @class DCMultiAttachmentPickerController;
 
 @interface DCMultiAttachmentAssetButton : UIButton
@@ -181,6 +185,21 @@ static NSString *DCFormattedAttachmentByteCount(unsigned long long byteCount) {
 
 @implementation DCMultiAttachmentPickerController
 
+- (CGSize)contentSizeForViewInPopover {
+    if ([UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad) {
+        return DCMultiAttachmentPickerPopoverSize();
+    }
+    return [super contentSizeForViewInPopover];
+}
+
+- (void)setContentSizeForViewInPopover:(CGSize)contentSizeForViewInPopover {
+    if ([UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad) {
+        [super setContentSizeForViewInPopover:DCMultiAttachmentPickerPopoverSize()];
+        return;
+    }
+    [super setContentSizeForViewInPopover:contentSizeForViewInPopover];
+}
+
 - (id)init {
     return [self initWithSelectedAssets:nil];
 }
@@ -199,6 +218,8 @@ static NSString *DCFormattedAttachmentByteCount(unsigned long long byteCount) {
     // then install the root controller to avoid recursive construction.
     self = [super initWithNibName:nil bundle:nil];
     if (!self) return nil;
+
+    albums.contentSizeForViewInPopover = DCMultiAttachmentPickerPopoverSize();
     [self setViewControllers:[NSArray arrayWithObject:albums] animated:NO];
 
     _maximumSelectionCount = 10;
@@ -270,6 +291,9 @@ static NSString *DCFormattedAttachmentByteCount(unsigned long long byteCount) {
 - (void)navigationController:(UINavigationController *)navigationController
       willShowViewController:(UIViewController *)viewController
                     animated:(BOOL)animated {
+    if ([UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad) {
+        viewController.contentSizeForViewInPopover = DCMultiAttachmentPickerPopoverSize();
+    }
     [self installNavigationItemsForViewController:viewController];
 }
 

@@ -30,6 +30,8 @@
                                       UIActionSheetDelegate,
                                       UIGestureRecognizerDelegate,
                                       DTAttributedTextContentViewDelegate>
++ (BOOL)isVideoPlayerActive;
+
 - (void)getMessages:(int)numberOfMessages beforeMessage:(DCMessage *)message;
 - (void)activateSelectedChannel;
 

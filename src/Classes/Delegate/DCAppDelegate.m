@@ -125,10 +125,11 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
         return UIInterfaceOrientationMaskAllButUpsideDown;
     }
 
-    // While the image viewer is active, permit the whole phone interface to
-    // follow UIKit into landscape. Dismissal switches this back to portrait-only
-    // and explicitly asks UIKit to re-evaluate the restored root controller.
-    if ([DCImageViewController isImageViewerActive]) {
+    // Full-screen media may rotate on phones while the rest of the app remains
+    // portrait-only. The presenting controller restores the portrait policy when
+    // the viewer or player closes.
+    if ([DCImageViewController isImageViewerActive] ||
+        [DCChatViewController isVideoPlayerActive]) {
         return UIInterfaceOrientationMaskAllButUpsideDown;
     }
 

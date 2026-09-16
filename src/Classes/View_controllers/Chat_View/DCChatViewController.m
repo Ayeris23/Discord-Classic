@@ -480,9 +480,16 @@ static CGFloat DCPresentationRunwayTargetPoints(CGFloat velocityY, CGFloat viewp
 
 int lastTimeInterval = 0; // for typing indicator
 
+static BOOL DCVideoPlayerActive = NO;
+
++ (BOOL)isVideoPlayerActive {
+    return DCVideoPlayerActive;
+}
+
 - (BOOL)shouldAutorotateToInterfaceOrientation:(UIInterfaceOrientation)interfaceOrientation {
     if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad ||
-        [DCImageViewController isImageViewerActive]) {
+        [DCImageViewController isImageViewerActive] ||
+        [DCChatViewController isVideoPlayerActive]) {
         return (interfaceOrientation != UIInterfaceOrientationPortraitUpsideDown);
     }
     return (interfaceOrientation == UIInterfaceOrientationPortrait);
@@ -494,7 +501,8 @@ int lastTimeInterval = 0; // for typing indicator
 
 - (NSUInteger)supportedInterfaceOrientations {
     if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad ||
-        [DCImageViewController isImageViewerActive]) {
+        [DCImageViewController isImageViewerActive] ||
+        [DCChatViewController isVideoPlayerActive]) {
         return UIInterfaceOrientationMaskAllButUpsideDown;
     }
     return UIInterfaceOrientationMaskPortrait;
@@ -6364,7 +6372,11 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     player.moviePlayer.repeatMode = MPMovieRepeatModeOne;
     UIWindow *backgroundWindow = [UIApplication sharedApplication].keyWindow;
     player.view.frame = backgroundWindow.frame;
+    DCVideoPlayerActive = YES;
     [self presentMoviePlayerViewControllerAnimated:player];
+    if ([UIViewController respondsToSelector:@selector(attemptRotationToDeviceOrientation)]) {
+        [UIViewController attemptRotationToDeviceOrientation];
+    }
     [player.moviePlayer play];
 }
 
@@ -6413,6 +6425,10 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     self.activeVideoPlayerController = nil;
     self.activeVideoSourceURL = nil;
     self.activeVideoSignatureRetryUsed = NO;
+    DCVideoPlayerActive = NO;
+    if ([UIViewController respondsToSelector:@selector(attemptRotationToDeviceOrientation)]) {
+        [UIViewController attemptRotationToDeviceOrientation];
+    }
 }
 
 - (void)prepareForSegue:(UIStoryboardSegue *)segue sender:(id)sender {
@@ -6671,7 +6687,6 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     if ([UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad) {
         UIPopoverController *popover = [[UIPopoverController alloc]
             initWithContentViewController:picker];
-        popover.popoverContentSize = CGSizeMake(360.0f, 520.0f);
         self.imagePopoverController = popover;
 
         UIView *anchorView = sourceView ?: self.photoButton;
