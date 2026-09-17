@@ -136,17 +136,54 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
     return UIInterfaceOrientationMaskPortrait;
 }
 
+- (DCMenuViewController *)mainMenuViewController {
+    UIViewController *root = self.window.rootViewController;
+    UIViewController *menuContainer = root;
+
+    if ([root isKindOfClass:[UISplitViewController class]]) {
+        UISplitViewController *splitViewController = (UISplitViewController *)root;
+        if (splitViewController.viewControllers.count == 0) return nil;
+        menuContainer = [splitViewController.viewControllers objectAtIndex:0];
+    }
+
+    if ([menuContainer isKindOfClass:[UINavigationController class]]) {
+        UINavigationController *navigationController =
+            (UINavigationController *)menuContainer;
+        if (navigationController.viewControllers.count == 0) return nil;
+        menuContainer = [navigationController.viewControllers objectAtIndex:0];
+    }
+
+    return [menuContainer isKindOfClass:[DCMenuViewController class]]
+        ? (DCMenuViewController *)menuContainer
+        : nil;
+}
+
+- (DCChatViewController *)mainSplitChatViewController {
+    UIViewController *root = self.window.rootViewController;
+    if (![root isKindOfClass:[UISplitViewController class]]) return nil;
+
+    UISplitViewController *splitViewController = (UISplitViewController *)root;
+    if (splitViewController.viewControllers.count < 2) return nil;
+
+    UIViewController *detailContainer =
+        [splitViewController.viewControllers objectAtIndex:1];
+    if ([detailContainer isKindOfClass:[UINavigationController class]]) {
+        UINavigationController *navigationController =
+            (UINavigationController *)detailContainer;
+        if (navigationController.viewControllers.count == 0) return nil;
+        detailContainer = [navigationController.viewControllers objectAtIndex:0];
+    }
+
+    return [detailContainer isKindOfClass:[DCChatViewController class]]
+        ? (DCChatViewController *)detailContainer
+        : nil;
+}
+
 // Restore the last server/DM list from the already-decoded cached guild graph
 // before the menu is ever presented. A missing saved snowflake means DMs.
 - (void)restoreCachedMenuGuildSelectionIfPossible {
-    UIViewController *root = self.window.rootViewController;
-    if (![root isKindOfClass:[UINavigationController class]]) return;
-
-    UINavigationController *navigationController = (UINavigationController *)root;
-    if (navigationController.viewControllers.count == 0) return;
-
-    UIViewController *rootContent = [navigationController.viewControllers objectAtIndex:0];
-    if (![rootContent isKindOfClass:[DCMenuViewController class]]) return;
+    DCMenuViewController *menu = [self mainMenuViewController];
+    if (!menu) return;
 
     NSString *savedGuildID = [[DCCacheManager sharedInstance] loadLastSelectedGuildID];
     DCGuild *selectedGuild = nil;
@@ -175,7 +212,6 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
 
     if (!selectedGuild) return;
 
-    DCMenuViewController *menu = (DCMenuViewController *)rootContent;
     menu.selectedGuild = selectedGuild;
     DCServerCommunicator.sharedInstance.selectedGuild = selectedGuild;
 
@@ -183,9 +219,7 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
         DBGLOG(@"[ColdStart] Restored last selected guild %@", selectedGuild.snowflake);
 }
 
-// Build the initial navigation stack before UIKit presents the storyboard.
-// This is the normal cold-restore path once a cached guild/channel graph exists:
-// menu stays underneath for Back, while chat is the first visible controller.
+// Build the initial navigation state before UIKit presents the storyboard.
 - (BOOL)restoreCachedChatNavigationStackIfPossible {
     if (self.experimental || self.hackyMode) {
         return NO;
@@ -197,20 +231,8 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
         return NO;
     }
 
-    UIViewController *root = self.window.rootViewController;
-    if (![root isKindOfClass:[UINavigationController class]]) {
-        return NO;
-    }
-
-    UINavigationController *navigationController =
-        (UINavigationController *)root;
-    if (navigationController.viewControllers.count == 0) {
-        return NO;
-    }
-
-    UIViewController *rootContent =
-        [navigationController.viewControllers objectAtIndex:0];
-    if (![rootContent isKindOfClass:[DCMenuViewController class]]) {
+    DCMenuViewController *menu = [self mainMenuViewController];
+    if (!menu) {
         return NO;
     }
 
@@ -228,11 +250,29 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
     }
 
     if (!restoredChannel) {
-        // Keep the saved ID. DCMenuViewController will retry after live READY.
         return NO;
     }
 
-    DCMenuViewController *menu = (DCMenuViewController *)rootContent;
+    menu.selectedGuild = restoredGuild;
+    menu.selectedChannel = restoredChannel;
+    DCServerCommunicator.sharedInstance.selectedGuild = restoredGuild;
+    DCServerCommunicator.sharedInstance.selectedChannel = restoredChannel;
+    [menu markColdChatRestoreHandled];
+
+    DCChatViewController *splitChat = [self mainSplitChatViewController];
+    if (splitChat) {
+        splitChat.navigationItem.title = restoredChannel.name;
+        DBGLOG(@"[ColdStart] Preloaded split detail for chat %@", channelID);
+        return YES;
+    }
+
+    UIViewController *root = self.window.rootViewController;
+    if (![root isKindOfClass:[UINavigationController class]]) {
+        return NO;
+    }
+
+    UINavigationController *navigationController =
+        (UINavigationController *)root;
     UIStoryboard *storyboard = menu.storyboard;
     if (!storyboard) {
         return NO;
@@ -257,17 +297,7 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
         return NO;
     }
 
-    menu.selectedGuild = restoredGuild;
-    menu.selectedChannel = restoredChannel;
-    DCServerCommunicator.sharedInstance.selectedGuild = restoredGuild;
-    DCServerCommunicator.sharedInstance.selectedChannel = restoredChannel;
-
-    // Do not force-load the menu view hierarchy. It stays underneath the chat
-    // and will initialize normally if/when the user taps Back.
-    [menu markColdChatRestoreHandled];
-
     chat.navigationItem.title = restoredChannel.name;
-
     [navigationController setViewControllers:
         [NSArray arrayWithObjects:menu, chat, nil]
                                      animated:NO];

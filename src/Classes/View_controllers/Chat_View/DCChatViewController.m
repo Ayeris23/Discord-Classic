@@ -7244,6 +7244,11 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                       object:nil
                     userInfo:@{@"guildId": guild.snowflake}];
     
+    if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad &&
+        self.splitViewController) {
+        return;
+    }
+
     // Pop back to menu
     [self.navigationController popViewControllerAnimated:YES];
 }

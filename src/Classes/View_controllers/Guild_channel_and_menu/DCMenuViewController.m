@@ -74,6 +74,53 @@
     [self.slideMenuController hideMenu:YES];
 }
 
+- (BOOL)activateSelectedChannelInIPadSplitView {
+    if ([[UIDevice currentDevice] userInterfaceIdiom] != UIUserInterfaceIdiomPad ||
+        self.experimentalMode) {
+        return NO;
+    }
+
+    UISplitViewController *splitViewController = self.splitViewController;
+    if (splitViewController.viewControllers.count < 2) {
+        return NO;
+    }
+
+    UIViewController *detailController =
+        [splitViewController.viewControllers objectAtIndex:1];
+    UINavigationController *detailNavigationController = nil;
+    DCChatViewController *chatViewController = nil;
+
+    if ([detailController isKindOfClass:[UINavigationController class]]) {
+        detailNavigationController = (UINavigationController *)detailController;
+        UIViewController *rootController =
+            detailNavigationController.viewControllers.count > 0
+                ? [detailNavigationController.viewControllers objectAtIndex:0]
+                : nil;
+        if ([rootController isKindOfClass:[DCChatViewController class]]) {
+            chatViewController = (DCChatViewController *)rootController;
+        }
+    } else if ([detailController isKindOfClass:[DCChatViewController class]]) {
+        chatViewController = (DCChatViewController *)detailController;
+    }
+
+    if (!chatViewController) {
+        return NO;
+    }
+
+    if (detailNavigationController &&
+        detailNavigationController.topViewController != chatViewController) {
+        [detailNavigationController popToRootViewControllerAnimated:NO];
+    }
+
+    chatViewController.navigationItem.title =
+        self.selectedChannel.name ?: @"Chat";
+    [chatViewController activateSelectedChannel];
+    [NSNotificationCenter.defaultCenter
+        postNotificationName:@"GuildMemberListUpdated"
+                      object:nil];
+    return YES;
+}
+
 - (void)rebuildDisplayGuildsIfNeeded {
     assertMainThread();
 
@@ -428,11 +475,15 @@
             if (self.selectedChannel &&
                 [self.selectedChannel.snowflake
                     isEqualToString:channelId]) {
-                if (self.experimentalMode) {
-                    self.selectedGuild = guild;
-                    self.selectedChannel = channel;
-                    DCServerCommunicator.sharedInstance.selectedGuild = guild;
-                    DCServerCommunicator.sharedInstance.selectedChannel = channel;
+                self.selectedGuild = guild;
+                self.selectedChannel = channel;
+                DCServerCommunicator.sharedInstance.selectedGuild = guild;
+                DCServerCommunicator.sharedInstance.selectedChannel = channel;
+
+                if ([self activateSelectedChannelInIPadSplitView]) {
+                    [self synchronizeSelectedGuildUI];
+                    [self.channelTableView reloadData];
+                } else if (self.experimentalMode) {
                     [self synchronizeSelectedGuildUI];
                     [self.channelTableView reloadData];
                     [self activateSelectedChannelInExperimentalMode];
@@ -451,7 +502,12 @@
             }
 
             dispatch_async(dispatch_get_main_queue(), ^{
-                if (self.experimentalMode) {
+                if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad &&
+                    !self.experimentalMode) {
+                    [self synchronizeSelectedGuildUI];
+                    [self.channelTableView reloadData];
+                    [self activateSelectedChannelInIPadSplitView];
+                } else if (self.experimentalMode) {
                     [DCServerCommunicator.sharedInstance
                         sendGuildSubscriptionWithGuildId:guild.snowflake
                                                channelId:channel.snowflake];
@@ -1028,6 +1084,9 @@
             [DCServerCommunicator.sharedInstance.selectedChannel checkIfRead];
             [tableView deselectRowAtIndexPath:indexPath animated:YES];
 
+            if ([self activateSelectedChannelInIPadSplitView]) {
+                return;
+            }
             if (self.experimentalMode) {
                 [self activateSelectedChannelInExperimentalMode];
             } else {
