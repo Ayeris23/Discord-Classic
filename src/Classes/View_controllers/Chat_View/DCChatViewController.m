@@ -305,12 +305,37 @@ static NSInteger DCChatWindowHardCeiling(void) {
     return [DCResourceManager sharedManager].chatMessageHardLimit;
 }
 
-// Allow temporary extra runway during high-speed scrolling, then trim back to policy limits.
-static NSInteger DCChatActiveWindowHardCeiling(void) {
+static int DCDynamicMessageLoadMultiplier(void) {
+    return 2;
+}
+
+static int DCBaseProximityMessageLoadCount(void) {
     if ([DCResourceManager sharedManager].memoryClass == DCDeviceMemoryClass256MB) {
-        return 72;
+        return 6;
     }
-    return DCChatWindowHardCeiling();
+    return ([UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad) ? 24 : 12;
+}
+
+static int DCMaximumRunwayMessageLoadCount(void) {
+    DCDeviceMemoryClass memoryClass = [DCResourceManager sharedManager].memoryClass;
+    int normal = DCBaseProximityMessageLoadCount();
+    int maximum = normal;
+
+    if (memoryClass == DCDeviceMemoryClass256MB) {
+        maximum = 12;
+    } else if (memoryClass == DCDeviceMemoryClass1GB ||
+               memoryClass == DCDeviceMemoryClass2GBPlus) {
+        maximum = MAX(normal, 24);
+    } else if (memoryClass == DCDeviceMemoryClass512MB) {
+        maximum = MAX(normal, 12);
+    }
+
+    return maximum * DCDynamicMessageLoadMultiplier();
+}
+
+// Keep two maximum runway pages resident while scrolling before forcing a trim.
+static NSInteger DCChatActiveWindowHardCeiling(void) {
+    return DCChatWindowCeiling() + 2 * DCMaximumRunwayMessageLoadCount();
 }
 
 static NSInteger DCChatWindowTrimBatch(void) {
@@ -366,16 +391,23 @@ static BOOL DCMessageHasUnknownAttachmentGeometry(DCMessage *message) {
 }
 
 static int DCInitialMessageLoadCount(void) {
-    // Initial load count is based on display size; pagination is memory-class based.
-    return ([UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad) ? 24 : 12;
+    BOOL isPad = ([UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad);
+
+    switch ([DCResourceManager sharedManager].memoryClass) {
+        case DCDeviceMemoryClass256MB:
+            return isPad ? 36 : 24;
+        case DCDeviceMemoryClass512MB:
+            return isPad ? 48 : 24;
+        case DCDeviceMemoryClass1GB:
+        case DCDeviceMemoryClass2GBPlus:
+        case DCDeviceMemoryClassUnknown:
+        default:
+            return isPad ? 24 : 12;
+    }
 }
 
 static int DCProximityMessageLoadCount(void) {
-    // Use smaller pagination batches on 256 MB devices.
-    if ([DCResourceManager sharedManager].memoryClass == DCDeviceMemoryClass256MB) {
-        return 6;
-    }
-    return ([UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad) ? 24 : 12;
+    return DCBaseProximityMessageLoadCount() * DCDynamicMessageLoadMultiplier();
 }
 
 /*
@@ -387,7 +419,7 @@ static int DCProximityMessageLoadCount(void) {
 static NSInteger DCNewerPaginationTriggerRow(void) {
     // Keep more than one small page of look-ahead without consuming too much of the resident window.
     if ([DCResourceManager sharedManager].memoryClass == DCDeviceMemoryClass256MB) {
-        return 8;
+        return 8 * DCDynamicMessageLoadMultiplier();
     }
     return MAX(3, DCProximityMessageLoadCount() / 2);
 }
@@ -429,21 +461,19 @@ static CGFloat DCMessageRunwayCapScreens(void) {
 static int DCRunwayMessageLoadCount(CGFloat velocityY) {
     CGFloat speed = fabs(velocityY);
     DCDeviceMemoryClass memoryClass = [DCResourceManager sharedManager].memoryClass;
+    int normal = DCBaseProximityMessageLoadCount();
+    int count = normal;
 
     if (memoryClass == DCDeviceMemoryClass256MB) {
-        return speed >= 3000.0f ? 12 : 6;
+        count = speed >= 3000.0f ? 12 : 6;
+    } else if (memoryClass == DCDeviceMemoryClass1GB ||
+               memoryClass == DCDeviceMemoryClass2GBPlus) {
+        count = speed >= 4500.0f ? MAX(normal, 24) : normal;
+    } else if (memoryClass == DCDeviceMemoryClass512MB && speed >= 4000.0f) {
+        count = MAX(normal, 12);
     }
 
-    int normal = DCProximityMessageLoadCount();
-    if (memoryClass == DCDeviceMemoryClass1GB ||
-        memoryClass == DCDeviceMemoryClass2GBPlus) {
-        return speed >= 4500.0f ? MAX(normal, 24) : normal;
-    }
-
-    if (memoryClass == DCDeviceMemoryClass512MB && speed >= 4000.0f) {
-        return MAX(normal, 12);
-    }
-    return normal;
+    return count * DCDynamicMessageLoadMultiplier();
 }
 
 static CGFloat DCMessageRunwayTargetPoints(CGFloat velocityY, CGFloat viewportHeight) {
