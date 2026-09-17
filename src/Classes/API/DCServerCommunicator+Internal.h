@@ -9,7 +9,6 @@
 @property (strong, nonatomic) NSMutableData *compressedBuffer;
 @property (strong, nonatomic) NSRecursiveLock *inflateLock;
 
-@property (strong, nonatomic) UIView *notificationView;
 @property (assign, nonatomic) BOOL gotHeartbeat;
 @property (assign, nonatomic) BOOL heartbeatDefined;
 @property (assign, nonatomic) BOOL applicationSuspended;
@@ -36,9 +35,6 @@
 @property (strong, nonatomic) NSMutableSet *liveResolvedGuildNicknameKeys;
 @property (strong, nonatomic) NSMutableSet *liveResolvedGuildAvatarKeys;
 @property (strong, nonatomic) NSMutableSet *liveResolvedGuildDecorationKeys;
-
-- (void)showNonIntrusiveNotificationWithTitle:(NSString *)title;
-- (void)dismissNotification;
 
 // Canonical guild/channel mutation helpers used by Gateway replay. Declaring
 // these here keeps the old compiler from inferring id-returning selectors when

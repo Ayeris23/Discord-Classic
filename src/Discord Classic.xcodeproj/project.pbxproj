@@ -432,6 +432,7 @@
 		2F97F5642FDFC1F400A645B1 /* DCMessageLayout.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F97F5612FDFC1F400A645B1 /* DCMessageLayout.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
 		2F97F5652FDFC1F400A645B1 /* DCMessageLayoutBuilder.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F97F5632FDFC1F400A645B1 /* DCMessageLayoutBuilder.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
 		2F9B1C732F8F0C9D00B296A1 /* DCContentManager.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F9B1C722F8F0C9D00B296A1 /* DCContentManager.m */; };
+		2FAF2823305B7ABB003974E9 /* DCConnectionPopup.m in Sources */ = {isa = PBXBuildFile; fileRef = 2FAF2822305B7ABB003974E9 /* DCConnectionPopup.m */; };
 		2FD079B22F6E79660021205C /* DCCacheManager.m in Sources */ = {isa = PBXBuildFile; fileRef = 2FD079B12F6E79660021205C /* DCCacheManager.m */; };
 		2FE82DDD2F5D363900375F28 /* separator@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = 2FE82DDC2F5D363900375F28 /* separator@2x.png */; };
 		2FE82DE32F62998300375F28 /* DCChatGifAttachment.xib in Resources */ = {isa = PBXBuildFile; fileRef = 2FE82DE22F62998300375F28 /* DCChatGifAttachment.xib */; };
@@ -1144,6 +1145,8 @@
 		2F97F5632FDFC1F400A645B1 /* DCMessageLayoutBuilder.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCMessageLayoutBuilder.m; sourceTree = "<group>"; };
 		2F9B1C712F8F0C9D00B296A1 /* DCContentManager.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCContentManager.h; sourceTree = "<group>"; };
 		2F9B1C722F8F0C9D00B296A1 /* DCContentManager.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCContentManager.m; sourceTree = "<group>"; };
+		2FAF2821305B7ABB003974E9 /* DCConnectionPopup.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCConnectionPopup.h; sourceTree = "<group>"; };
+		2FAF2822305B7ABB003974E9 /* DCConnectionPopup.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCConnectionPopup.m; sourceTree = "<group>"; };
 		2FD079B02F6E79660021205C /* DCCacheManager.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCCacheManager.h; sourceTree = "<group>"; };
 		2FD079B12F6E79660021205C /* DCCacheManager.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCCacheManager.m; sourceTree = "<group>"; };
 		2FE82DDC2F5D363900375F28 /* separator@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "separator@2x.png"; sourceTree = "<group>"; };
@@ -2891,6 +2894,8 @@
 		9D43EA28E6394828AFD75534 /* Interface */ = {
 			isa = PBXGroup;
 			children = (
+				2FAF2821305B7ABB003974E9 /* DCConnectionPopup.h */,
+				2FAF2822305B7ABB003974E9 /* DCConnectionPopup.m */,
 				7D2DF2048B574519BF851AA9 /* DCInterfaceAssetCatalog.h */,
 				422F4AE731E2409BAE181FE0 /* DCInterfaceAssetCatalog.m */,
 				9F3DA05C620C4AAD96BA0FB8 /* DCInterfaceStyle.h */,
@@ -3499,6 +3504,7 @@
 				2F11228D2F4EA03000159D64 /* enc.c in Sources */,
 				2F11238C2F4EB15F00159D64 /* PSPDFUIKitMainThreadGuard.m in Sources */,
 				2F1122C72F4EA03000159D64 /* picture_csp_enc.c in Sources */,
+				2FAF2823305B7ABB003974E9 /* DCConnectionPopup.m in Sources */,
 				2FFA3A3D2F98879E00E67A40 /* DTBase64Coding.m in Sources */,
 				2FFA398E2F987C2C00E67A40 /* UIFont+DTCoreText.m in Sources */,
 				2F11229A2F4EA03000159D64 /* lossless_enc.c in Sources */,

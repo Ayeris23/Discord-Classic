@@ -8,6 +8,7 @@
 
 #import "DCInterfaceStyle.h"
 #import "DCMenuViewController.h"
+#import "DCConnectionPopup.h"
 #include "DCTools.h"
 #include <Foundation/Foundation.h>
 #include <Foundation/NSObjCRuntime.h>
@@ -848,6 +849,18 @@
     [self synchronizeSelectedGuildUI];
     [self reloadGuildTableFromCanonicalState];
     [self.channelTableView reloadData];
+}
+
+- (void)viewDidAppear:(BOOL)animated {
+    [super viewDidAppear:animated];
+    if (!self.experimentalMode) {
+        [[DCConnectionPopup sharedPopup] setHostView:self.view];
+    }
+}
+
+- (void)viewDidDisappear:(BOOL)animated {
+    [super viewDidDisappear:animated];
+    [[DCConnectionPopup sharedPopup] clearHostView:self.view];
 }
 
 // misc end

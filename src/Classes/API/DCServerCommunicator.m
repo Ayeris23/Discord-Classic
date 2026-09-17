@@ -7,6 +7,7 @@
 //
 
 #import "DCInterfaceStyle.h"
+#import "DCConnectionPopup.h"
 #include "DCServerCommunicator.h"
 #include <malloc/malloc.h>
 #include <objc/NSObjCRuntime.h>
@@ -156,7 +157,6 @@ typedef struct {
 @end
 
 @implementation DCServerCommunicator
-UIActivityIndicatorView *spinner;
 NSTimer *heartbeatTimer = nil;
 // Discord dispatch sequence numbers describe an ordered state stream. Keep
 // state mutation on one serial queue so a durable sequence can never outrun an
@@ -713,7 +713,7 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
             [sharedInstance.alertView addSubview:spinner];
             [spinner startAnimating];
         } else {
-            [sharedInstance showNonIntrusiveNotificationWithTitle:@"Connecting..."];
+            [[DCConnectionPopup sharedPopup] showWithTitle:@"Connecting..."];
         }
     });
 
@@ -1141,96 +1141,6 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
         self.loadedEmojis[snowflake] = emoji;
     });
 }
-
-// this no longer sucks
-
-- (void)showNonIntrusiveNotificationWithTitle:(NSString *)title {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        CGFloat screenWidth        = UIScreen.mainScreen.bounds.size.width;
-        CGFloat minimumPadding     = 0;   // Minimum padding threshold
-        CGFloat maxPadding         = 120; // Maximum padding
-        CGFloat notificationHeight = 50;
-
-        // Calculate title width for iOS 6 compatibility
-        CGSize titleSize   = [title sizeWithFont:[UIFont boldSystemFontOfSize:16]];
-        CGFloat titleWidth = titleSize.width;
-
-        // Calculate dynamic padding - decrease padding as title gets longer, up to minimumPadding
-        CGFloat dynamicPadding    = MAX(minimumPadding, maxPadding - (titleWidth / screenWidth) * (maxPadding - minimumPadding));
-        dynamicPadding            = MAX(40, dynamicPadding);
-        CGFloat notificationWidth = screenWidth - (dynamicPadding * 2);
-        CGFloat notificationX     = dynamicPadding;
-        CGFloat notificationY     = -notificationHeight;
-
-        if (self.notificationView != nil) {
-            [self.notificationView removeFromSuperview];
-            self.notificationView = nil;
-        }
-
-        self.notificationView = [[UIView alloc] initWithFrame:CGRectMake(notificationX, notificationY, notificationWidth, notificationHeight)];
-
-        // Create a container view for masking and rounding
-        UIView *maskView             = [[UIView alloc] initWithFrame:self.notificationView.bounds];
-        maskView.backgroundColor     = [UIColor colorWithPatternImage:[DCInterfaceStyle notificationBackgroundImage]];
-        maskView.layer.cornerRadius  = 15;
-        maskView.layer.masksToBounds = YES; // Important: Masking the view to fix corner clipping
-
-        [self.notificationView addSubview:maskView];
-        [self.notificationView sendSubviewToBack:maskView];
-
-        self.notificationView.layer.shadowColor   = [UIColor blackColor].CGColor;
-        self.notificationView.layer.shadowOffset  = CGSizeMake(0, 2);
-        self.notificationView.layer.shadowOpacity = 0.6;
-        self.notificationView.layer.shadowRadius  = 5;
-        self.notificationView.layer.borderColor   = [UIColor darkGrayColor].CGColor;
-        self.notificationView.layer.borderWidth   = 1.0;
-        self.notificationView.layer.cornerRadius  = 15;
-
-        CGFloat spinnerWidth  = 30;
-        CGFloat labelWidth    = notificationWidth - spinnerWidth - 10; // Reduce space between label and spinner
-        UILabel *label        = [[UILabel alloc] initWithFrame:CGRectMake(10, 0, labelWidth, notificationHeight)];
-        label.text            = title;
-        label.backgroundColor = [UIColor clearColor];
-        label.textColor       = [UIColor colorWithRed:168 / 255.0 green:168 / 255.0 blue:168 / 255.0 alpha:1];
-        label.font            = [UIFont boldSystemFontOfSize:16];
-        label.textAlignment   = (NSTextAlignment)UITextAlignmentLeft;
-        label.lineBreakMode   = NSLineBreakByTruncatingTail;
-        label.shadowColor     = [UIColor colorWithRed:0 / 255.0 green:0 / 255.0 blue:0 / 255.0 alpha:1];
-        label.shadowOffset    = CGSizeMake(0, 1);
-
-        UIActivityIndicatorView *spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleWhite];
-        spinner.center                   = CGPointMake(notificationWidth - (spinnerWidth / 2) - 5, notificationHeight / 2); // Adjust spinner closer to text
-        [spinner startAnimating];
-
-        [self.notificationView addSubview:label];
-        [self.notificationView addSubview:spinner];
-
-        UIWindow *window = [[[UIApplication sharedApplication] windows] lastObject];
-        [window addSubview:self.notificationView];
-
-        [UIView animateWithDuration:0.6
-                         animations:^{
-                             self.notificationView.frame = CGRectMake(notificationX, 64, notificationWidth, notificationHeight);
-                         }];
-    });
-}
-
-- (void)dismissNotification {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        // Animate out
-        [UIView animateWithDuration:0.4
-            animations:^{
-                CGRect frame                = self.notificationView.frame;
-                frame.origin.y              = -frame.size.height; // Move off-screen
-                self.notificationView.frame = frame;
-            }
-            completion:^(BOOL finished) {
-                [self.notificationView removeFromSuperview];
-                self.notificationView = nil;
-            }];
-    });
-}
-
 
 - (DCChannel *)findChannelById:(NSString *)channelId {
     for (DCGuild *guild in self.guilds) {
@@ -1731,7 +1641,7 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
     DBGLOG(@"Did authenticate!");
     if (self.oldMode == NO) {
         dispatch_async(dispatch_get_main_queue(), ^{
-            [self showNonIntrusiveNotificationWithTitle:@"Getting Ready..."];
+            [[DCConnectionPopup sharedPopup] showWithTitle:@"Getting Ready..."];
         });
     }
     // Grab session state used for RESUME. Discord requires reconnects to use
@@ -2035,7 +1945,7 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
             [NSNotificationCenter.defaultCenter postNotificationName:@"READY" object:self];
             // Dismiss the 'reconnecting' dialogue box
             [self.alertView dismissWithClickedButtonIndex:0 animated:YES];
-            [self dismissNotification];
+            [[DCConnectionPopup sharedPopup] dismiss];
         });
 }
 
@@ -3858,7 +3768,7 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(15.0 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
             if (!weakSelf.didAuthenticate && weakSelf.websocket) {
-                [weakSelf showNonIntrusiveNotificationWithTitle:@"Downloading data…"];
+                [[DCConnectionPopup sharedPopup] showWithTitle:@"Downloading data…"];
             }
         });
         // Disable ability to identify until reenabled 5 seconds later.
@@ -3998,7 +3908,7 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
         self.reconnectAttempts = 0;
         dispatch_async(dispatch_get_main_queue(), ^{
             [self.alertView dismissWithClickedButtonIndex:0 animated:YES];
-            [self dismissNotification];
+            [[DCConnectionPopup sharedPopup] dismiss];
 
             [NSNotificationCenter.defaultCenter
                 postNotificationName:@"CONNECTION_RESTORED"
@@ -4652,7 +4562,7 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
         NSString *bannerTitle = (self.guilds.count > 0 && self.selectedChannel)
             ? @"Refreshing..."
             : @"Reconnecting...";
-        [self showNonIntrusiveNotificationWithTitle:bannerTitle];
+        [[DCConnectionPopup sharedPopup] showWithTitle:bannerTitle];
 
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{

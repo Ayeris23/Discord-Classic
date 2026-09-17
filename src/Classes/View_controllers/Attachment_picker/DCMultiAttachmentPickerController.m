@@ -639,9 +639,26 @@ moveRowAtIndexPath:(NSIndexPath *)sourceIndexPath
                 if (!strongSelf) return;
                 strongSelf.tableView.backgroundView = nil;
 
+                NSString *message = error.localizedDescription ?:
+                    @"Discord Classic could not access your photo library.";
+
+                if ([error.domain isEqualToString:ALAssetsLibraryErrorDomain]) {
+                    BOOL isIOS5 = [[[UIDevice currentDevice] systemVersion] floatValue] < 6.0f;
+
+                    if (error.code == ALAssetsLibraryAccessGloballyDeniedError) {
+                        message = isIOS5
+                            ? @"iOS 5 requires Location Services to access the Photo Library. Enable Location Services in Settings, then try again."
+                            : @"Photo Library access is disabled or restricted on this device. Check Settings > Privacy > Photos, then try again.";
+                    } else if (error.code == ALAssetsLibraryAccessUserDeniedError) {
+                        message = isIOS5
+                            ? @"Location Services access for Discord Classic is disabled. iOS 5 requires it to open the Photo Library. Enable it in Settings, then try again."
+                            : @"Discord Classic does not have permission to access your Photo Library. Enable it in Settings > Privacy > Photos, then try again.";
+                    }
+                }
+
                 UIAlertView *alert = [[UIAlertView alloc]
                     initWithTitle:@"Photos Unavailable"
-                          message:error.localizedDescription ?: @"Discord Classic could not access your photo library."
+                          message:message
                          delegate:nil
                 cancelButtonTitle:@"OK"
                 otherButtonTitles:nil];

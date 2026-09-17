@@ -8,6 +8,7 @@
 
 #import "DCInterfaceStyle.h"
 #import "DCChatViewController.h"
+#import "DCConnectionPopup.h"
 #include <dispatch/dispatch.h>
 #include <objc/runtime.h>
 #include "DCEmoji.h"
@@ -683,6 +684,12 @@ static dispatch_queue_t chat_presentation_queue;
 
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
+
+    BOOL experimentalMode =
+        [[NSUserDefaults standardUserDefaults] boolForKey:@"experimentalMode"];
+    if (!experimentalMode || self.slideMenuController != nil) {
+        [[DCConnectionPopup sharedPopup] setHostView:self.view];
+    }
 
     /*
      * Warm the COMPLETE currently-loaded window, not just the rows UIKit has
@@ -7296,6 +7303,11 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     [NSNotificationCenter.defaultCenter
         postNotificationName:@"ChannelSelectionCleared"
                       object:nil];
+}
+
+- (void)viewDidDisappear:(BOOL)animated {
+    [super viewDidDisappear:animated];
+    [[DCConnectionPopup sharedPopup] clearHostView:self.view];
 }
 
 - (void)dealloc {
