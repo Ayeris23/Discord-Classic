@@ -968,7 +968,14 @@ static NSUInteger DCImageMemoryCost(UIImage *image) {
 
     newRole.snowflake    = snowflake;
     newRole.name         = [jsonRole objectForKey:@"name"];
-    newRole.color        = [[jsonRole objectForKey:@"color"] intValue];
+    id roleColors = [jsonRole objectForKey:@"colors"];
+    id primaryColor = [roleColors isKindOfClass:[NSDictionary class]]
+        ? [roleColors objectForKey:@"primary_color"] : nil;
+    if (![primaryColor respondsToSelector:@selector(integerValue)]) {
+        primaryColor = [jsonRole objectForKey:@"color"];
+    }
+    newRole.color        = [primaryColor respondsToSelector:@selector(integerValue)]
+        ? [primaryColor integerValue] : 0;
     newRole.hoist        = [[jsonRole objectForKey:@"hoist"] boolValue];
     newRole.iconID       = [jsonRole objectForKey:@"icon"];          // can be NSNull
     newRole.unicodeEmoji = [jsonRole objectForKey:@"unicode_emoji"]; // can be nil

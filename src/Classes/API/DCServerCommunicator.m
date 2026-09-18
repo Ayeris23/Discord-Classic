@@ -829,6 +829,7 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
     id rawNickname = [member objectForKey:@"nick"];
     id rawAvatar = [member objectForKey:@"avatar"];
     id rawDecoration = [member objectForKey:@"avatar_decoration_data"];
+    id rawRoles = [member objectForKey:@"roles"];
     NSString *key = DCGuildMemberResolutionKey(guildID, user.snowflake);
 
     BOOL nicknameResolved = NO;
@@ -881,6 +882,20 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
             user.guildAvatarIDs = [NSMutableDictionary dictionary];
         if (!user.guildAvatarDecorationIDs)
             user.guildAvatarDecorationIDs = [NSMutableDictionary dictionary];
+        if (!user.guildRoleIDs)
+            user.guildRoleIDs = [NSMutableDictionary dictionary];
+
+        if ([rawRoles isKindOfClass:[NSArray class]]) {
+            NSMutableArray *roleIDs = [NSMutableArray arrayWithCapacity:[rawRoles count]];
+            for (id roleID in rawRoles) {
+                if ([roleID isKindOfClass:[NSString class]] && [roleID length] > 0) {
+                    [roleIDs addObject:roleID];
+                }
+            }
+            if (authoritative || ![user.guildRoleIDs objectForKey:guildID]) {
+                [user.guildRoleIDs setObject:roleIDs forKey:guildID];
+            }
+        }
 
         if (rawNickname != nil) {
             if (authoritative) {
@@ -2363,6 +2378,7 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
                 [user.guildNicknames removeObjectForKey:retiredGuildID];
                 [user.guildAvatarIDs removeObjectForKey:retiredGuildID];
                 [user.guildAvatarDecorationIDs removeObjectForKey:retiredGuildID];
+                [user.guildRoleIDs removeObjectForKey:retiredGuildID];
             }
         }
         for (NSString *retiredGuildID in retiredGuildIDs)
@@ -2981,6 +2997,7 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
         [user.guildNicknames removeObjectForKey:guildID];
         [user.guildAvatarIDs removeObjectForKey:guildID];
         [user.guildAvatarDecorationIDs removeObjectForKey:guildID];
+        [user.guildRoleIDs removeObjectForKey:guildID];
     }
     [self clearResolvedGuildProfilesForGuildID:guildID];
     for (NSString *roleID in [guild.roles allKeys])
@@ -3036,6 +3053,8 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
             postNotificationName:@"RELOAD MESSAGE DATA" object:nil];
         [NSNotificationCenter.defaultCenter
             postNotificationName:@"RELOAD CHANNEL LIST" object:nil];
+        [NSNotificationCenter.defaultCenter
+            postNotificationName:@"GuildMemberListUpdated" object:nil];
     });
 }
 
@@ -3058,6 +3077,8 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
             postNotificationName:@"RELOAD MESSAGE DATA" object:nil];
         [NSNotificationCenter.defaultCenter
             postNotificationName:@"RELOAD CHANNEL LIST" object:nil];
+        [NSNotificationCenter.defaultCenter
+            postNotificationName:@"GuildMemberListUpdated" object:nil];
     });
 }
 

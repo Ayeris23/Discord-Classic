@@ -9,6 +9,8 @@
 #import "DCInterfaceStyle.h"
 #import "DCInterfaceAssetCatalog.h"
 #import "DCUser.h"
+#import "DCGuild.h"
+#import "DCRole.h"
 
 @implementation DCInterfaceStyle
 
@@ -176,6 +178,44 @@
         return nil;
     }
     return [DCInterfaceAssetCatalog imageNamed:[NSString stringWithFormat:@"DefaultAvatar%lu", (unsigned long)index]];
+}
+
+
++ (UIColor *)roleColorForUser:(DCUser *)user inGuild:(DCGuild *)guild {
+    if (!user || !guild.snowflake.length || guild.roles.count == 0) {
+        return [UIColor whiteColor];
+    }
+
+    NSArray *roleIDs = [user.guildRoleIDs objectForKey:guild.snowflake];
+    if (![roleIDs isKindOfClass:[NSArray class]] || roleIDs.count == 0) {
+        return [UIColor whiteColor];
+    }
+
+    DCRole *highestColoredRole = nil;
+    for (NSString *roleID in roleIDs) {
+        DCRole *role = [guild.roles objectForKey:roleID];
+        if (!role || role.color == 0) continue;
+
+        if (!highestColoredRole || role.position > highestColoredRole.position) {
+            highestColoredRole = role;
+            continue;
+        }
+
+        if (role.position == highestColoredRole.position &&
+            [role.snowflake longLongValue] < [highestColoredRole.snowflake longLongValue]) {
+            highestColoredRole = role;
+        }
+    }
+
+    if (!highestColoredRole) {
+        return [UIColor whiteColor];
+    }
+
+    NSInteger color = highestColoredRole.color;
+    CGFloat red = ((color >> 16) & 0xFF) / 255.0f;
+    CGFloat green = ((color >> 8) & 0xFF) / 255.0f;
+    CGFloat blue = (color & 0xFF) / 255.0f;
+    return [UIColor colorWithRed:red green:green blue:blue alpha:1.0f];
 }
 
 + (UIImage *)universalAddImage {

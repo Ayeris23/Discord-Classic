@@ -134,6 +134,7 @@
             DCGuild *guild =
                 DCServerCommunicator.sharedInstance.selectedChannel.parentGuild;
             cell.userName.text = [user displayNameInGuild:guild];
+            cell.userName.textColor = [DCInterfaceStyle roleColorForUser:user inGuild:guild];
 
             UIImage *avatar = [DCTools cachedUserAvatar:user inGuild:guild];
             if (avatar && avatar.size.width > 0) {

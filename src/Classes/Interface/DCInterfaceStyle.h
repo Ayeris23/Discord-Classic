@@ -8,6 +8,9 @@
 
 #import <UIKit/UIKit.h>
 
+@class DCUser;
+@class DCGuild;
+
 @interface DCInterfaceStyle : NSObject
 
 + (UIImage *)navigationBarBackgroundImage;
@@ -44,6 +47,8 @@
 + (UIImage *)statusImageForStatus:(NSInteger)status;
 + (UIImage *)connectedAccountIconForType:(NSString *)accountType;
 + (UIImage *)defaultAvatarImageAtIndex:(NSUInteger)index;
+
++ (UIColor *)roleColorForUser:(DCUser *)user inGuild:(DCGuild *)guild;
 
 + (UIImage *)universalAddImage;
 + (UIImage *)universalRemoveImage;

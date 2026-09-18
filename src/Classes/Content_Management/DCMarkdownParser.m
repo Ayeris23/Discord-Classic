@@ -25,6 +25,7 @@ NSString *const DCMarkdownSpoilerAttributeName   = @"DCMarkdownSpoiler";
 static NSString *const kDCSpoilerScheme = @"discord-spoiler";
 static NSString *const kDCMarkdownCodeLinkAttribute = @"DCMarkdownCodeLink";
 static NSString *const kDCMarkdownStandardLinkAttribute = @"DCMarkdownStandardLink";
+static NSString *const kDCMarkdownLiteralCodeAttribute = @"DCMarkdownLiteralCode";
 
 // Emoji Callbacks
 static CGFloat DCEmojiGetAscent(void *refCon)  { return 14.0f; }
@@ -214,7 +215,7 @@ static DCMarkdownFeatures DCScanMarkdownFeatures(NSString *text) {
      * this is safe to run from the chat controller's low-priority queue.
      */
     NSArray *plainPatterns = @[
-        @"\\\\([*_~`|\\\\#])",
+        @"\\\\([^0-9A-Za-z\\s])",
         @"`([^`\\n]+)`",
         @"\\[([^\\]]+)\\]\\(([^\\)]+)\\)",
         @"<((?:https?|ftp)://[^\\s<>]+)>",
@@ -361,6 +362,36 @@ static DCMarkdownFeatures DCScanMarkdownFeatures(NSString *text) {
     return linked;
 }
 
+- (BOOL)characterAtIndex:(NSUInteger)index isEscapedInString:(NSString *)text {
+    if (index == 0 || index >= text.length) return NO;
+
+    NSUInteger slashCount = 0;
+    NSUInteger cursor = index;
+    while (cursor > 0 && [text characterAtIndex:cursor - 1] == '\\') {
+        slashCount++;
+        cursor--;
+    }
+    return (slashCount & 1) != 0;
+}
+
+- (BOOL)rangeContainsLiteralCode:(NSRange)range
+                        inString:(NSAttributedString *)string {
+    if (range.location == NSNotFound || range.length == 0 ||
+        NSMaxRange(range) > string.length) return NO;
+
+    __block BOOL literalCode = NO;
+    [string enumerateAttribute:kDCMarkdownLiteralCodeAttribute
+                       inRange:range
+                       options:0
+                    usingBlock:^(id value, NSRange attributeRange, BOOL *stop) {
+        if (value) {
+            literalCode = YES;
+            *stop = YES;
+        }
+    }];
+    return literalCode;
+}
+
 - (BOOL)clusterLooksLikeEmoji:(NSString *)cluster {
     for (NSUInteger i = 0; i < cluster.length; i++) {
         unichar ch = [cluster characterAtIndex:i];
@@ -452,6 +483,10 @@ static DCMarkdownFeatures DCScanMarkdownFeatures(NSString *text) {
     }
     if (features & DCMarkdownFeatureEscape) {
         [self applyEscapes:result protectedRanges:protectedRanges];
+    }
+    if (result.length) {
+        [result removeAttribute:kDCMarkdownLiteralCodeAttribute
+                          range:NSMakeRange(0, result.length)];
     }
         
     return [result copy];
@@ -578,9 +613,8 @@ static DCMarkdownFeatures DCScanMarkdownFeatures(NSString *text) {
                 continue;
             }
             
-            // Skip if leading marker is preceded by backslash
-            if (leadingRange.location > 0 && 
-                [string.string characterAtIndex:leadingRange.location - 1] == '\\') {
+            if ([self characterAtIndex:leadingRange.location isEscapedInString:string.string] ||
+                [self characterAtIndex:trailingRange.location isEscapedInString:string.string]) {
                 continue;
             }
             
@@ -608,7 +642,8 @@ static DCMarkdownFeatures DCScanMarkdownFeatures(NSString *text) {
     while (i + 2 < length) {
         if ([text characterAtIndex:i]     == '`' &&
             [text characterAtIndex:i + 1] == '`' &&
-            [text characterAtIndex:i + 2] == '`') {
+            [text characterAtIndex:i + 2] == '`' &&
+            ![self characterAtIndex:i isEscapedInString:text]) {
 
             NSUInteger openTick = i;
             NSUInteger contentStart = i + 3;
@@ -632,7 +667,8 @@ static DCMarkdownFeatures DCScanMarkdownFeatures(NSString *text) {
 
             NSDictionary *codeAttrs = @{
                 (NSString *)kCTFontAttributeName: [self ctFontRef:_codeFont],
-                DCMarkdownBlockTypeAttributeName: @(DCMarkdownBlockTypeCode)
+                DCMarkdownBlockTypeAttributeName: @(DCMarkdownBlockTypeCode),
+                kDCMarkdownLiteralCodeAttribute: @YES
             };
             if (contentRange.length > 0 && NSMaxRange(contentRange) <= string.length) {
                 [self applyBackgroundStyle:DCMarkdownBackgroundStyleCode
@@ -871,21 +907,21 @@ static DCMarkdownFeatures DCScanMarkdownFeatures(NSString *text) {
 - (void)applyEscapes:(NSMutableAttributedString *)string
       protectedRanges:(NSMutableArray *)protectedRanges {
     if ([string.string rangeOfString:@"\\"].location == NSNotFound) return;
-    NSRegularExpression *regex = [self cachedRegexWithPattern:@"\\\\([*_~`|\\\\#])"
+
+    NSRegularExpression *regex = [self cachedRegexWithPattern:@"\\\\([^0-9A-Za-z\\s])"
                                                       options:0];
-    
     NSArray *matches = [regex matchesInString:string.string
                                       options:0
                                         range:NSMakeRange(0, string.string.length)];
-    
+
     for (NSTextCheckingResult *match in [matches reverseObjectEnumerator]) {
-        // Remove the backslash, leaving just the escaped character
+        if ([self rangeContainsLiteralCode:match.range inString:string]) continue;
+
         NSRange backslashRange = NSMakeRange(match.range.location, 1);
-        [self replaceCharactersInRange:backslashRange withString:@"" inString:string protectedRanges:protectedRanges];
-        
-        // Protect the now-exposed character from inline formatting
-        NSRange charRange = NSMakeRange(match.range.location, 1);
-        [protectedRanges addObject:[NSValue valueWithRange:charRange]];
+        [self replaceCharactersInRange:backslashRange
+                            withString:@""
+                              inString:string
+                       protectedRanges:protectedRanges];
     }
 }
 
@@ -899,6 +935,7 @@ static DCMarkdownFeatures DCScanMarkdownFeatures(NSString *text) {
                                         range:NSMakeRange(0, string.string.length)];
     for (NSTextCheckingResult *match in [matches reverseObjectEnumerator]) {
         if ([self range:match.range isProtectedBy:protectedRanges]) continue;
+        if ([self characterAtIndex:match.range.location isEscapedInString:string.string]) continue;
 
         NSUInteger codeEnd = NSMaxRange(match.range);
         BOOL isMarkdownLinkLabel = match.range.location > 0 &&
@@ -924,6 +961,9 @@ static DCMarkdownFeatures DCScanMarkdownFeatures(NSString *text) {
         [self replaceCharactersInRange:leadingTick withString:@"" inString:string protectedRanges:protectedRanges];
 
         NSRange strippedRange = NSMakeRange(match.range.location, match.range.length - 2);
+        [string addAttribute:kDCMarkdownLiteralCodeAttribute
+                       value:@YES
+                       range:strippedRange];
         [protectedRanges addObject:[NSValue valueWithRange:strippedRange]];
     }
 }
@@ -944,6 +984,28 @@ static DCMarkdownFeatures DCScanMarkdownFeatures(NSString *text) {
         NSUInteger trailingLocation = NSMaxRange(match.range) - 1;
         if ([self location:match.range.location isProtectedBy:protectedRanges] ||
             [self location:trailingLocation isProtectedBy:protectedRanges]) {
+            continue;
+        }
+
+        NSUInteger markerLength = 1;
+        NSString *plain = string.string;
+        if (match.range.length >= 6 &&
+            [plain characterAtIndex:match.range.location] == '*' &&
+            [plain characterAtIndex:match.range.location + 1] == '*' &&
+            [plain characterAtIndex:match.range.location + 2] == '*') {
+            markerLength = 3;
+        } else if (match.range.length >= 4) {
+            unichar first = [plain characterAtIndex:match.range.location];
+            unichar second = [plain characterAtIndex:match.range.location + 1];
+            if ((first == '*' && second == '*') ||
+                (first == '_' && second == '_') ||
+                (first == '~' && second == '~')) {
+                markerLength = 2;
+            }
+        }
+        NSUInteger closingMarker = NSMaxRange(match.range) - markerLength;
+        if ([self characterAtIndex:match.range.location isEscapedInString:plain] ||
+            [self characterAtIndex:closingMarker isEscapedInString:plain]) {
             continue;
         }
         NSRange contentRange = [match rangeAtIndex:1];
@@ -975,7 +1037,9 @@ static DCMarkdownFeatures DCScanMarkdownFeatures(NSString *text) {
     for (NSTextCheckingResult *match in [matches reverseObjectEnumerator]) {
         NSUInteger closingLocation = NSMaxRange(match.range) - 2;
         if ([self location:match.range.location isProtectedBy:protectedRanges] ||
-            [self location:closingLocation isProtectedBy:protectedRanges]) {
+            [self location:closingLocation isProtectedBy:protectedRanges] ||
+            [self characterAtIndex:match.range.location isEscapedInString:string.string] ||
+            [self characterAtIndex:closingLocation isEscapedInString:string.string]) {
             continue;
         }
 
@@ -1023,6 +1087,7 @@ static DCMarkdownFeatures DCScanMarkdownFeatures(NSString *text) {
 
     for (NSTextCheckingResult *match in [matches reverseObjectEnumerator]) {
         if ([self range:match.range isProtectedBy:protectedRanges]) continue;
+        if ([self characterAtIndex:match.range.location isEscapedInString:string.string]) continue;
 
         NSRange textRange = [match rangeAtIndex:1];
         NSRange urlRange  = [match rangeAtIndex:2];
@@ -1268,6 +1333,7 @@ static DCMarkdownFeatures DCScanMarkdownFeatures(NSString *text) {
 
     for (NSTextCheckingResult *match in [matches reverseObjectEnumerator]) {
         if ([self range:match.range isProtectedBy:protectedRanges]) continue;
+        if ([self characterAtIndex:match.range.location isEscapedInString:string.string]) continue;
 
         NSRange idRange = [match rangeAtIndex:1];
         NSString *entityID = [string.string substringWithRange:idRange];
@@ -1327,7 +1393,8 @@ static DCMarkdownFeatures DCScanMarkdownFeatures(NSString *text) {
     NSRange found;
 
     while ((found = [text rangeOfString:literal options:0 range:searchRange]).location != NSNotFound) {
-        if (![self range:found isProtectedBy:protectedRanges]) {
+        if (![self range:found isProtectedBy:protectedRanges] &&
+            ![self characterAtIndex:found.location isEscapedInString:text]) {
             [self applyBackgroundStyle:DCMarkdownBackgroundStyleTag
                               toRange:found
                              inString:string
@@ -1353,6 +1420,7 @@ static DCMarkdownFeatures DCScanMarkdownFeatures(NSString *text) {
 
     for (NSTextCheckingResult *match in [matches reverseObjectEnumerator]) {
         if ([self range:match.range isProtectedBy:protectedRanges]) continue;
+        if ([self characterAtIndex:match.range.location isEscapedInString:string.string]) continue;
 
         NSRange tsRange    = [match rangeAtIndex:1];
         NSRange styleRange = [match rangeAtIndex:2];
@@ -1425,6 +1493,7 @@ static DCMarkdownFeatures DCScanMarkdownFeatures(NSString *text) {
 
     for (NSTextCheckingResult *match in [matches reverseObjectEnumerator]) {
         if ([self range:match.range isProtectedBy:protectedRanges]) continue;
+        if ([self characterAtIndex:match.range.location isEscapedInString:string.string]) continue;
 
         NSRange urlRange = [match rangeAtIndex:1];
         NSString *urlString = [string.string substringWithRange:urlRange];
@@ -1603,6 +1672,7 @@ static DCMarkdownFeatures DCScanMarkdownFeatures(NSString *text) {
 
     for (NSTextCheckingResult *match in [matches reverseObjectEnumerator]) {
         if ([self range:match.range isProtectedBy:protectedRanges]) continue;
+        if ([self characterAtIndex:match.range.location isEscapedInString:string.string]) continue;
 
         BOOL insideSpoiler = NO;
         for (NSTextCheckingResult *spoilerMatch in spoilerMatches) {

@@ -8,5 +8,10 @@
 
 #import <UIKit/UIKit.h>
 
-@interface DCIPadSplitViewController : UISplitViewController <UISplitViewControllerDelegate>
+@interface DCIPadSplitViewController : UISplitViewController <UISplitViewControllerDelegate, UIGestureRecognizerDelegate>
+
+- (void)showPortraitSidebarAnimated:(BOOL)animated;
+- (void)hidePortraitSidebarAnimated:(BOOL)animated;
+- (BOOL)isPortraitSidebarVisible;
+
 @end

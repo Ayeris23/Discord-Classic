@@ -50,6 +50,7 @@
 #import "DCMessageStore.h"
 #import "DCChannelWindow.h"
 #import "DCMessageLayoutBuilder.h"
+#import "DCIPadSplitViewController.h"
 
 @interface DCChatReferencePresentation : NSObject
 @property (nonatomic, copy) NSString *sourceText;
@@ -411,17 +412,13 @@ static int DCProximityMessageLoadCount(void) {
 }
 
 /*
- * Forward pagination should be driven by how much of the newly appended page
- * the user has actually consumed, not by a large pixel threshold. A 12-row
- * phone page therefore re-fetches only after the user reaches roughly the
- * newest half of that page.
+ * Forward pagination follows visible-row progress so insertion at the flipped
+ * table's newest edge cannot leave the trigger permanently active. Start the
+ * next fetch after roughly one quarter of the current forward page is consumed
+ * to keep a larger runway toward the present without chaining page requests.
  */
 static NSInteger DCNewerPaginationTriggerRow(void) {
-    // Keep more than one small page of look-ahead without consuming too much of the resident window.
-    if ([DCResourceManager sharedManager].memoryClass == DCDeviceMemoryClass256MB) {
-        return 8 * DCDynamicMessageLoadMultiplier();
-    }
-    return MAX(3, DCProximityMessageLoadCount() / 2);
+    return MAX(3, (DCProximityMessageLoadCount() * 3) / 4);
 }
 
 static CGFloat DCJumpToPresentRevealDistance(void) {
@@ -697,8 +694,54 @@ static dispatch_queue_t chat_presentation_queue;
     [self stopForwardMomentumContinuation];
 }
 
+- (DCIPadSplitViewController *)iPadSplitViewController {
+    if ([[UIDevice currentDevice] userInterfaceIdiom] != UIUserInterfaceIdiomPad ||
+        ![self.splitViewController isKindOfClass:[DCIPadSplitViewController class]]) {
+        return nil;
+    }
+    return (DCIPadSplitViewController *)self.splitViewController;
+}
+
+- (void)updateIPadPortraitSidebarButton {
+    DCIPadSplitViewController *splitViewController =
+        [self iPadSplitViewController];
+    if (!splitViewController) {
+        return;
+    }
+
+    BOOL portrait = UIInterfaceOrientationIsPortrait(
+        [UIApplication sharedApplication].statusBarOrientation);
+    if (!portrait) {
+        if (self.navigationItem.leftBarButtonItem == self.sidebarButton) {
+            self.navigationItem.leftBarButtonItem = nil;
+        }
+        return;
+    }
+
+    if (!self.sidebarButton) {
+        UIBarButtonItem *sidebarButton = [[UIBarButtonItem alloc]
+            initWithImage:[UIImage imageNamed:@"hamburgerButton.png"]
+                    style:UIBarButtonItemStylePlain
+                   target:self
+                   action:@selector(openSidebar:)];
+        [sidebarButton setBackgroundImage:[DCInterfaceStyle barButtonBackgroundImage]
+                                  forState:UIControlStateNormal
+                                barMetrics:UIBarMetricsDefault];
+        [sidebarButton
+            setBackgroundImage:[DCInterfaceStyle barButtonPressedBackgroundImage]
+                      forState:UIControlStateHighlighted
+                    barMetrics:UIBarMetricsDefault];
+        self.navigationItem.leftBarButtonItem = sidebarButton;
+        self.sidebarButton = sidebarButton;
+    } else if (self.navigationItem.leftBarButtonItem != self.sidebarButton) {
+        self.navigationItem.leftBarButtonItem = self.sidebarButton;
+    }
+}
+
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
+
+    [self updateIPadPortraitSidebarButton];
 
     [[UIApplication sharedApplication] setStatusBarHidden:NO];
 
@@ -1940,11 +1983,17 @@ static dispatch_queue_t chat_presentation_queue;
                     DCServerCommunicator.sharedInstance.selectedChannel.parentGuild];
                 if (displayName) {
                     cell.authorLabel.text = displayName;
+                    cell.authorLabel.textColor =
+                        [DCInterfaceStyle roleColorForUser:user
+                                                  inGuild:DCServerCommunicator.sharedInstance.selectedChannel.parentGuild];
                 }
             }
         }
         if (refAuthorMatches) {
             cell.referencedProfileImage.image = [self avatarImageForUser:user];
+            cell.referencedAuthorLabel.textColor =
+                [DCInterfaceStyle roleColorForUser:user
+                                          inGuild:DCServerCommunicator.sharedInstance.selectedChannel.parentGuild];
         }
     }
 }
@@ -2687,6 +2736,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
             CGFloat actualNameWidth = MAX(0.0f, actualTimestampX - authorOriginX - gap);
 
             cell.authorLabel.text = displayName;
+            cell.authorLabel.textColor = [DCInterfaceStyle roleColorForUser:message.author inGuild:guild];
             cell.authorLabel.frame = CGRectMake(authorOriginX,
                                                  cell.authorLabel.y,
                                                  actualNameWidth,
@@ -2713,6 +2763,8 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
             reference.authorNameWidth = referenceAuthorWidth;
             cell.referencedAuthorLabel.text = referenceAuthorName;
+            cell.referencedAuthorLabel.textColor =
+                [DCInterfaceStyle roleColorForUser:reference.author inGuild:guild];
 
             CGFloat referenceWidth =
                 MAX(0.0f, self.chatTableView.width - referenceAuthorWidth);
@@ -4335,6 +4387,8 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                 if (!layout.grouped) {
                     cell.authorLabel.text =
                         [messageAtRowIndex.author displayNameInGuild:guild];
+                    cell.authorLabel.textColor =
+                        [DCInterfaceStyle roleColorForUser:messageAtRowIndex.author inGuild:guild];
                 }
 
                 if (messageAtRowIndex.referencedMessage) {
@@ -4345,6 +4399,9 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                         cell.referencedAuthorLabel.text =
                             [messageAtRowIndex.referencedMessage.author
                                 displayNameInGuild:guild];
+                        cell.referencedAuthorLabel.textColor =
+                            [DCInterfaceStyle roleColorForUser:messageAtRowIndex.referencedMessage.author
+                                                      inGuild:guild];
                     }
                 } else {
                     cell.referencedProfileImage.image = nil;
@@ -4416,6 +4473,10 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
                 CFAbsoluteTime referenceBindStart = CFAbsoluteTimeGetCurrent();
                 cell.referencedAuthorLabel.text = referenceAuthorName;
+                cell.referencedAuthorLabel.textColor = referenceResolved
+                    ? [DCInterfaceStyle roleColorForUser:reference.author
+                                                 inGuild:DCServerCommunicator.sharedInstance.selectedChannel.parentGuild]
+                    : [UIColor whiteColor];
                 cell.referencedProfileImage.image = referenceResolved ? [self avatarImageForUser:reference.author] : nil;
 
                 CGFloat referenceWidth = MAX(0.0f, self.chatTableView.width - referenceAuthorWidth);
@@ -4515,6 +4576,9 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                 CGFloat actualNameWidth = MAX(0, actualTimestampX - authorOriginX - gap);
                 
                 cell.authorLabel.text = displayName;
+                cell.authorLabel.textColor =
+                    [DCInterfaceStyle roleColorForUser:messageAtRowIndex.author
+                                              inGuild:DCServerCommunicator.sharedInstance.selectedChannel.parentGuild];
                 cell.authorLabel.frame = CGRectMake(authorOriginX,
                                                     cell.authorLabel.y,
                                                     actualNameWidth,
@@ -6497,6 +6561,14 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 }
 
 - (IBAction)openSidebar:(id)sender {
+    DCIPadSplitViewController *splitViewController =
+        [self iPadSplitViewController];
+    if (splitViewController) {
+        [self.inputField resignFirstResponder];
+        [splitViewController showPortraitSidebarAnimated:YES];
+        return;
+    }
+
     [self.slideMenuController showLeftMenu:YES];
 }
 
@@ -6787,6 +6859,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
         : nil;
     cell.profileImage.image = avatar ?: currentUser.profileImage;
     cell.authorLabel.text = displayName;
+    cell.authorLabel.textColor = [DCInterfaceStyle roleColorForUser:currentUser inGuild:guild];
     cell.timestampLabel.text = @"Uploading…";
 
     CGFloat width = MAX(80.0f, self.chatTableView.bounds.size.width);
@@ -7243,6 +7316,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
 - (void)didRotateFromInterfaceOrientation:(UIInterfaceOrientation)fromInterfaceOrientation {
     dispatch_async(dispatch_get_main_queue(), ^{
+        [self updateIPadPortraitSidebarButton];
         [self dc_repairGeometryForCurrentBounds];
     });
 }

@@ -367,8 +367,6 @@
 		2F1123742F4EB0AD00159D64 /* UIDeviceAdditions.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F1123352F4EB0AD00159D64 /* UIDeviceAdditions.m */; };
 		2F1123752F4EB0AD00159D64 /* DCOwnAccountInfoManagementController.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F1123392F4EB0AD00159D64 /* DCOwnAccountInfoManagementController.m */; };
 		2F1123762F4EB0AD00159D64 /* DCViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F11233C2F4EB0AD00159D64 /* DCViewController.m */; };
-		A15D00012F6F000000000001 /* DCIPadSplitViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = A15D00032F6F000000000003 /* DCIPadSplitViewController.m */; };
-		A15C0A03123456789ABCDEF0 /* DCConnectionPopup.m in Sources */ = {isa = PBXBuildFile; fileRef = A15C0A02123456789ABCDEF0 /* DCConnectionPopup.m */; };
 		2F1123772F4EB0AD00159D64 /* DCChatViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F11233F2F4EB0AD00159D64 /* DCChatViewController.m */; };
 		2F1123782F4EB0AD00159D64 /* UILazyImageView.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F1123412F4EB0AD00159D64 /* UILazyImageView.m */; };
 		2F1123792F4EB0AD00159D64 /* DCChannelListViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F1123442F4EB0AD00159D64 /* DCChannelListViewController.m */; };
@@ -563,6 +561,8 @@
 		2FFA3A7E2F98899400E67A40 /* DTAnimatedGIF.m in Sources */ = {isa = PBXBuildFile; fileRef = 2FFA3A7D2F98899400E67A40 /* DTAnimatedGIF.m */; };
 		2FFA3A822F9B0AD600E67A40 /* default.css.c in Sources */ = {isa = PBXBuildFile; fileRef = 2FFA3A812F9B0AD600E67A40 /* default.css.c */; };
 		9FDE61CDBE304A9B989107DC /* DCInterfaceStyle.m in Sources */ = {isa = PBXBuildFile; fileRef = 7DFC9E25F7D54E268A2D0499 /* DCInterfaceStyle.m */; };
+		A15C0A03123456789ABCDEF0 /* DCConnectionPopup.m in Sources */ = {isa = PBXBuildFile; fileRef = A15C0A02123456789ABCDEF0 /* DCConnectionPopup.m */; };
+		A15D00012F6F000000000001 /* DCIPadSplitViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = A15D00032F6F000000000003 /* DCIPadSplitViewController.m */; };
 		F22BFBD64E9A4137B1343EEC /* DCInterfaceAssetCatalog.m in Sources */ = {isa = PBXBuildFile; fileRef = 422F4AE731E2409BAE181FE0 /* DCInterfaceAssetCatalog.m */; };
 /* End PBXBuildFile section */
 
@@ -1051,8 +1051,6 @@
 		2F1123392F4EB0AD00159D64 /* DCOwnAccountInfoManagementController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCOwnAccountInfoManagementController.m; sourceTree = "<group>"; };
 		2F11233B2F4EB0AD00159D64 /* DCViewController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCViewController.h; sourceTree = "<group>"; };
 		2F11233C2F4EB0AD00159D64 /* DCViewController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCViewController.m; sourceTree = "<group>"; };
-		A15D00022F6F000000000002 /* DCIPadSplitViewController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCIPadSplitViewController.h; sourceTree = "<group>"; };
-		A15D00032F6F000000000003 /* DCIPadSplitViewController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCIPadSplitViewController.m; sourceTree = "<group>"; };
 		2F11233E2F4EB0AD00159D64 /* DCChatViewController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCChatViewController.h; sourceTree = "<group>"; };
 		2F11233F2F4EB0AD00159D64 /* DCChatViewController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; lineEnding = 0; path = DCChatViewController.m; sourceTree = "<group>"; };
 		2F1123402F4EB0AD00159D64 /* UILazyImageView.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = UILazyImageView.h; sourceTree = "<group>"; };
@@ -1396,6 +1394,8 @@
 		9F3DA05C620C4AAD96BA0FB8 /* DCInterfaceStyle.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = DCInterfaceStyle.h; sourceTree = "<group>"; };
 		A15C0A01123456789ABCDEF0 /* DCConnectionPopup.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = DCConnectionPopup.h; sourceTree = "<group>"; };
 		A15C0A02123456789ABCDEF0 /* DCConnectionPopup.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = DCConnectionPopup.m; sourceTree = "<group>"; };
+		A15D00022F6F000000000002 /* DCIPadSplitViewController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCIPadSplitViewController.h; sourceTree = "<group>"; };
+		A15D00032F6F000000000003 /* DCIPadSplitViewController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCIPadSplitViewController.m; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */

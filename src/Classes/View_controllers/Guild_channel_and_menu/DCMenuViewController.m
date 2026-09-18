@@ -23,6 +23,7 @@
 #import "MentionBadge.h"
 #import "DCContentManager.h"
 #import "DCCacheManager.h"
+#import "DCIPadSplitViewController.h"
 
 @interface DCMenuViewController ()
 @property NSMutableArray *displayGuilds;
@@ -118,6 +119,14 @@
     [NSNotificationCenter.defaultCenter
         postNotificationName:@"GuildMemberListUpdated"
                       object:nil];
+
+    if ([splitViewController isKindOfClass:[DCIPadSplitViewController class]]) {
+        DCIPadSplitViewController *iPadSplitViewController =
+            (DCIPadSplitViewController *)splitViewController;
+        if ([iPadSplitViewController isPortraitSidebarVisible]) {
+            [iPadSplitViewController hidePortraitSidebarAnimated:YES];
+        }
+    }
     return YES;
 }
 
