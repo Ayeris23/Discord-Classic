@@ -14,6 +14,76 @@
 #import "SDWebImageManager.h"
 #import "SDImageCache.h"
 
+static BOOL DCRemoveDirectoryContents(NSString *directory, NSError **error) {
+    if (directory.length == 0) return YES;
+
+    NSFileManager *fileManager = [NSFileManager defaultManager];
+    BOOL isDirectory = NO;
+    if (![fileManager fileExistsAtPath:directory isDirectory:&isDirectory]) {
+        return YES;
+    }
+    if (!isDirectory) {
+        return [fileManager removeItemAtPath:directory error:error];
+    }
+
+    NSError *listError = nil;
+    NSArray *contents = [fileManager contentsOfDirectoryAtPath:directory
+                                                         error:&listError];
+    if (!contents) {
+        if (error) *error = listError;
+        return NO;
+    }
+
+    NSError *firstError = nil;
+    for (NSString *name in contents) {
+        NSString *path = [directory stringByAppendingPathComponent:name];
+        NSError *removeError = nil;
+        if (![fileManager removeItemAtPath:path error:&removeError] && !firstError) {
+            firstError = removeError;
+        }
+    }
+
+    if (firstError) {
+        if (error) *error = firstError;
+        return NO;
+    }
+    return YES;
+}
+
+static BOOL DCRemoveDocumentCacheArtifacts(NSError **error) {
+    NSArray *paths = NSSearchPathForDirectoriesInDomains(
+        NSDocumentDirectory, NSUserDomainMask, YES);
+    NSString *documents = [paths objectAtIndex:0];
+
+    NSError *listError = nil;
+    NSArray *contents = [[NSFileManager defaultManager]
+        contentsOfDirectoryAtPath:documents
+                            error:&listError];
+    if (!contents) {
+        if (error) *error = listError;
+        return NO;
+    }
+
+    NSError *firstError = nil;
+    for (NSString *name in contents) {
+        if (![name hasPrefix:@"dc_"]) continue;
+
+        NSString *path = [documents stringByAppendingPathComponent:name];
+        NSError *removeError = nil;
+        if (![[NSFileManager defaultManager] removeItemAtPath:path
+                                                        error:&removeError] &&
+            !firstError) {
+            firstError = removeError;
+        }
+    }
+
+    if (firstError) {
+        if (error) *error = firstError;
+        return NO;
+    }
+    return YES;
+}
+
 @implementation DCContentPurgeManager
 
 + (void)purgeAllContentPreservingCredentialsWithCompletion:(DCContentPurgeCompletionBlock)completion {
@@ -25,9 +95,14 @@
         [[DCChatMediaManager sharedManager] enterBackground];
         [[SDWebImageManager sharedManager] cancelAll];
         [[[SDWebImageManager sharedManager] imageCache] clearMemory];
-        [[NSURLCache sharedURLCache] removeAllCachedResponses];
+
+        NSURLCache *URLCache = [NSURLCache sharedURLCache];
+        [URLCache removeAllCachedResponses];
+        [URLCache setMemoryCapacity:0];
+        [URLCache setDiskCapacity:0];
 
         [cache invalidateAllMessages];
+        [cache invalidateAllMessageWindows];
         [cache invalidateGuildCache];
         [cache invalidateDisplayLayout];
         [cache invalidateFolderCompositeCache];
@@ -55,8 +130,8 @@
         }
         [defaults synchronize];
 
-        // DCCacheManager has asynchronous message/folder writers. Queue behind
-        // them before declaring the persistent state empty.
+        // Queue behind every asynchronous DCCacheManager writer before the
+        // filesystem sweep removes any remaining cache artifacts.
         [cache performCacheOperation:^id{
             return nil;
         }];
@@ -75,9 +150,38 @@
                 dispatch_group_leave(group);
             }];
 
-        dispatch_group_notify(group, dispatch_get_main_queue(), ^{
-            if (completion) completion(YES, nil);
+        dispatch_group_notify(group,
+                              dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+            NSError *purgeError = nil;
+            NSError *operationError = nil;
+            BOOL success = YES;
+
+            if (!DCRemoveDocumentCacheArtifacts(&operationError)) {
+                success = NO;
+                purgeError = operationError;
+            }
+
+            NSArray *cachePaths = NSSearchPathForDirectoriesInDomains(
+                NSCachesDirectory, NSUserDomainMask, YES);
+            operationError = nil;
+            if (!DCRemoveDirectoryContents([cachePaths objectAtIndex:0], &operationError)) {
+                success = NO;
+                if (!purgeError) purgeError = operationError;
+            }
+
+            operationError = nil;
+            if (!DCRemoveDirectoryContents(NSTemporaryDirectory(), &operationError)) {
+                success = NO;
+                if (!purgeError) purgeError = operationError;
+            }
+
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (completion) completion(success, purgeError);
+            });
         });
+#if !OS_OBJECT_USE_OBJC
+        dispatch_release(group);
+#endif
     }];
 }
 

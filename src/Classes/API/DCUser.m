@@ -12,6 +12,18 @@
 
 @implementation DCUser
 
+- (id)init {
+    self = [super init];
+    if (self) {
+        _status = DCUserStatusOffline;
+        _guildNicknames = [NSMutableDictionary dictionary];
+        _guildAvatarIDs = [NSMutableDictionary dictionary];
+        _guildAvatarDecorationIDs = [NSMutableDictionary dictionary];
+        _guildRoleIDs = [NSMutableDictionary dictionary];
+    }
+    return self;
+}
+
 + (NSArray *)defaultAvatars {
     static NSArray *_defaultAvatars;
     static dispatch_once_t onceToken;

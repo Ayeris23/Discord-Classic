@@ -186,8 +186,13 @@
         return [UIColor whiteColor];
     }
 
-    NSArray *roleIDs = [user.guildRoleIDs objectForKey:guild.snowflake];
-    if (![roleIDs isKindOfClass:[NSArray class]] || roleIDs.count == 0) {
+    NSArray *roleIDs = nil;
+    @synchronized(user) {
+        id storedRoleIDs = [user.guildRoleIDs objectForKey:guild.snowflake];
+        if ([storedRoleIDs isKindOfClass:[NSArray class]])
+            roleIDs = [storedRoleIDs copy];
+    }
+    if (roleIDs.count == 0) {
         return [UIColor whiteColor];
     }
 

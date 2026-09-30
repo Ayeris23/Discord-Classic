@@ -1027,23 +1027,32 @@ static dispatch_queue_t channel_send_queue;
     CFAbsoluteTime jsonElapsed = CFAbsoluteTimeGetCurrent() - jsonStart;
 
     // Model/UI-backed message construction still commits on main, but REST
-    // history defers the legacy screen-width height pass. The chat layout
-    // builder will perform the same DTCoreText measurement at the exact table
-    // width before the rows are inserted.
+    // history defers the legacy screen-width height pass. Convert one message
+    // per main-queue slice so input and scrolling are not blocked by an entire
+    // history page at once on slower hardware.
     CFAbsoluteTime convertStart = CFAbsoluteTimeGetCurrent();
-    dispatch_sync(dispatch_get_main_queue(), ^{
-
-        for (NSDictionary *jsonMessage in parsedResponse) {
-            @autoreleasepool {
-                DCMessage *convertedMessage =
+    NSUInteger messageIndex = 0;
+    for (NSDictionary *jsonMessage in parsedResponse) {
+        @autoreleasepool {
+            __block DCMessage *convertedMessage = nil;
+            dispatch_sync(dispatch_get_main_queue(), ^{
+                convertedMessage =
                     [DCTools convertJsonMessage:jsonMessage
                                      deferLegacyLayout:YES
                                                channel:self];
+            });
+
+            if (convertedMessage) {
                 [messages insertObject:convertedMessage atIndex:0];
             }
         }
-    });
-    NSLog(@"[ChatPerf] REST older parse %.3fs off-main, convert %.3fs main (%lu msgs)",
+
+        messageIndex++;
+        if ([DCTools isOriginalIPad] && messageIndex < parsedResponse.count) {
+            [NSThread sleepForTimeInterval:0.001];
+        }
+    }
+    NSLog(@"[ChatPerf] REST older parse %.3fs off-main, convert %.3fs sliced-main (%lu msgs)",
           jsonElapsed,
           CFAbsoluteTimeGetCurrent() - convertStart,
           (unsigned long)messages.count);
@@ -1134,32 +1143,36 @@ static dispatch_queue_t channel_send_queue;
    CFAbsoluteTime jsonElapsed = CFAbsoluteTimeGetCurrent() - jsonStart;
 
    // Keep model/UI-backed conversion on main, but defer legacy sizing.
+   // Each message is its own main-queue slice so slow message parsing does not
+   // monopolize the UI thread for the full history page.
    CFAbsoluteTime convertStart = CFAbsoluteTimeGetCurrent();
-   dispatch_sync(dispatch_get_main_queue(), ^{
 
-       static NSArray *joinMessages;
-       static dispatch_once_t onceToken;
-       dispatch_once(&onceToken, ^{
-           joinMessages = @[
-               @"%@ joined the party.",
-               @"%@ is here.",
-               @"Welcome, %@. We hope you brought pizza.",
-               @"A wild %@ appeared.",
-               @"%@ just landed.",
-               @"%@ just slid into the server.",
-               @"%@ just showed up!",
-               @"Welcome %@. Say hi!",
-               @"%@ hopped into the server.",
-               @"Everyone welcome %@!",
-               @"Glad you're here, %@.",
-               @"Good to see you, %@.",
-               @"Yay you made it, %@!",
-           ];
-       });
+   static NSArray *joinMessages;
+   static dispatch_once_t onceToken;
+   dispatch_once(&onceToken, ^{
+       joinMessages = @[
+           @"%@ joined the party.",
+           @"%@ is here.",
+           @"Welcome, %@. We hope you brought pizza.",
+           @"A wild %@ appeared.",
+           @"%@ just landed.",
+           @"%@ just slid into the server.",
+           @"%@ just showed up!",
+           @"Welcome %@. Say hi!",
+           @"%@ hopped into the server.",
+           @"Everyone welcome %@!",
+           @"Glad you're here, %@.",
+           @"Good to see you, %@.",
+           @"Yay you made it, %@!",
+       ];
+   });
 
-        for (NSDictionary *jsonMessage in parsedResponse) {
-            @autoreleasepool {
-                DCMessage *convertedMessage =
+   NSUInteger messageIndex = 0;
+   for (NSDictionary *jsonMessage in parsedResponse) {
+       @autoreleasepool {
+           __block DCMessage *convertedMessage = nil;
+           dispatch_sync(dispatch_get_main_queue(), ^{
+               convertedMessage =
                     [DCTools convertJsonMessage:jsonMessage
                                      deferLegacyLayout:YES
                                                channel:self];
@@ -1267,11 +1280,18 @@ static dispatch_queue_t channel_send_queue;
                             lineBreakMode:NSLineBreakByWordWrapping];
                     convertedMessage.contentHeight = textSize.height + 20;
                 }
-                [messages insertObject:convertedMessage atIndex:0];
-            }
-        }
-    });
-    NSLog(@"[ChatPerf] REST newer parse %.3fs off-main, convert %.3fs main (%lu msgs)",
+               if (convertedMessage) {
+                   [messages insertObject:convertedMessage atIndex:0];
+               }
+           });
+       }
+
+       messageIndex++;
+       if ([DCTools isOriginalIPad] && messageIndex < parsedResponse.count) {
+           [NSThread sleepForTimeInterval:0.001];
+       }
+   }
+    NSLog(@"[ChatPerf] REST newer parse %.3fs off-main, convert %.3fs sliced-main (%lu msgs)",
           jsonElapsed,
           CFAbsoluteTimeGetCurrent() - convertStart,
           (unsigned long)messages.count);

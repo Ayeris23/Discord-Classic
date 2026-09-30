@@ -661,19 +661,16 @@ static NSUInteger DCImageMemoryCost(UIImage *image) {
             user.discriminator = [value integerValue];
     }
 
-    if (createdUser) {
+    if (createdUser)
         user.status = DCUserStatusOffline;
+    if (!user.guildNicknames)
         user.guildNicknames = [NSMutableDictionary dictionary];
+    if (!user.guildAvatarIDs)
         user.guildAvatarIDs = [NSMutableDictionary dictionary];
+    if (!user.guildAvatarDecorationIDs)
         user.guildAvatarDecorationIDs = [NSMutableDictionary dictionary];
-    } else {
-        if (!user.guildNicknames)
-            user.guildNicknames = [NSMutableDictionary dictionary];
-        if (!user.guildAvatarIDs)
-            user.guildAvatarIDs = [NSMutableDictionary dictionary];
-        if (!user.guildAvatarDecorationIDs)
-            user.guildAvatarDecorationIDs = [NSMutableDictionary dictionary];
-    }
+    if (!user.guildRoleIDs)
+        user.guildRoleIDs = [NSMutableDictionary dictionary];
 
     if (cache) {
         [DCServerCommunicator.sharedInstance setUser:user forSnowflake:snowflake];

@@ -432,6 +432,7 @@
 		2F97F5642FDFC1F400A645B1 /* DCMessageLayout.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F97F5612FDFC1F400A645B1 /* DCMessageLayout.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
 		2F97F5652FDFC1F400A645B1 /* DCMessageLayoutBuilder.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F97F5632FDFC1F400A645B1 /* DCMessageLayoutBuilder.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
 		2F9B1C732F8F0C9D00B296A1 /* DCContentManager.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F9B1C722F8F0C9D00B296A1 /* DCContentManager.m */; };
+		2FAF2825306C9613003974E9 /* CoreImage.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2FAF2824306C9613003974E9 /* CoreImage.framework */; };
 		2FD079B22F6E79660021205C /* DCCacheManager.m in Sources */ = {isa = PBXBuildFile; fileRef = 2FD079B12F6E79660021205C /* DCCacheManager.m */; };
 		2FE82DDD2F5D363900375F28 /* separator@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = 2FE82DDC2F5D363900375F28 /* separator@2x.png */; };
 		2FE82DE32F62998300375F28 /* DCChatGifAttachment.xib in Resources */ = {isa = PBXBuildFile; fileRef = 2FE82DE22F62998300375F28 /* DCChatGifAttachment.xib */; };
@@ -1146,6 +1147,7 @@
 		2F97F5632FDFC1F400A645B1 /* DCMessageLayoutBuilder.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCMessageLayoutBuilder.m; sourceTree = "<group>"; };
 		2F9B1C712F8F0C9D00B296A1 /* DCContentManager.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCContentManager.h; sourceTree = "<group>"; };
 		2F9B1C722F8F0C9D00B296A1 /* DCContentManager.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCContentManager.m; sourceTree = "<group>"; };
+		2FAF2824306C9613003974E9 /* CoreImage.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreImage.framework; path = System/Library/Frameworks/CoreImage.framework; sourceTree = SDKROOT; };
 		2FD079B02F6E79660021205C /* DCCacheManager.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCCacheManager.h; sourceTree = "<group>"; };
 		2FD079B12F6E79660021205C /* DCCacheManager.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCCacheManager.m; sourceTree = "<group>"; };
 		2FE82DDC2F5D363900375F28 /* separator@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "separator@2x.png"; sourceTree = "<group>"; };
@@ -1403,6 +1405,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				2FAF2825306C9613003974E9 /* CoreImage.framework in Frameworks */,
 				2F32F3F830565B19003BF841 /* AudioToolbox.framework in Frameworks */,
 				2F97F5592FC3F6FD00A645B1 /* libz.dylib in Frameworks */,
 				2FFA39962F987D5900E67A40 /* libxml2.dylib in Frameworks */,
@@ -1442,6 +1445,7 @@
 		09C6B923204A0F54007EAC26 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				2FAF2824306C9613003974E9 /* CoreImage.framework */,
 				2F32F3F730565B19003BF841 /* AudioToolbox.framework */,
 				2F97F5582FC3F6FD00A645B1 /* libz.dylib */,
 				2FFA39952F987D5900E67A40 /* libxml2.dylib */,

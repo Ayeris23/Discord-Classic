@@ -613,17 +613,51 @@ moveRowAtIndexPath:(NSIndexPath *)sourceIndexPath
     self.tableView.backgroundView = spinner;
 
     __weak DCMultiAttachmentAlbumListController *weakSelf = self;
-    NSMutableArray *loadedGroups = [NSMutableArray array];
+    NSMutableArray *savedPhotosGroups = [NSMutableArray array];
+    NSMutableArray *photoStreamGroups = [NSMutableArray array];
+    NSMutableArray *libraryGroups = [NSMutableArray array];
+    NSMutableArray *albumGroups = [NSMutableArray array];
+    NSMutableArray *eventGroups = [NSMutableArray array];
+    NSMutableArray *facesGroups = [NSMutableArray array];
+    NSMutableArray *otherGroups = [NSMutableArray array];
+
     [self.pickerController.assetLibrary
         enumerateGroupsWithTypes:(ALAssetsGroupAll | ALAssetsGroupLibrary)
         usingBlock:^(ALAssetsGroup *group, BOOL *stop) {
             if (group) {
                 [group setAssetsFilter:[ALAssetsFilter allAssets]];
-                if ([group numberOfAssets] > 0) {
-                    [loadedGroups insertObject:group atIndex:0];
+                if ([group numberOfAssets] == 0) return;
+
+                ALAssetsGroupType groupType =
+                    [[group valueForProperty:ALAssetsGroupPropertyType] unsignedIntValue];
+                NSMutableArray *targetGroups = otherGroups;
+
+                if (groupType == ALAssetsGroupSavedPhotos) {
+                    targetGroups = savedPhotosGroups;
+                } else if (groupType == ALAssetsGroupPhotoStream) {
+                    targetGroups = photoStreamGroups;
+                } else if (groupType == ALAssetsGroupLibrary) {
+                    targetGroups = libraryGroups;
+                } else if (groupType == ALAssetsGroupAlbum) {
+                    targetGroups = albumGroups;
+                } else if (groupType == ALAssetsGroupEvent) {
+                    targetGroups = eventGroups;
+                } else if (groupType == ALAssetsGroupFaces) {
+                    targetGroups = facesGroups;
                 }
+
+                [targetGroups insertObject:group atIndex:0];
                 return;
             }
+
+            NSMutableArray *loadedGroups = [NSMutableArray array];
+            [loadedGroups addObjectsFromArray:savedPhotosGroups];
+            [loadedGroups addObjectsFromArray:photoStreamGroups];
+            [loadedGroups addObjectsFromArray:libraryGroups];
+            [loadedGroups addObjectsFromArray:albumGroups];
+            [loadedGroups addObjectsFromArray:eventGroups];
+            [loadedGroups addObjectsFromArray:facesGroups];
+            [loadedGroups addObjectsFromArray:otherGroups];
 
             dispatch_async(dispatch_get_main_queue(), ^{
                 DCMultiAttachmentAlbumListController *strongSelf = weakSelf;

@@ -13,6 +13,12 @@
 @property (nonatomic, strong, readwrite) NSMutableArray *messages;
 @end
 
+static NSComparisonResult DCChannelWindowCompareSnowflakes(NSString *left, NSString *right) {
+    if (left.length < right.length) return NSOrderedAscending;
+    if (left.length > right.length) return NSOrderedDescending;
+    return [left compare:right options:NSLiteralSearch];
+}
+
 @implementation DCChannelWindow
 
 - (instancetype)initWithChannelSnowflake:(NSString *)snowflake {
@@ -32,6 +38,45 @@
 
     return self;
 }
+
+- (BOOL)repairMessageOrderIfNeeded {
+    if (self.messages.count == 0) return NO;
+
+    NSString *previousID = nil;
+    BOOL needsRepair = NO;
+
+    for (DCMessage *message in self.messages) {
+        NSString *messageID = message.snowflake;
+        if (!messageID.length ||
+            (previousID.length &&
+             DCChannelWindowCompareSnowflakes(previousID, messageID) != NSOrderedAscending)) {
+            needsRepair = YES;
+            break;
+        }
+        previousID = messageID;
+    }
+
+    if (!needsRepair) return NO;
+
+    NSMutableDictionary *bySnowflake =
+        [NSMutableDictionary dictionaryWithCapacity:self.messages.count];
+
+    for (DCMessage *message in self.messages) {
+        if (message.snowflake.length) {
+            [bySnowflake setObject:message forKey:message.snowflake];
+        }
+    }
+
+    NSArray *normalized = [[bySnowflake allValues]
+        sortedArrayUsingComparator:^NSComparisonResult(DCMessage *left, DCMessage *right) {
+            return DCChannelWindowCompareSnowflakes(left.snowflake, right.snowflake);
+        }];
+
+    [self.messages removeAllObjects];
+    [self.messages addObjectsFromArray:normalized];
+    return YES;
+}
+
 - (NSString *)latestSnowflake {
     DCMessage *last = [self.messages lastObject];
     return last.snowflake;

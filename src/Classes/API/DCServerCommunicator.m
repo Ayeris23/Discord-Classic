@@ -1021,6 +1021,8 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
             existing.guildAvatarIDs = [NSMutableDictionary dictionary];
         if (!existing.guildAvatarDecorationIDs)
             existing.guildAvatarDecorationIDs = [NSMutableDictionary dictionary];
+        if (!existing.guildRoleIDs)
+            existing.guildRoleIDs = [NSMutableDictionary dictionary];
 
         for (NSString *guildID in cached.guildNicknames) {
             NSString *key = DCGuildMemberResolutionKey(guildID, snowflake);
@@ -1031,8 +1033,19 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
             }
             if (!liveResolved && ![existing.guildNicknames objectForKey:guildID]) {
                 id nickname = [cached.guildNicknames objectForKey:guildID];
-                if (nickname)
+                if (nickname) {
                     [existing.guildNicknames setObject:nickname forKey:guildID];
+                    changed = YES;
+                }
+            }
+        }
+
+        for (NSString *guildID in cached.guildRoleIDs) {
+            if ([existing.guildRoleIDs objectForKey:guildID]) continue;
+            id roleIDs = [cached.guildRoleIDs objectForKey:guildID];
+            if ([roleIDs isKindOfClass:[NSArray class]]) {
+                [existing.guildRoleIDs setObject:[roleIDs mutableCopy] forKey:guildID];
+                changed = YES;
             }
         }
 
@@ -1267,6 +1280,8 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
         user.guildAvatarIDs = [NSMutableDictionary dictionary];
     if (!user.guildAvatarDecorationIDs)
         user.guildAvatarDecorationIDs = [NSMutableDictionary dictionary];
+    if (!user.guildRoleIDs)
+        user.guildRoleIDs = [NSMutableDictionary dictionary];
     if (commit.relationshipNickname.length) user.globalName = commit.relationshipNickname;
 
     [self setUser:user forSnowflake:commit.snowflake];

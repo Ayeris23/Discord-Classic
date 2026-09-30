@@ -596,6 +596,7 @@ static DCMarkdownFeatures DCScanMarkdownFeatures(NSString *text) {
         @"(?<!\\\\)(__)(.+?)(__)",
         @"(?<!\\\\)(~~)(.+?)(~~)",
         @"(?<!\\\\)(?<!\\*)(\\*)(?!\\*).+?(?<!\\*)(\\*)(?!\\*)",
+        @"(?<![a-zA-Z0-9])(?<!\\\\)(_)(?!_).+?(?<!_)(_)(?!_)(?![a-zA-Z0-9])",
     ];
     
     for (NSString *pattern in patterns) {
@@ -607,6 +608,10 @@ static DCMarkdownFeatures DCScanMarkdownFeatures(NSString *text) {
         for (NSTextCheckingResult *match in [matches reverseObjectEnumerator]) {
             NSRange trailingRange = [match rangeAtIndex:match.numberOfRanges - 1];
             NSRange leadingRange  = [match rangeAtIndex:1];
+
+            if ([self rangeContainsLiteralCode:match.range inString:string]) {
+                continue;
+            }
 
             if ([self rangeContainsLinkedText:leadingRange inString:string] ||
                 [self rangeContainsLinkedText:trailingRange inString:string]) {
@@ -889,11 +894,11 @@ static DCMarkdownFeatures DCScanMarkdownFeatures(NSString *text) {
                   font:_underlineFont color:nil strikethrough:NO underline:YES
                 string:string protectedRanges:protectedRanges];
 
-    [self applyPattern:@"(?<!\\*)(?<!\\\\)\\*(?!\\*)(.*?)(?<!\\*)\\*(?!\\*)|(?<!_)_(?!_)(.*?)_"
+    [self applyPattern:@"(?<!\\*)(?<!\\\\)\\*(?!\\*)(.*?)(?<!\\*)\\*(?!\\*)"
                   font:_italicFont color:nil strikethrough:NO underline:NO
                 string:string protectedRanges:protectedRanges];
 
-    [self applyPattern:@"(?<![a-zA-Z0-9])(?<!\\\\)_(.+?)_(?![a-zA-Z0-9])"
+    [self applyPattern:@"(?<![a-zA-Z0-9])(?<!\\\\)_(?!_)(.+?)(?<!_)_(?!_)(?![a-zA-Z0-9])"
                   font:_italicFont color:nil strikethrough:NO underline:NO
                 string:string protectedRanges:protectedRanges];
 

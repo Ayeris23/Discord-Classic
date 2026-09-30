@@ -36,4 +36,6 @@
 
 - (instancetype)initWithChannelSnowflake:(NSString *)snowflake;
 
+- (BOOL)repairMessageOrderIfNeeded;
+
 @end

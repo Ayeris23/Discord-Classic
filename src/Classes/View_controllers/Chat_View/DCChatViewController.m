@@ -21,6 +21,7 @@
 #include <math.h>
 #include <objc/NSObjCRuntime.h>
 #import <MediaPlayer/MediaPlayer.h>
+#import <CoreImage/CoreImage.h>
 #import <QuartzCore/QuartzCore.h>
 
 #import "DCCInfoViewController.h"
@@ -83,6 +84,8 @@
 @property (strong, nonatomic) UIView *emptyChatLoadingView;
 @property (strong, nonatomic) UIActivityIndicatorView *emptyChatLoadingSpinner;
 @property (strong, nonatomic) UILabel *emptyChatLoadingLabel;
+@property (strong, nonatomic) UIActivityIndicatorView *olderEdgeLoadingSpinner;
+@property (strong, nonatomic) UIActivityIndicatorView *newerEdgeLoadingSpinner;
 @property (strong, nonatomic) UIView *typingIndicatorView;
 @property (strong, nonatomic) UILabel *typingLabel;
 @property (strong, nonatomic) NSMutableDictionary *typingUsers;
@@ -100,6 +103,7 @@
 @property (nonatomic, copy) NSString *reconcilingChannelID;
 @property (nonatomic, assign) BOOL restoringWindowPosition;
 @property (nonatomic, assign) CFAbsoluteTime lastScrollPerfEventTime;
+@property (nonatomic, assign) CFAbsoluteTime lastInteractiveScrollTime;
 @property (nonatomic, assign) NSInteger deferredWindowTrimDirection;
 /*
  * UIScrollView cancels native deceleration when contentOffset is corrected after
@@ -119,6 +123,7 @@
 @property (nonatomic, retain) NSArray *referenceRunwayShadows;
 @property (nonatomic, assign) BOOL presentationRunwayPrewarmPending;
 @property (nonatomic, assign) BOOL forwardMomentumBlockedOnData;
+@property (nonatomic, assign) BOOL chatOrderAuditPending;
 // Runway timing distinguishes late requests from slow row production.
 @property (nonatomic, assign) CFAbsoluteTime olderRunwayRequestStartTime;
 @property (nonatomic, assign) CFAbsoluteTime newerRunwayRequestStartTime;
@@ -126,6 +131,9 @@
 @property (nonatomic, assign) CFAbsoluteTime lastNewerRunwayStarvationLog;
 @property (nonatomic, assign) NSInteger olderRunwayRequestedCount;
 @property (nonatomic, assign) NSInteger newerRunwayRequestedCount;
+@property (nonatomic, assign) BOOL newerPaginationProgressGateActive;
+@property (nonatomic, assign) CGFloat newerPaginationProgressGateOffsetY;
+@property (nonatomic, assign) NSUInteger newerPaginationProgressGateInsertedCount;
 @property (nonatomic, strong) NSURL *activeVideoSourceURL;
 @property (nonatomic, strong) MPMoviePlayerViewController *activeVideoPlayerController;
 @property (nonatomic, assign) BOOL activeVideoSignatureRetryUsed;
@@ -152,14 +160,25 @@
 - (void)setupEmptyChatLoadingIndicator;
 - (void)layoutEmptyChatLoadingIndicator;
 - (void)updateEmptyChatLoadingIndicator;
+- (void)setupMessageEdgeLoadingIndicators;
+- (void)layoutMessageEdgeLoadingIndicators;
+- (void)updateMessageEdgeLoadingIndicators;
 - (void)invalidatePendingMessageLoads;
 - (void)stopForwardMomentumContinuation;
 - (void)startForwardMomentumContinuationWithVelocity:(CGFloat)velocityY;
 - (void)forwardMomentumTick:(CADisplayLink *)displayLink;
 - (CGFloat)effectiveRunwayVelocityY;
 - (void)maintainMessageRunwayForVelocity:(CGFloat)velocityY reason:(NSString *)reason;
+- (void)armNewerPaginationProgressGateForInsertedCount:(NSUInteger)insertedCount;
+- (BOOL)newerPaginationProgressGateAllowsRequest;
+- (void)clearNewerPaginationProgressGate;
 - (void)schedulePresentationRunwayForVelocity:(CGFloat)velocityY;
 - (BOOL)chatIsActivelyScrolling;
+- (void)scheduleChatOrderAudit;
+- (void)captureVisibleMessageAnchorSnowflake:(NSString **)snowflake
+                                   viewportY:(CGFloat *)viewportY;
+- (BOOL)restoreVisibleMessageAnchorSnowflake:(NSString *)snowflake
+                                    viewportY:(CGFloat)viewportY;
 - (void)updateChatMediaResidencyForCell:(DCChatTableCell *)cell
                               allowLoading:(BOOL)allowLoading;
 - (NSString *)referencePreviewTextForMessage:(DCMessage *)message;
@@ -251,6 +270,56 @@ static BOOL DCWriteAssetBytes(NSOutputStream *output,
     return success;
 }
 
+static NSString *DCAdjustmentXMPForAssetRepresentation(ALAssetRepresentation *representation) {
+    id adjustmentXMP = [[representation metadata] objectForKey:@"AdjustmentXMP"];
+    return [adjustmentXMP isKindOfClass:[NSString class]] && [adjustmentXMP length] > 0
+        ? adjustmentXMP
+        : nil;
+}
+
+static UIImage *DCAdjustedImageForAssetRepresentation(ALAssetRepresentation *representation) {
+    NSString *adjustmentXMP = DCAdjustmentXMPForAssetRepresentation(representation);
+    if (!adjustmentXMP) return nil;
+
+    SEL xmpSelector = @selector(filterArrayFromSerializedXMP:inputImageExtent:error:);
+    if ([CIFilter respondsToSelector:xmpSelector]) {
+        CGImageRef sourceImage = [representation fullResolutionImage];
+        if (sourceImage) {
+            CIImage *image = [CIImage imageWithCGImage:sourceImage];
+            NSData *xmpData = [adjustmentXMP dataUsingEncoding:NSUTF8StringEncoding];
+            NSError *filterError = nil;
+            NSArray *filters = [CIFilter filterArrayFromSerializedXMP:xmpData
+                                                         inputImageExtent:image.extent
+                                                                    error:&filterError];
+            if (filters && !filterError) {
+                for (CIFilter *filter in filters) {
+                    [filter setValue:image forKey:kCIInputImageKey];
+                    image = [filter outputImage];
+                    if (!image) break;
+                }
+
+                if (image) {
+                    CIContext *context = [CIContext contextWithOptions:nil];
+                    CGImageRef adjustedCGImage = [context createCGImage:image fromRect:image.extent];
+                    if (adjustedCGImage) {
+                        UIImage *adjustedImage = [UIImage imageWithCGImage:adjustedCGImage
+                                                                     scale:representation.scale
+                                                               orientation:(UIImageOrientation)representation.orientation];
+                        CGImageRelease(adjustedCGImage);
+                        return adjustedImage;
+                    }
+                }
+            }
+        }
+    }
+
+    CGImageRef screenImage = [representation fullScreenImage];
+    if (!screenImage) return nil;
+    return [UIImage imageWithCGImage:screenImage
+                              scale:representation.scale
+                        orientation:UIImageOrientationUp];
+}
+
 static NSURL *DCCopyAssetToTemporaryFile(ALAsset *asset,
                                           NSUInteger index,
                                           NSString **mimeType,
@@ -268,6 +337,43 @@ static NSURL *DCCopyAssetToTemporaryFile(ALAsset *asset,
     NSString *safeFilename = [NSString stringWithFormat:@"attachment-%lu.%@",
                               (unsigned long)index,
                               extension];
+
+    if ([assetType isEqualToString:ALAssetTypePhoto] &&
+        DCAdjustmentXMPForAssetRepresentation(representation)) {
+        UIImage *adjustedImage = DCAdjustedImageForAssetRepresentation(representation);
+        if (!adjustedImage) {
+            if (error) {
+                *error = [NSError errorWithDomain:@"DiscordClassicAttachmentUpload"
+                                            code:NSURLErrorCannotDecodeContentData
+                                        userInfo:nil];
+            }
+            return nil;
+        }
+
+        NSData *imageData = nil;
+        if ([extension isEqualToString:@"png"]) {
+            imageData = UIImagePNGRepresentation(adjustedImage);
+        } else {
+            extension = @"jpg";
+            safeFilename = [NSString stringWithFormat:@"attachment-%lu.jpg",
+                            (unsigned long)index];
+            imageData = UIImageJPEGRepresentation(adjustedImage, 1.0f);
+        }
+
+        NSString *temporaryFilename = [NSString stringWithFormat:@"discord-attachment-%@-%@",
+                                       [[NSProcessInfo processInfo] globallyUniqueString],
+                                       safeFilename];
+        NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:temporaryFilename];
+        if (!imageData || ![imageData writeToFile:path options:NSDataWritingAtomic error:error]) {
+            [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+            return nil;
+        }
+
+        if (mimeType) *mimeType = DCMimeTypeForAttachmentExtension(extension, assetType);
+        if (filename) *filename = safeFilename;
+        return [NSURL fileURLWithPath:path];
+    }
+
     NSString *temporaryFilename = [NSString stringWithFormat:@"discord-attachment-%@-%@",
                                    [[NSProcessInfo processInfo] globallyUniqueString],
                                    safeFilename];
@@ -297,12 +403,21 @@ static void DCRemoveTemporaryAttachmentFiles(NSArray *fileURLs) {
     });
 }
 
-// Message residency is determined by the device memory class.
+// Message residency is determined by the chat policy memory class.
+static DCDeviceMemoryClass DCChatPolicyMemoryClass(void) {
+    if ([DCTools isOriginalIPad]) {
+        return DCDeviceMemoryClass1GB;
+    }
+    return [DCResourceManager sharedManager].memoryClass;
+}
+
 static NSInteger DCChatWindowCeiling(void) {
+    if ([DCTools isOriginalIPad]) return 80;
     return [DCResourceManager sharedManager].chatMessageSoftLimit;
 }
 
 static NSInteger DCChatWindowHardCeiling(void) {
+    if ([DCTools isOriginalIPad]) return 128;
     return [DCResourceManager sharedManager].chatMessageHardLimit;
 }
 
@@ -311,14 +426,14 @@ static int DCDynamicMessageLoadMultiplier(void) {
 }
 
 static int DCBaseProximityMessageLoadCount(void) {
-    if ([DCResourceManager sharedManager].memoryClass == DCDeviceMemoryClass256MB) {
+    if (DCChatPolicyMemoryClass() == DCDeviceMemoryClass256MB) {
         return 6;
     }
     return ([UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad) ? 24 : 12;
 }
 
 static int DCMaximumRunwayMessageLoadCount(void) {
-    DCDeviceMemoryClass memoryClass = [DCResourceManager sharedManager].memoryClass;
+    DCDeviceMemoryClass memoryClass = DCChatPolicyMemoryClass();
     int normal = DCBaseProximityMessageLoadCount();
     int maximum = normal;
 
@@ -334,12 +449,18 @@ static int DCMaximumRunwayMessageLoadCount(void) {
     return maximum * DCDynamicMessageLoadMultiplier();
 }
 
-// Keep two maximum runway pages resident while scrolling before forcing a trim.
+// Describe the intended active-scroll runway budget for diagnostics and tuning.
+// Active pagination may temporarily exceed it; opposite-edge trimming is deferred
+// until scrolling becomes idle so UIKit never has to slide the window mid-fling.
 static NSInteger DCChatActiveWindowHardCeiling(void) {
-    return DCChatWindowCeiling() + 2 * DCMaximumRunwayMessageLoadCount();
+    NSInteger pageCount = DCMaximumRunwayMessageLoadCount();
+    NSInteger pageAllowance =
+        (DCChatPolicyMemoryClass() == DCDeviceMemoryClass256MB) ? 2 : 4;
+    return DCChatWindowCeiling() + pageAllowance * pageCount;
 }
 
 static NSInteger DCChatWindowTrimBatch(void) {
+    if ([DCTools isOriginalIPad]) return 12;
     return [DCResourceManager sharedManager].chatMessageTrimBatch;
 }
 
@@ -394,7 +515,7 @@ static BOOL DCMessageHasUnknownAttachmentGeometry(DCMessage *message) {
 static int DCInitialMessageLoadCount(void) {
     BOOL isPad = ([UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad);
 
-    switch ([DCResourceManager sharedManager].memoryClass) {
+    switch (DCChatPolicyMemoryClass()) {
         case DCDeviceMemoryClass256MB:
             return isPad ? 36 : 24;
         case DCDeviceMemoryClass512MB:
@@ -434,7 +555,7 @@ static CGFloat DCProjectedMomentumTravel(CGFloat velocityY) {
 }
 
 static CGFloat DCMessageRunwaySupplyLatencySeconds(void) {
-    switch ([DCResourceManager sharedManager].memoryClass) {
+    switch (DCChatPolicyMemoryClass()) {
         case DCDeviceMemoryClass256MB: return 0.45f;
         case DCDeviceMemoryClass512MB: return 0.25f;
         case DCDeviceMemoryClass1GB: return 0.15f;
@@ -445,7 +566,7 @@ static CGFloat DCMessageRunwaySupplyLatencySeconds(void) {
 }
 
 static CGFloat DCMessageRunwayCapScreens(void) {
-    switch ([DCResourceManager sharedManager].memoryClass) {
+    switch (DCChatPolicyMemoryClass()) {
         case DCDeviceMemoryClass256MB: return 10.0f;
         case DCDeviceMemoryClass512MB: return 12.0f;
         case DCDeviceMemoryClass1GB: return 14.0f;
@@ -457,7 +578,7 @@ static CGFloat DCMessageRunwayCapScreens(void) {
 
 static int DCRunwayMessageLoadCount(CGFloat velocityY) {
     CGFloat speed = fabs(velocityY);
-    DCDeviceMemoryClass memoryClass = [DCResourceManager sharedManager].memoryClass;
+    DCDeviceMemoryClass memoryClass = DCChatPolicyMemoryClass();
     int normal = DCBaseProximityMessageLoadCount();
     int count = normal;
 
@@ -480,7 +601,7 @@ static CGFloat DCMessageRunwayTargetPoints(CGFloat velocityY, CGFloat viewportHe
     CGFloat projected = DCProjectedMomentumTravel(velocityY);
     CGFloat latencyReserve = speed * DCMessageRunwaySupplyLatencySeconds();
     CGFloat baseScreens =
-        ([DCResourceManager sharedManager].memoryClass == DCDeviceMemoryClass256MB)
+        (DCChatPolicyMemoryClass() == DCDeviceMemoryClass256MB)
             ? 1.75f : 1.50f;
 
     CGFloat target = MAX(2.0f * viewportHeight,
@@ -494,7 +615,7 @@ static CGFloat DCPresentationRunwayTargetPoints(CGFloat velocityY, CGFloat viewp
     CGFloat projected = DCProjectedMomentumTravel(velocityY);
     CGFloat target = MAX(2.0f * viewportHeight,
                          viewportHeight + projected * 0.70f);
-    CGFloat capScreens = ([DCResourceManager sharedManager].memoryClass ==
+    CGFloat capScreens = (DCChatPolicyMemoryClass() ==
                           DCDeviceMemoryClass256MB) ? 5.0f : 6.0f;
     return MIN(target, capScreens * viewportHeight);
 }
@@ -543,12 +664,11 @@ static dispatch_queue_t chat_messages_queue;
             [@"Discord::API::Chat::Messages" UTF8String],
             DISPATCH_QUEUE_SERIAL
         );
-        if ([DCTools isOriginalIPad]) {
-            // Keep exact layout off-main and low priority on the most constrained device.
-            dispatch_set_target_queue(
-                chat_messages_queue,
-                dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0));
-        }
+        // History parsing/layout work is speculative relative to touch handling.
+        // Keep it below UIKit, gateway commits, and main-thread message conversion.
+        dispatch_set_target_queue(
+            chat_messages_queue,
+            dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0));
     }
     return chat_messages_queue;
 }
@@ -585,12 +705,14 @@ static dispatch_queue_t chat_presentation_queue;
     if (_loadingOlderMessages == loadingOlderMessages) return;
     _loadingOlderMessages = loadingOlderMessages;
     [self updateEmptyChatLoadingIndicator];
+    [self updateMessageEdgeLoadingIndicators];
 }
 
 - (void)setLoadingNewerMessages:(BOOL)loadingNewerMessages {
     if (_loadingNewerMessages == loadingNewerMessages) return;
     _loadingNewerMessages = loadingNewerMessages;
     [self updateEmptyChatLoadingIndicator];
+    [self updateMessageEdgeLoadingIndicators];
 }
 
 - (void)setupEmptyChatLoadingIndicator {
@@ -669,6 +791,100 @@ static dispatch_queue_t chat_presentation_queue;
     }
 }
 
+- (void)setupMessageEdgeLoadingIndicators {
+    if (self.olderEdgeLoadingSpinner || !self.chatTableView) return;
+
+    UIView *hostView = self.chatTableView.superview ?: self.view;
+
+    UIActivityIndicatorView *olderSpinner =
+        [[UIActivityIndicatorView alloc]
+            initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleWhite];
+    olderSpinner.frame = CGRectMake(0.0f, 0.0f, 32.0f, 32.0f);
+    olderSpinner.backgroundColor =
+        [UIColor colorWithWhite:0.0f alpha:0.55f];
+    olderSpinner.layer.cornerRadius = 6.0f;
+    olderSpinner.hidesWhenStopped = YES;
+    olderSpinner.userInteractionEnabled = NO;
+    [hostView insertSubview:olderSpinner aboveSubview:self.chatTableView];
+
+    UIActivityIndicatorView *newerSpinner =
+        [[UIActivityIndicatorView alloc]
+            initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleWhite];
+    newerSpinner.frame = CGRectMake(0.0f, 0.0f, 32.0f, 32.0f);
+    newerSpinner.backgroundColor =
+        [UIColor colorWithWhite:0.0f alpha:0.55f];
+    newerSpinner.layer.cornerRadius = 6.0f;
+    newerSpinner.hidesWhenStopped = YES;
+    newerSpinner.userInteractionEnabled = NO;
+    [hostView insertSubview:newerSpinner aboveSubview:self.chatTableView];
+
+    self.olderEdgeLoadingSpinner = olderSpinner;
+    self.newerEdgeLoadingSpinner = newerSpinner;
+
+    [self layoutMessageEdgeLoadingIndicators];
+    [self updateMessageEdgeLoadingIndicators];
+}
+
+- (void)layoutMessageEdgeLoadingIndicators {
+    if (!self.olderEdgeLoadingSpinner || !self.chatTableView) return;
+
+    CGRect tableFrame = self.chatTableView.frame;
+    CGFloat centerX = CGRectGetMidX(tableFrame);
+    CGFloat edgeInset = 22.0f;
+
+    self.olderEdgeLoadingSpinner.center =
+        CGPointMake(centerX, CGRectGetMinY(tableFrame) + edgeInset);
+    self.newerEdgeLoadingSpinner.center =
+        CGPointMake(centerX, CGRectGetMaxY(tableFrame) - edgeInset);
+}
+
+- (void)updateMessageEdgeLoadingIndicators {
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self updateMessageEdgeLoadingIndicators];
+        });
+        return;
+    }
+
+    if (!self.olderEdgeLoadingSpinner || !self.chatTableView) return;
+
+    BOOL showOlder = NO;
+    BOOL showNewer = NO;
+
+    if (self.messages.count > 0) {
+        CGFloat viewportHeight = self.chatTableView.bounds.size.height;
+        CGFloat minimumOffsetY = -self.chatTableView.contentInset.top;
+        CGFloat maximumOffsetY = MAX(
+            minimumOffsetY,
+            self.chatTableView.contentSize.height - viewportHeight +
+                self.chatTableView.contentInset.bottom);
+        CGFloat currentY = self.chatTableView.contentOffset.y;
+        CGFloat edgeThreshold = MAX(56.0f, viewportHeight * 0.18f);
+
+        showOlder =
+            self.loadingOlderMessages &&
+            self.currentWindow.hasMoreBefore &&
+            maximumOffsetY - currentY <= edgeThreshold;
+
+        showNewer =
+            self.loadingNewerMessages &&
+            self.currentWindow.hasMoreAfter &&
+            currentY - minimumOffsetY <= edgeThreshold;
+    }
+
+    if (showOlder) {
+        [self.olderEdgeLoadingSpinner startAnimating];
+    } else {
+        [self.olderEdgeLoadingSpinner stopAnimating];
+    }
+
+    if (showNewer) {
+        [self.newerEdgeLoadingSpinner startAnimating];
+    } else {
+        [self.newerEdgeLoadingSpinner stopAnimating];
+    }
+}
+
 // Point the controller at the window for whatever channel is now selected.
 // Called at every channel-entry point so the cached window can't go stale.
 - (void)syncWindowForSelectedChannel {
@@ -676,6 +892,7 @@ static dispatch_queue_t chat_presentation_queue;
     self.currentWindow = cid ? [[DCMessageStore sharedInstance] windowForChannel:cid] : nil;
     [self.referencePresentationCache removeAllObjects];
     self.presentationRunwayPrewarmPending = NO;
+    [self clearNewerPaginationProgressGate];
 }
 
 - (void)invalidatePendingMessageLoads {
@@ -689,6 +906,7 @@ static dispatch_queue_t chat_presentation_queue;
     self.newerRunwayRequestStartTime = 0.0;
     self.olderRunwayRequestedCount = 0;
     self.newerRunwayRequestedCount = 0;
+    [self clearNewerPaginationProgressGate];
     self.deferredWindowTrimDirection = DCWindowTrimDirectionNone;
     self.forwardMomentumBlockedOnData = NO;
     [self stopForwardMomentumContinuation];
@@ -826,9 +1044,20 @@ static dispatch_queue_t chat_presentation_queue;
 - (void)viewDidLoad {
     [super viewDidLoad];
 
+    if ([DCTools isOriginalIPad]) {
+        NSLog(@"[ChatPolicy] iPad1,1 using 1GB chat sizing initial %d proximity %d runway %d window %ld/%ld active %ld trim %ld",
+              DCInitialMessageLoadCount(),
+              DCProximityMessageLoadCount(),
+              DCRunwayMessageLoadCount(0.0f),
+              (long)DCChatWindowCeiling(),
+              (long)DCChatWindowHardCeiling(),
+              (long)DCChatActiveWindowHardCeiling(),
+              (long)DCChatWindowTrimBatch());
+    }
+
     self.referencePresentationCache = [[NSCache alloc] init];
     self.referencePresentationCache.countLimit =
-        ([DCResourceManager sharedManager].memoryClass == DCDeviceMemoryClass256MB)
+        (DCChatPolicyMemoryClass() == DCDeviceMemoryClass256MB)
             ? 64 : 160;
 
     /*
@@ -1147,6 +1376,7 @@ static dispatch_queue_t chat_presentation_queue;
     }
 
     [self setupEmptyChatLoadingIndicator];
+    [self setupMessageEdgeLoadingIndicators];
     [self setupJumpToPresentButton];
 }
 
@@ -1160,6 +1390,8 @@ static dispatch_queue_t chat_presentation_queue;
     }
     [self updateJumpToPresentButtonFrame];
     [self layoutEmptyChatLoadingIndicator];
+    [self layoutMessageEdgeLoadingIndicators];
+    [self updateMessageEdgeLoadingIndicators];
 }
 
 - (void)setupJumpToPresentButton {
@@ -1846,6 +2078,7 @@ static dispatch_queue_t chat_presentation_queue;
             window.hasMoreAfter = NO;
 
             self.restoringWindowPosition = NO;
+            [self scheduleChatOrderAudit];
 
             if (window.atPresentTime) {
                 [self acknowledgeNewestMessageIfFollowingLiveTail];
@@ -2659,6 +2892,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     self.currentWindow.hasMoreAfter = NO;
 
     self.restoringWindowPosition = NO;
+    [self scheduleChatOrderAudit];
 
     [self saveScrollPositionForWindow:self.currentWindow];
     [[DCMessageStore sharedInstance] scheduleCheckpointForWindow:self.currentWindow];
@@ -3409,6 +3643,14 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                 return;
             }
 
+            NSString *orderAnchorSnowflake = nil;
+            CGFloat orderAnchorViewportY = 0.0f;
+            [self captureVisibleMessageAnchorSnowflake:&orderAnchorSnowflake
+                                             viewportY:&orderAnchorViewportY];
+
+            BOOL wasActivelyScrollingBeforeOlderInsert =
+                [self chatIsActivelyScrolling];
+
             NSUInteger oldCount = self.messages.count;
 
             [self.messages insertObjects:deduped
@@ -3416,12 +3658,33 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                                    indexSetWithIndexesInRange:
                                        NSMakeRange(0, deduped.count)]];
 
-            BOOL didReload = NO;
+            BOOL repairedOrder =
+                [targetWindow repairMessageOrderIfNeeded];
+            if (repairedOrder) {
+                NSLog(@"[ChatOrder] Repaired older-history model before presentation");
+            }
+
+            BOOL didReload = repairedOrder;
             NSInteger rowCount =
                 [self.chatTableView numberOfRowsInSection:0];
 
-            if (rowCount != (NSInteger)oldCount) {
+            if (rowCount != (NSInteger)oldCount || repairedOrder) {
+                BOOL wasRestoringWindowPosition =
+                    self.restoringWindowPosition;
+                self.restoringWindowPosition = YES;
+
                 [self.chatTableView reloadData];
+                [self.chatTableView layoutIfNeeded];
+
+                if (message == nil) {
+                    self.chatTableView.contentOffset = CGPointZero;
+                } else {
+                    [self restoreVisibleMessageAnchorSnowflake:orderAnchorSnowflake
+                                                     viewportY:orderAnchorViewportY];
+                }
+
+                self.restoringWindowPosition =
+                    wasRestoringWindowPosition;
                 didReload = YES;
             } else {
                 NSMutableArray *indexPaths =
@@ -3463,21 +3726,23 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                     (NSInteger)self.messages.count - DCChatWindowCeiling();
 
                 if (evictCount > 0) {
-                    BOOL activelyScrolling = [self chatIsActivelyScrolling];
+                    BOOL activelyScrolling =
+                        wasActivelyScrollingBeforeOlderInsert ||
+                        [self chatIsActivelyScrolling];
 
-                    if (activelyScrolling &&
-                        self.messages.count <= DCChatActiveWindowHardCeiling()) {
-                        /*
-                         * Do not synchronously delete the opposite edge while
-                         * the finger/deceleration is active.  iOS 6's variable-
-                         * height delete bookkeeping was costing 20-84ms and
-                         * forcing offscreen height queries.  Keep a bounded
-                         * temporary overage and trim once scrolling becomes idle.
-                         */
+                    if (activelyScrolling) {
+                        /* Never delete the opposite edge during a native fling. */
                         self.deferredWindowTrimDirection =
                             DCWindowTrimDirectionRemoveNewest;
                     } else {
                         [self trimNewestDownToCeilingNow];
+                        if (self.messages.count > DCChatWindowCeiling()) {
+                            self.deferredWindowTrimDirection =
+                                DCWindowTrimDirectionRemoveNewest;
+                            dispatch_async(dispatch_get_main_queue(), ^{
+                                [self performDeferredWindowTrimIfNeeded];
+                            });
+                        }
                     }
                 }
             }
@@ -3489,6 +3754,8 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
             self.loadingOlderMessages = NO;
             self.olderRunwayRequestStartTime = 0.0;
             self.olderRunwayRequestedCount = 0;
+
+            [self scheduleChatOrderAudit];
             CGFloat runwayVelocity = [self effectiveRunwayVelocityY];
             if (fabs(runwayVelocity) >= 700.0f) {
                 [self maintainMessageRunwayForVelocity:runwayVelocity reason:@"after older insert"];
@@ -3661,6 +3928,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                 [self deduplicateAgainstWindow:newMessages];
 
             if (deduped.count == 0) {
+                [self clearNewerPaginationProgressGate];
                 [self updatePresentTimeFromTablePosition];
                 [[DCMessageStore sharedInstance] scheduleCheckpointForWindow:targetWindow];
 
@@ -3711,25 +3979,17 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
             }
 
             /*
-             * Setting contentOffset after the insert is required to preserve
-             * the exact variable-height anchor, but on iOS 6 it cancels
-             * UIScrollView's native deceleration. Capture the live velocity so
-             * that motion can continue through the display-link path after
-             * the complete table mutation/trim is finished.
+             * Boundary-row reloads remain deferred while the user is moving.
+             * The viewport anchor itself is restored after insertion because
+             * a flipped iOS 5/6 table does not create usable newer runway on
+             * its own when rows are inserted at physical row zero.
              */
-            CGFloat forwardMomentumVelocity = self.sampledScrollVelocityY;
-            if (self.lastVelocitySampleTime > 0.0) {
-                NSTimeInterval velocityAge =
-                    CFAbsoluteTimeGetCurrent() - self.lastVelocitySampleTime;
-                if (velocityAge > 0.0 && velocityAge < 2.0) {
-                    forwardMomentumVelocity *=
-                        (CGFloat)pow(0.998, velocityAge * 1000.0);
-                }
-            }
-            BOOL shouldTakeOverForwardMomentum =
-                self.chatTableView.decelerating &&
-                forwardMomentumVelocity < -80.0f &&
-                !self.forwardMomentumDisplayLink;
+            BOOL wasDraggingOrTracking =
+                self.chatTableView.dragging ||
+                self.chatTableView.tracking;
+            BOOL wasDecelerating = self.chatTableView.decelerating;
+            BOOL preserveNativeMotion = wasDraggingOrTracking || wasDecelerating;
+            CGFloat newerCarryVelocity = [self effectiveRunwayVelocityY];
 
             BOOL wasRestoringWindowPosition = self.restoringWindowPosition;
             self.restoringWindowPosition = YES;
@@ -3740,8 +4000,30 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
              */
             [self.messages addObjectsFromArray:deduped];
 
+            BOOL repairedOrder =
+                [targetWindow repairMessageOrderIfNeeded];
+            if (repairedOrder) {
+                NSLog(@"[ChatOrder] Repaired newer-history model before presentation");
+                didReload = YES;
+            }
+
             if (didReload) {
                 [self.chatTableView reloadData];
+                [self.chatTableView layoutIfNeeded];
+
+                if (![self restoreVisibleMessageAnchorSnowflake:viewportAnchorSnowflake
+                                                       viewportY:viewportAnchorY]) {
+                    CGFloat addedHeight = 0.0f;
+                    for (NSUInteger row = 0; row < deduped.count; row++) {
+                        NSIndexPath *indexPath =
+                            [NSIndexPath indexPathForRow:row inSection:0];
+                        addedHeight +=
+                            [self.chatTableView rectForRowAtIndexPath:indexPath].size.height;
+                    }
+                    CGPoint offset = self.chatTableView.contentOffset;
+                    offset.y = [self clampedOffsetY:offset.y + addedHeight];
+                    self.chatTableView.contentOffset = offset;
+                }
             } else {
                 NSMutableArray *indexPaths =
                     [NSMutableArray
@@ -3778,7 +4060,8 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                  */
                 NSUInteger previousNewestRow = deduped.count;
 
-                if (boundaryNeedsReload &&
+                if (!preserveNativeMotion &&
+                    boundaryNeedsReload &&
                     oldCount > 0 &&
                     previousNewestRow < self.messages.count) {
                     NSIndexPath *previousNewestPath =
@@ -3804,9 +4087,11 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                 [UIView setAnimationsEnabled:YES];
 
                 /*
-                 * Preserve the same visible message at the same screen Y.
-                 * This includes exact variable row heights and any grouping
-                 * height change at the old/new page boundary.
+                 * Newer rows are inserted at physical row zero. Keep the
+                 * same message at the same screen Y so the inserted block
+                 * becomes real scroll runway instead of leaving the viewport
+                 * pinned to the loaded edge. This correction is required even
+                 * during motion on the flipped legacy table.
                  */
                 [self.chatTableView layoutIfNeeded];
 
@@ -3847,6 +4132,25 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                     offset.y = [self clampedOffsetY:offset.y + addedHeight];
                     self.chatTableView.contentOffset = offset;
                 }
+
+                if (preserveNativeMotion) {
+                    NSLog(@"[ChatRunway] newer anchor restored %lu msgs offset %.0f carry %.0f",
+                          (unsigned long)deduped.count,
+                          self.chatTableView.contentOffset.y,
+                          newerCarryVelocity);
+                }
+
+                /*
+                 * setContentOffset: cancels native iOS 5/6 deceleration. When
+                 * this page landed during a fling toward newer history, hand
+                 * the sampled residual velocity to the existing continuation
+                 * immediately. There is no delayed detection step and no
+                 * opposite-edge trim in this transaction. Finger-driven drags
+                 * continue natively after the anchor correction.
+                 */
+                if (wasDecelerating && newerCarryVelocity < -80.0f) {
+                    [self startForwardMomentumContinuationWithVelocity:newerCarryVelocity];
+                }
             }
 
             /*
@@ -3855,8 +4159,19 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
              * reload fallback behavior otherwise.
              */
             if (!didReload) {
-                [self evictOldestDownToCeiling];
+                if (preserveNativeMotion) {
+                    self.deferredWindowTrimDirection =
+                        DCWindowTrimDirectionRemoveOldest;
+                } else {
+                    [self evictOldestDownToCeiling];
+                }
             }
+            if (preserveNativeMotion && targetWindow.hasMoreAfter) {
+                [self armNewerPaginationProgressGateForInsertedCount:deduped.count];
+            } else {
+                [self clearNewerPaginationProgressGate];
+            }
+
             [self updatePresentTimeFromTablePosition];
             if (!(self.deferredWindowTrimDirection != DCWindowTrimDirectionNone &&
                   self.messages.count > DCChatWindowCeiling())) {
@@ -3867,19 +4182,195 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
             self.loadingNewerMessages = NO;
             self.newerRunwayRequestStartTime = 0.0;
             self.newerRunwayRequestedCount = 0;
+            [self scheduleChatOrderAudit];
 
             CGFloat runwayVelocity = [self effectiveRunwayVelocityY];
-            if (fabs(runwayVelocity) >= 700.0f) {
-                [self maintainMessageRunwayForVelocity:runwayVelocity reason:@"after newer insert"];
+            if (preserveNativeMotion && fabs(runwayVelocity) >= 700.0f) {
                 [self schedulePresentationRunwayForVelocity:runwayVelocity];
             }
 
-            if (shouldTakeOverForwardMomentum) {
-                [self startForwardMomentumContinuationWithVelocity:
-                    forwardMomentumVelocity];
-            }
         });
 
+    });
+}
+
+- (void)captureVisibleMessageAnchorSnowflake:(NSString **)snowflake
+                                   viewportY:(CGFloat *)viewportY {
+    if (snowflake) *snowflake = nil;
+    if (viewportY) *viewportY = 0.0f;
+    if (!self.chatTableView || self.messages.count == 0) return;
+
+    NSArray *visiblePaths = [self.chatTableView indexPathsForVisibleRows];
+    NSIndexPath *anchorPath = nil;
+    for (NSIndexPath *path in visiblePaths) {
+        if (!anchorPath || path.row < anchorPath.row) {
+            anchorPath = path;
+        }
+    }
+    if (!anchorPath) return;
+
+    NSString *anchorSnowflake = nil;
+    DCChatTableCell *cell =
+        (DCChatTableCell *)[self.chatTableView cellForRowAtIndexPath:anchorPath];
+    if ([cell isKindOfClass:[DCChatTableCell class]] &&
+        cell.messageSnowflake.length) {
+        anchorSnowflake = cell.messageSnowflake;
+    } else if (anchorPath.row < (NSInteger)self.messages.count) {
+        NSInteger modelIndex = [self modelIndexForRow:anchorPath.row];
+        if (modelIndex >= 0 && modelIndex < (NSInteger)self.messages.count) {
+            anchorSnowflake = ((DCMessage *)self.messages[modelIndex]).snowflake;
+        }
+    }
+
+    if (!anchorSnowflake.length) return;
+
+    if (snowflake) *snowflake = [anchorSnowflake copy];
+    if (viewportY) {
+        CGRect rect = [self.chatTableView rectForRowAtIndexPath:anchorPath];
+        *viewportY = rect.origin.y - self.chatTableView.contentOffset.y;
+    }
+}
+
+- (BOOL)restoreVisibleMessageAnchorSnowflake:(NSString *)snowflake
+                                    viewportY:(CGFloat)viewportY {
+    if (!snowflake.length || !self.chatTableView) return NO;
+
+    NSInteger modelIndex = [self modelIndexForMessageSnowflake:snowflake];
+    if (modelIndex == NSNotFound) return NO;
+
+    NSInteger row = [self rowForModelIndex:modelIndex];
+    NSInteger rowCount = [self.chatTableView numberOfRowsInSection:0];
+    if (row < 0 || row >= rowCount) return NO;
+
+    NSIndexPath *path = [NSIndexPath indexPathForRow:row inSection:0];
+    CGRect rect = [self.chatTableView rectForRowAtIndexPath:path];
+    CGFloat targetOffsetY = [self clampedOffsetY:rect.origin.y - viewportY];
+
+    if (fabs(self.chatTableView.contentOffset.y - targetOffsetY) > 0.5f) {
+        [self.chatTableView
+            setContentOffset:CGPointMake(self.chatTableView.contentOffset.x,
+                                         targetOffsetY)
+                    animated:NO];
+    }
+
+    return YES;
+}
+
+- (void)scheduleChatOrderAudit {
+    if (self.chatOrderAuditPending ||
+        !self.chatTableView ||
+        !self.currentWindow ||
+        self.oldMode) {
+        return;
+    }
+
+    self.chatOrderAuditPending = YES;
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self.chatOrderAuditPending = NO;
+
+        if (!self.chatTableView ||
+            !self.currentWindow ||
+            self.oldMode) {
+            return;
+        }
+
+        if (self.restoringWindowPosition ||
+            [self chatIsActivelyScrolling]) {
+            return;
+        }
+
+        BOOL modelRepaired =
+            [self.currentWindow repairMessageOrderIfNeeded];
+
+        NSInteger rowCount =
+            [self.chatTableView numberOfRowsInSection:0];
+        BOOL presentationMismatch =
+            rowCount != (NSInteger)self.messages.count;
+
+        NSInteger mismatchRow = -1;
+        NSString *expectedSnowflake = nil;
+        NSString *actualSnowflake = nil;
+
+        if (!presentationMismatch) {
+            NSArray *visiblePaths =
+                [self.chatTableView indexPathsForVisibleRows];
+
+            for (NSIndexPath *path in visiblePaths) {
+                if (path.row < 0 ||
+                    path.row >= rowCount ||
+                    path.row >= (NSInteger)self.messages.count) {
+                    presentationMismatch = YES;
+                    mismatchRow = path.row;
+                    break;
+                }
+
+                DCChatTableCell *cell =
+                    (DCChatTableCell *)[self.chatTableView
+                        cellForRowAtIndexPath:path];
+                if (![cell isKindOfClass:[DCChatTableCell class]] ||
+                    !cell.messageSnowflake.length) {
+                    continue;
+                }
+
+                NSInteger modelIndex =
+                    [self modelIndexForRow:path.row];
+                if (modelIndex < 0 ||
+                    modelIndex >= (NSInteger)self.messages.count) {
+                    presentationMismatch = YES;
+                    mismatchRow = path.row;
+                    actualSnowflake = cell.messageSnowflake;
+                    break;
+                }
+
+                DCMessage *expectedMessage =
+                    self.messages[modelIndex];
+                if (![cell.messageSnowflake
+                        isEqualToString:expectedMessage.snowflake]) {
+                    presentationMismatch = YES;
+                    mismatchRow = path.row;
+                    expectedSnowflake = expectedMessage.snowflake;
+                    actualSnowflake = cell.messageSnowflake;
+                    break;
+                }
+            }
+        }
+
+        if (!modelRepaired && !presentationMismatch) {
+            return;
+        }
+
+        NSString *anchorSnowflake = nil;
+        CGFloat anchorViewportY = 0.0f;
+        [self captureVisibleMessageAnchorSnowflake:&anchorSnowflake
+                                         viewportY:&anchorViewportY];
+
+        NSLog(@"[ChatOrder] Recovering table modelRepair:%d rows:%ld/%lu mismatchRow:%ld expected:%@ actual:%@",
+              modelRepaired,
+              (long)rowCount,
+              (unsigned long)self.messages.count,
+              (long)mismatchRow,
+              expectedSnowflake ?: @"-",
+              actualSnowflake ?: @"-");
+
+        BOOL wasRestoringWindowPosition =
+            self.restoringWindowPosition;
+        self.restoringWindowPosition = YES;
+
+        [self.chatTableView reloadData];
+        [self.chatTableView layoutIfNeeded];
+        [self restoreVisibleMessageAnchorSnowflake:anchorSnowflake
+                                         viewportY:anchorViewportY];
+
+        self.restoringWindowPosition =
+            wasRestoringWindowPosition;
+
+        if (!wasRestoringWindowPosition) {
+            [self saveScrollPositionForWindow:self.currentWindow];
+        }
+
+        [[DCMessageStore sharedInstance]
+            scheduleCheckpointForWindow:self.currentWindow];
     });
 }
 
@@ -4112,6 +4603,53 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     return self.sampledScrollVelocityY;
 }
 
+- (void)clearNewerPaginationProgressGate {
+    self.newerPaginationProgressGateActive = NO;
+    self.newerPaginationProgressGateOffsetY = 0.0f;
+    self.newerPaginationProgressGateInsertedCount = 0;
+}
+
+- (void)armNewerPaginationProgressGateForInsertedCount:(NSUInteger)insertedCount {
+    if (!insertedCount || !self.currentWindow.hasMoreAfter || !self.chatTableView) {
+        [self clearNewerPaginationProgressGate];
+        return;
+    }
+
+    self.newerPaginationProgressGateActive = YES;
+    self.newerPaginationProgressGateOffsetY = self.chatTableView.contentOffset.y;
+    self.newerPaginationProgressGateInsertedCount = insertedCount;
+
+    NSLog(@"[ChatRunway] newer insert gate %lu msgs offset %.0f require %.0fpt progress",
+          (unsigned long)insertedCount,
+          self.newerPaginationProgressGateOffsetY,
+          MAX(1.0f, self.chatTableView.bounds.size.height));
+}
+
+- (BOOL)newerPaginationProgressGateAllowsRequest {
+    if (!self.newerPaginationProgressGateActive) {
+        return YES;
+    }
+
+    if (!self.currentWindow.hasMoreAfter || !self.chatTableView) {
+        [self clearNewerPaginationProgressGate];
+        return YES;
+    }
+
+    CGFloat requiredProgress = MAX(1.0f, self.chatTableView.bounds.size.height);
+    CGFloat progress =
+        self.newerPaginationProgressGateOffsetY - self.chatTableView.contentOffset.y;
+
+    if (progress >= requiredProgress) {
+        NSLog(@"[ChatRunway] newer insert gate rearmed after %.0fpt progress (%lu msgs)",
+              progress,
+              (unsigned long)self.newerPaginationProgressGateInsertedCount);
+        [self clearNewerPaginationProgressGate];
+        return YES;
+    }
+
+    return NO;
+}
+
 - (void)maintainMessageRunwayForVelocity:(CGFloat)velocityY reason:(NSString *)reason {
     if (!self.chatTableView || self.messages.count == 0 ||
         fabs(velocityY) < 700.0f) {
@@ -4164,7 +4702,10 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
             [self getMessages:pageCount beforeMessage:self.messages.firstObject];
         }
     } else {
-        if (!self.currentWindow.hasMoreAfter) return;
+        if (!self.currentWindow.hasMoreAfter) {
+            [self clearNewerPaginationProgressGate];
+            return;
+        }
         CGFloat available = MAX(0.0f, currentY - minimumOffsetY);
 
         if (self.loadingNewerMessages) {
@@ -4182,6 +4723,10 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                           : DCChatWindowHardCeiling()));
                 self.lastNewerRunwayStarvationLog = now;
             }
+            return;
+        }
+
+        if (![self newerPaginationProgressGateAllowsRequest]) {
             return;
         }
 
@@ -4220,7 +4765,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
         velocityY, self.chatTableView.bounds.size.height);
     CGFloat accumulatedPoints = 0.0f;
     NSUInteger hardMessageCap =
-        ([DCResourceManager sharedManager].memoryClass == DCDeviceMemoryClass256MB)
+        (DCChatPolicyMemoryClass() == DCDeviceMemoryClass256MB)
             ? 30 : 48;
 
     NSMutableArray *messagesToWarm = [NSMutableArray array];
@@ -5380,7 +5925,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     [self stopForwardMomentumContinuation];
 
     self.forwardMomentumVelocityY = velocityY;
-    self.forwardMomentumLastTimestamp = 0.0;
+    self.forwardMomentumLastTimestamp = CACurrentMediaTime();
 
     CADisplayLink *link =
         [CADisplayLink displayLinkWithTarget:self
@@ -5402,11 +5947,6 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     }
 
     CFTimeInterval now = displayLink.timestamp;
-    if (self.forwardMomentumLastTimestamp <= 0.0) {
-        self.forwardMomentumLastTimestamp = now;
-        return;
-    }
-
     CFTimeInterval dt = now - self.forwardMomentumLastTimestamp;
     self.forwardMomentumLastTimestamp = now;
     if (dt <= 0.0 || dt > 0.10) {
@@ -5446,6 +5986,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
             [self stopForwardMomentumContinuation];
             dispatch_async(dispatch_get_main_queue(), ^{
                 [self updateVisibleChatMediaResidency];
+                [self scheduleChatOrderAudit];
             });
             return;
         }
@@ -5475,6 +6016,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
         dispatch_async(dispatch_get_main_queue(), ^{
             [self updateVisibleChatMediaResidency];
             [self performDeferredWindowTrimIfNeeded];
+            [self scheduleChatOrderAudit];
         });
     }
 }
@@ -5483,6 +6025,8 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     if (scrollView != self.chatTableView) {
         return;
     }
+
+    [self updateMessageEdgeLoadingIndicators];
 
     if (self.restoringWindowPosition) {
         [self updateVisibleChatMediaResidency];
@@ -5548,6 +6092,8 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
         return;
     }
 
+    self.lastInteractiveScrollTime = velocityNow;
+
     CGFloat runwayVelocity = [self effectiveRunwayVelocityY];
     [self maintainMessageRunwayForVelocity:runwayVelocity reason:@"scroll"];
     [self schedulePresentationRunwayForVelocity:runwayVelocity];
@@ -5600,7 +6146,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                 ? (nearestNewerRow <= triggerRow)
                 : (scrollView.contentOffset.y <= scrollView.bounds.size.height);
 
-        if (nearNewerEdge) {
+        if (nearNewerEdge && [self newerPaginationProgressGateAllowsRequest]) {
             NSLog(@"[ChatPerf] newer pagination trigger nearestRow %ld threshold %ld page %d",
                   (long)nearestNewerRow,
                   (long)triggerRow,
@@ -5636,6 +6182,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
         dispatch_async(dispatch_get_main_queue(), ^{
             [self updateVisibleChatMediaResidency];
             [self performDeferredWindowTrimIfNeeded];
+            [self scheduleChatOrderAudit];
         });
     }
 }
@@ -5648,6 +6195,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     dispatch_async(dispatch_get_main_queue(), ^{
         [self updateVisibleChatMediaResidency];
         [self performDeferredWindowTrimIfNeeded];
+        [self scheduleChatOrderAudit];
     });
 }
 
@@ -5723,24 +6271,106 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 }
 
 - (void)trimNewestDownToCeilingNow {
-    NSInteger evictCount = (NSInteger)self.messages.count - DCChatWindowCeiling();
-    if (evictCount <= 0) return;
-    NSInteger trimBatch = DCChatWindowTrimBatch();
-    if ([self chatIsActivelyScrolling] && self.olderRunwayRequestedCount > trimBatch) {
-        trimBatch = self.olderRunwayRequestedCount;
+    if ([self chatIsActivelyScrolling]) {
+        self.deferredWindowTrimDirection = DCWindowTrimDirectionRemoveNewest;
+        return;
     }
-    evictCount = MIN(evictCount, trimBatch);
 
-    BOOL inSync = ([self.chatTableView numberOfRowsInSection:0] == (NSInteger)self.messages.count);
+    NSInteger requestedEvictCount =
+        (NSInteger)self.messages.count - DCChatWindowCeiling();
+    if (requestedEvictCount <= 0) return;
+
+    NSInteger trimBatch = DCChatWindowTrimBatch();
+    NSInteger evictCount = requestedEvictCount;
+    BOOL inSync =
+        ([self.chatTableView numberOfRowsInSection:0] ==
+         (NSInteger)self.messages.count);
+
+    /*
+     * Never compact through the viewport.  On the flipped table the newest
+     * messages occupy the lowest physical rows, so a large low-row deletion
+     * can otherwise consume the cells the user is actually looking at.  Keep
+     * enough newer-side runway that the compaction itself also cannot place
+     * the viewport directly inside the newer-pagination trigger zone.
+     */
+    if (inSync) {
+        NSArray *visiblePaths =
+            [self.chatTableView indexPathsForVisibleRows];
+        NSInteger nearestVisibleRow = NSIntegerMax;
+        NSInteger farthestVisibleRow = -1;
+        for (NSIndexPath *path in visiblePaths) {
+            nearestVisibleRow = MIN(nearestVisibleRow, path.row);
+            farthestVisibleRow = MAX(farthestVisibleRow, path.row);
+        }
+
+        if (nearestVisibleRow != NSIntegerMax) {
+            NSInteger preserveNewerRows =
+                DCNewerPaginationTriggerRow() + 1;
+            NSInteger maxSafeEvict =
+                MAX(0, nearestVisibleRow - preserveNewerRows);
+
+            if (evictCount > maxSafeEvict) {
+                NSLog(@"[ChatPerf] newest idle compact limited %ld -> %ld preserve rows %ld-%ld buffer %ld",
+                      (long)evictCount,
+                      (long)maxSafeEvict,
+                      (long)nearestVisibleRow,
+                      (long)farthestVisibleRow,
+                      (long)preserveNewerRows);
+                evictCount = maxSafeEvict;
+            }
+        }
+    }
+
+    if (evictCount <= 0) {
+        return;
+    }
+
+    BOOL bulkCompaction =
+        requestedEvictCount > (trimBatch * 2) &&
+        evictCount > trimBatch;
+    if (!bulkCompaction) {
+        evictCount = MIN(evictCount, trimBatch);
+    }
+
+    /*
+     * Preserve a surviving visible message by identity. endUpdates can clamp
+     * contentOffset when deleting row zero from a flipped iOS 6 table, so
+     * correcting from the post-delete offset can apply the height delta twice.
+     */
+    NSString *trimAnchorSnowflake = nil;
+    CGFloat trimAnchorViewportY = 0.0f;
+    CGFloat previousOffsetY = self.chatTableView.contentOffset.y;
     CGFloat evictedHeight = 0.0f;
     NSMutableArray *evictPaths = nil;
 
     if (inSync) {
-        evictPaths = [NSMutableArray arrayWithCapacity:evictCount];
-        for (NSInteger row = 0; row < evictCount; row++) {
-            NSIndexPath *path = [NSIndexPath indexPathForRow:row inSection:0];
-            evictedHeight += [self.chatTableView rectForRowAtIndexPath:path].size.height;
-            [evictPaths addObject:path];
+        NSArray *visiblePaths = [self.chatTableView indexPathsForVisibleRows];
+        NSIndexPath *trimAnchorPath = nil;
+        for (NSIndexPath *path in visiblePaths) {
+            if (path.row < evictCount) continue;
+            if (!trimAnchorPath || path.row < trimAnchorPath.row) {
+                trimAnchorPath = path;
+            }
+        }
+        if (trimAnchorPath) {
+            NSInteger anchorModelIndex = [self modelIndexForRow:trimAnchorPath.row];
+            if (anchorModelIndex >= 0 &&
+                anchorModelIndex < (NSInteger)self.messages.count) {
+                DCMessage *anchorMessage = self.messages[anchorModelIndex];
+                trimAnchorSnowflake = [anchorMessage.snowflake copy];
+                CGRect anchorRect = [self.chatTableView rectForRowAtIndexPath:trimAnchorPath];
+                trimAnchorViewportY =
+                    anchorRect.origin.y - self.chatTableView.contentOffset.y;
+            }
+        }
+
+        if (!bulkCompaction) {
+            evictPaths = [NSMutableArray arrayWithCapacity:evictCount];
+            for (NSInteger row = 0; row < evictCount; row++) {
+                NSIndexPath *path = [NSIndexPath indexPathForRow:row inSection:0];
+                evictedHeight += [self.chatTableView rectForRowAtIndexPath:path].size.height;
+                [evictPaths addObject:path];
+            }
         }
     }
 
@@ -5761,25 +6391,72 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     self.currentWindow.hasMoreAfter = YES;
     self.currentWindow.atPresentTime = NO;
 
+    BOOL wasRestoringWindowPosition = self.restoringWindowPosition;
+    self.restoringWindowPosition = YES;
+
     if (inSync) {
-        [UIView setAnimationsEnabled:NO];
         CFAbsoluteTime start = CFAbsoluteTimeGetCurrent();
-        [self.chatTableView beginUpdates];
-        [self.chatTableView deleteRowsAtIndexPaths:evictPaths
-                                  withRowAnimation:UITableViewRowAnimationNone];
-        [self.chatTableView endUpdates];
+        if (bulkCompaction) {
+            [self.chatTableView reloadData];
+        } else {
+            [UIView setAnimationsEnabled:NO];
+            [self.chatTableView beginUpdates];
+            [self.chatTableView deleteRowsAtIndexPaths:evictPaths
+                                      withRowAnimation:UITableViewRowAnimationNone];
+            [self.chatTableView endUpdates];
+            [UIView setAnimationsEnabled:YES];
+        }
         NSTimeInterval elapsed = CFAbsoluteTimeGetCurrent() - start;
         if (elapsed >= 0.008) {
-            NSLog(@"[ChatPerf] table newest trim %lu rows %.1fms",
-                  (unsigned long)evictPaths.count, elapsed * 1000.0);
+            NSLog(bulkCompaction
+                      ? @"[ChatPerf] table newest idle compact %lu rows %.1fms"
+                      : @"[ChatPerf] table newest trim %lu rows %.1fms",
+                  (unsigned long)evictCount, elapsed * 1000.0);
         }
-        [UIView setAnimationsEnabled:YES];
 
-        CGPoint offset = self.chatTableView.contentOffset;
-        offset.y = MAX(0.0f, offset.y - evictedHeight);
-        self.chatTableView.contentOffset = offset;
+        [self.chatTableView layoutIfNeeded];
+
+        BOOL restoredAnchor = NO;
+        if (trimAnchorSnowflake.length) {
+            NSInteger anchorModelIndex =
+                [self modelIndexForMessageSnowflake:trimAnchorSnowflake];
+            if (anchorModelIndex != NSNotFound) {
+                NSInteger anchorRow = [self rowForModelIndex:anchorModelIndex];
+                if (anchorRow >= 0 &&
+                    anchorRow < [self.chatTableView numberOfRowsInSection:0]) {
+                    NSIndexPath *anchorPath =
+                        [NSIndexPath indexPathForRow:anchorRow inSection:0];
+                    CGRect anchorRect =
+                        [self.chatTableView rectForRowAtIndexPath:anchorPath];
+                    CGFloat targetOffsetY =
+                        anchorRect.origin.y - trimAnchorViewportY;
+                    targetOffsetY = [self clampedOffsetY:targetOffsetY];
+                    [self.chatTableView
+                        setContentOffset:CGPointMake(self.chatTableView.contentOffset.x,
+                                                     targetOffsetY)
+                               animated:NO];
+                    restoredAnchor = YES;
+                }
+            }
+        }
+
+        if (!restoredAnchor) {
+            CGFloat targetOffsetY = bulkCompaction
+                ? [self clampedOffsetY:self.chatTableView.contentOffset.y]
+                : [self clampedOffsetY:previousOffsetY - evictedHeight];
+            [self.chatTableView
+                setContentOffset:CGPointMake(self.chatTableView.contentOffset.x,
+                                             targetOffsetY)
+                       animated:NO];
+        }
     } else {
         [self.chatTableView reloadData];
+    }
+
+    self.restoringWindowPosition = wasRestoringWindowPosition;
+    [self scheduleChatOrderAudit];
+    if (!wasRestoringWindowPosition) {
+        [self saveScrollPositionForWindow:self.currentWindow];
     }
 }
 
@@ -5795,29 +6472,88 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
      * requires a slide.
      */
     BOOL activeScroll = [self chatIsActivelyScrolling];
-    NSInteger permittedHardCeiling = activeScroll
-        ? DCChatActiveWindowHardCeiling()
-        : DCChatWindowHardCeiling();
-    if ((self.currentWindow.hasMoreAfter || activeScroll) &&
-        self.messages.count <= permittedHardCeiling) {
+    if (activeScroll) {
+        self.deferredWindowTrimDirection = DCWindowTrimDirectionRemoveOldest;
+        return;
+    }
+    if (self.currentWindow.hasMoreAfter &&
+        self.messages.count <= DCChatWindowHardCeiling()) {
         self.deferredWindowTrimDirection = DCWindowTrimDirectionRemoveOldest;
         return;
     }
 
     self.deferredWindowTrimDirection = DCWindowTrimDirectionNone;
     [self trimOldestDownToCeilingNow];
+    if (self.messages.count > DCChatWindowCeiling()) {
+        self.deferredWindowTrimDirection = DCWindowTrimDirectionRemoveOldest;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self performDeferredWindowTrimIfNeeded];
+        });
+    }
 }
 
 - (void)trimOldestDownToCeilingNow {
-    NSInteger evictCount = (NSInteger)self.messages.count - DCChatWindowCeiling();
-    if (evictCount <= 0) return;
-    NSInteger trimBatch = DCChatWindowTrimBatch();
-    if ([self chatIsActivelyScrolling] && self.newerRunwayRequestedCount > trimBatch) {
-        trimBatch = self.newerRunwayRequestedCount;
+    if ([self chatIsActivelyScrolling]) {
+        self.deferredWindowTrimDirection = DCWindowTrimDirectionRemoveOldest;
+        return;
     }
-    evictCount = MIN(evictCount, trimBatch);
 
-    BOOL inSync = ([self.chatTableView numberOfRowsInSection:0] == (NSInteger)self.messages.count);
+    NSInteger requestedEvictCount =
+        (NSInteger)self.messages.count - DCChatWindowCeiling();
+    if (requestedEvictCount <= 0) return;
+
+    NSInteger trimBatch = DCChatWindowTrimBatch();
+    NSInteger evictCount = requestedEvictCount;
+    BOOL inSync =
+        ([self.chatTableView numberOfRowsInSection:0] ==
+         (NSInteger)self.messages.count);
+
+    /*
+     * The oldest messages occupy the highest physical rows.  Keep the entire
+     * visible span plus roughly two current viewports of older-side runway so
+     * an idle compaction cannot eat the viewport or immediately recreate an
+     * older-history starvation condition on the next touch.
+     */
+    if (inSync) {
+        NSArray *visiblePaths =
+            [self.chatTableView indexPathsForVisibleRows];
+        NSInteger nearestVisibleRow = NSIntegerMax;
+        NSInteger farthestVisibleRow = -1;
+        for (NSIndexPath *path in visiblePaths) {
+            nearestVisibleRow = MIN(nearestVisibleRow, path.row);
+            farthestVisibleRow = MAX(farthestVisibleRow, path.row);
+        }
+
+        if (farthestVisibleRow >= 0) {
+            NSInteger visibleCount = MAX((NSInteger)visiblePaths.count, 1);
+            NSInteger preserveOlderRows = MAX(trimBatch, visibleCount * 2);
+            NSInteger rowsAfterViewport =
+                (NSInteger)self.messages.count - 1 - farthestVisibleRow;
+            NSInteger maxSafeEvict =
+                MAX(0, rowsAfterViewport - preserveOlderRows);
+
+            if (evictCount > maxSafeEvict) {
+                NSLog(@"[ChatPerf] oldest idle compact limited %ld -> %ld preserve rows %ld-%ld buffer %ld",
+                      (long)evictCount,
+                      (long)maxSafeEvict,
+                      (long)nearestVisibleRow,
+                      (long)farthestVisibleRow,
+                      (long)preserveOlderRows);
+                evictCount = maxSafeEvict;
+            }
+        }
+    }
+
+    if (evictCount <= 0) {
+        return;
+    }
+
+    BOOL bulkCompaction =
+        requestedEvictCount > (trimBatch * 2) &&
+        evictCount > trimBatch;
+    if (!bulkCompaction) {
+        evictCount = MIN(evictCount, trimBatch);
+    }
 
     /*
      * Preserve a visible message across the high-row deletion. On the flipped
@@ -5850,7 +6586,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     }
 
     NSMutableArray *evictPaths = nil;
-    if (inSync) {
+    if (inSync && !bulkCompaction) {
         NSInteger totalRows = (NSInteger)self.messages.count;
         evictPaths = [NSMutableArray arrayWithCapacity:evictCount];
         for (NSInteger m = 0; m < evictCount; m++) {
@@ -5872,20 +6608,29 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     [[DCCacheManager sharedInstance] invalidateSnowflakes:evictedIDs];
     self.currentWindow.hasMoreBefore = YES;
 
+    BOOL wasRestoringWindowPosition = self.restoringWindowPosition;
+    self.restoringWindowPosition = YES;
+
     if (inSync) {
-        [UIView setAnimationsEnabled:NO];
         CFAbsoluteTime tableMutationStart = CFAbsoluteTimeGetCurrent();
-        [self.chatTableView beginUpdates];
-        [self.chatTableView deleteRowsAtIndexPaths:evictPaths
-                                  withRowAnimation:UITableViewRowAnimationNone];
-        [self.chatTableView endUpdates];
+        if (bulkCompaction) {
+            [self.chatTableView reloadData];
+        } else {
+            [UIView setAnimationsEnabled:NO];
+            [self.chatTableView beginUpdates];
+            [self.chatTableView deleteRowsAtIndexPaths:evictPaths
+                                      withRowAnimation:UITableViewRowAnimationNone];
+            [self.chatTableView endUpdates];
+            [UIView setAnimationsEnabled:YES];
+        }
         NSTimeInterval tableMutationTime = CFAbsoluteTimeGetCurrent() - tableMutationStart;
         if (tableMutationTime >= 0.008) {
-            NSLog(@"[ChatPerf] table tail evict %lu rows %.1fms",
-                  (unsigned long)evictPaths.count,
+            NSLog(bulkCompaction
+                      ? @"[ChatPerf] table oldest idle compact %lu rows %.1fms"
+                      : @"[ChatPerf] table tail evict %lu rows %.1fms",
+                  (unsigned long)evictCount,
                   tableMutationTime * 1000.0);
         }
-        [UIView setAnimationsEnabled:YES];
 
         [self.chatTableView layoutIfNeeded];
         if (trimAnchorSnowflake.length) {
@@ -5912,6 +6657,12 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     } else {
         [self.chatTableView reloadData];
     }
+
+    self.restoringWindowPosition = wasRestoringWindowPosition;
+    [self scheduleChatOrderAudit];
+    if (!wasRestoringWindowPosition) {
+        [self saveScrollPositionForWindow:self.currentWindow];
+    }
 }
 
 - (void)performDeferredWindowTrimIfNeeded {
@@ -5919,6 +6670,22 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
         self.messages.count <= DCChatWindowCeiling() ||
         [self chatIsActivelyScrolling]) {
         return;
+    }
+
+    if (DCChatPolicyMemoryClass() != DCDeviceMemoryClass256MB &&
+        self.lastInteractiveScrollTime > 0.0) {
+        const NSTimeInterval idleGrace = 0.75;
+        NSTimeInterval idleTime =
+            CFAbsoluteTimeGetCurrent() - self.lastInteractiveScrollTime;
+        if (idleTime < idleGrace) {
+            NSTimeInterval remaining = idleGrace - MAX(0.0, idleTime);
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                         (int64_t)(remaining * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                [self performDeferredWindowTrimIfNeeded];
+            });
+            return;
+        }
     }
 
     DCWindowTrimDirection direction =
@@ -5933,6 +6700,8 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
     self.deferredWindowTrimDirection = DCWindowTrimDirectionNone;
 
+    NSUInteger countBeforeTrim = self.messages.count;
+
     if (direction == DCWindowTrimDirectionRemoveNewest) {
         [self trimNewestDownToCeilingNow];
     } else if (direction == DCWindowTrimDirectionRemoveOldest) {
@@ -5940,10 +6709,23 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     }
 
     if (self.messages.count > DCChatWindowCeiling()) {
-        // Do not turn a large accumulated overage into one 100-220ms table
-        // transaction. Trim one normal message batch per idle run-loop pass.
+        /*
+         * A safe trim can intentionally leave the window oversized when the
+         * viewport is too close to the eviction edge.  Do not spin a timer
+         * retry loop while nothing can be removed; the next real scroll/load
+         * event will request cleanup again once the viewport has moved.
+         */
+        if (self.messages.count >= countBeforeTrim) {
+            NSLog(@"[ChatPerf] idle compact deferred at %lu rows to preserve viewport",
+                  (unsigned long)self.messages.count);
+            return;
+        }
+
         self.deferredWindowTrimDirection = direction;
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.10 * NSEC_PER_SEC)),
+        NSTimeInterval trimDelay =
+            (DCChatPolicyMemoryClass() == DCDeviceMemoryClass256MB) ? 0.10 : 0.20;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                     (int64_t)(trimDelay * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
             [self performDeferredWindowTrimIfNeeded];
         });
@@ -6243,8 +7025,10 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 - (void)scrollViewWillBeginDragging:(UIScrollView *)scrollView {
     if (scrollView == self.chatTableView) {
         [self stopForwardMomentumContinuation];
+        [self clearNewerPaginationProgressGate];
         self.sampledScrollVelocityY = 0.0f;
         self.lastVelocitySampleTime = 0.0;
+        self.lastInteractiveScrollTime = CFAbsoluteTimeGetCurrent();
     }
 
     if (!self.touchHighlightIndexPath) return;
@@ -7142,18 +7926,24 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
         NSError *preparationError = nil;
 
         for (NSUInteger i = 0; i < assetSnapshot.count; i++) {
-            ALAsset *asset = [assetSnapshot objectAtIndex:i];
-            NSString *mimeType = nil;
-            NSString *filename = nil;
-            NSURL *fileURL = DCCopyAssetToTemporaryFile(asset,
-                                                        i,
-                                                        &mimeType,
-                                                        &filename,
-                                                        &preparationError);
-            if (!fileURL || !mimeType.length || !filename.length) break;
-            [fileURLs addObject:fileURL];
-            [mimeTypes addObject:mimeType];
-            [filenames addObject:filename];
+            BOOL prepared = NO;
+            @autoreleasepool {
+                ALAsset *asset = [assetSnapshot objectAtIndex:i];
+                NSString *mimeType = nil;
+                NSString *filename = nil;
+                NSURL *fileURL = DCCopyAssetToTemporaryFile(asset,
+                                                            i,
+                                                            &mimeType,
+                                                            &filename,
+                                                            &preparationError);
+                if (fileURL && mimeType.length && filename.length) {
+                    [fileURLs addObject:fileURL];
+                    [mimeTypes addObject:mimeType];
+                    [filenames addObject:filename];
+                    prepared = YES;
+                }
+            }
+            if (!prepared) break;
         }
 
         if (fileURLs.count != assetSnapshot.count) {

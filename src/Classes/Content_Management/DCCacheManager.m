@@ -1146,6 +1146,9 @@ static const NSInteger DCUserCacheVersion = 1;
     if (user.guildAvatarDecorationIDs.count)
         [record setObject:[NSDictionary dictionaryWithDictionary:user.guildAvatarDecorationIDs]
                    forKey:@"guildAvatarDecorationIDs"];
+    if (user.guildRoleIDs.count)
+        [record setObject:[NSDictionary dictionaryWithDictionary:user.guildRoleIDs]
+                   forKey:@"guildRoleIDs"];
 
     [record setObject:[NSNumber numberWithInteger:user.discriminator]
                forKey:@"discriminator"];
@@ -1196,6 +1199,12 @@ static const NSInteger DCUserCacheVersion = 1;
         user.guildAvatarDecorationIDs = [value mutableCopy];
     else
         user.guildAvatarDecorationIDs = [NSMutableDictionary dictionary];
+
+    value = [record objectForKey:@"guildRoleIDs"];
+    if ([value isKindOfClass:[NSDictionary class]])
+        user.guildRoleIDs = [value mutableCopy];
+    else
+        user.guildRoleIDs = [NSMutableDictionary dictionary];
 
     value = [record objectForKey:@"discriminator"];
     if ([value respondsToSelector:@selector(integerValue)])
