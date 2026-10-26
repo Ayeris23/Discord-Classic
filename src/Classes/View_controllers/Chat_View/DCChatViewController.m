@@ -27,6 +27,7 @@
 #import "DCCInfoViewController.h"
 #import "DCChatTableCell.h"
 #import "DCChatVideoAttachment.h"
+#import "DCChatSpoilerView.h"
 #import "DCChatGifAttachment.h"
 #import "DCGifInfo.h"
 #import "DCImageViewController.h"
@@ -41,6 +42,7 @@
 #import "DCCacheManager.h"
 #import "DCResourceManager.h"
 #import "DCChatMediaManager.h"
+#import "DCContentManager.h"
 #import "DTLinkButton.h"
 #import "DCMarkdownParser.h"
 #import "NSString+Emojize.h"
@@ -102,6 +104,13 @@
 @property (nonatomic, assign) NSUInteger reconcileGeneration;
 @property (nonatomic, copy) NSString *reconcilingChannelID;
 @property (nonatomic, assign) BOOL restoringWindowPosition;
+@property (nonatomic, copy) NSString *unreadBoundaryChannelID;
+@property (nonatomic, copy) NSString *unreadBoundaryReadID;
+@property (nonatomic, assign) BOOL unreadPositionUserIntervened;
+@property (nonatomic, assign) BOOL unreadInitialPositionComplete;
+@property (nonatomic, assign) BOOL unreadEntryStateVerified;
+@property (nonatomic, assign) BOOL unreadNeedsFirstEntryPosition;
+@property (nonatomic, assign) BOOL unreadRequiresLiveEdgeGesture;
 @property (nonatomic, assign) CFAbsoluteTime lastScrollPerfEventTime;
 @property (nonatomic, assign) CFAbsoluteTime lastInteractiveScrollTime;
 @property (nonatomic, assign) NSInteger deferredWindowTrimDirection;
@@ -116,6 +125,7 @@
 @property (nonatomic, assign) CGFloat sampledScrollVelocityY;
 @property (nonatomic, assign) CGFloat lastVelocitySampleOffsetY;
 @property (nonatomic, assign) CFAbsoluteTime lastVelocitySampleTime;
+@property (nonatomic, assign) CFAbsoluteTime lastVisibleEmojiRefreshTime;
 @property (nonatomic, assign) BOOL chatMediaHydrationDeferred;
 // Presentation-only reply data is cached separately from canonical message state.
 @property (nonatomic, retain) NSCache *referencePresentationCache;
@@ -146,6 +156,8 @@
 @property (nonatomic, assign) CGFloat jumpToPresentInputFieldRightInset;
 @property (nonatomic, assign) CGFloat jumpToPresentPlaceholderRightInset;
 @property (nonatomic, retain) NSMutableArray *pendingAttachmentUploads;
+@property (nonatomic, retain) NSMutableSet *forwardSourceResolutionInFlight;
+@property (nonatomic, retain) NSMutableSet *messageJumpResolutionInFlight;
 @property (nonatomic, retain) NSMutableDictionary *stagedAttachmentAssetsByChannel;
 @property (nonatomic, retain) UILabel *stagedAttachmentCountLabel;
 @property (nonatomic, assign) CGFloat attachmentComposerBaseOriginX;
@@ -164,6 +176,25 @@
 - (void)layoutMessageEdgeLoadingIndicators;
 - (void)updateMessageEdgeLoadingIndicators;
 - (void)invalidatePendingMessageLoads;
+- (NSInteger)unreadSeparatorRow;
+- (void)setUnreadBoundaryForChannel:(DCChannel *)channel;
+- (void)scrollToUnreadBoundary;
+- (void)loadWindowAroundUnreadBoundaryForChannel:(DCChannel *)channel;
+- (void)clearUnreadIndicatorAndMarkChannelReadAfterSending;
+- (void)configureForwardSourceTagForCell:(DCChatTableCell *)cell
+                                  message:(DCMessage *)message
+                                   layout:(DCMessageLayout *)layout
+                               tableWidth:(CGFloat)tableWidth
+                                    color:(UIColor *)color;
+- (void)tappedForwardSourceTag:(UIButton *)sender;
+- (void)jumpToForwardSourceMessage:(DCMessage *)message;
+- (void)resolveForwardSourceForMessage:(DCMessage *)message;
+- (void)jumpToMessageID:(NSString *)messageID
+              channelID:(NSString *)channelID
+                guildID:(NSString *)guildID;
+- (void)jumpToMessageID:(NSString *)messageID inChannel:(DCChannel *)channel;
+- (BOOL)handleDiscordMessageURL:(NSURL *)url;
+- (void)highlightMessageWithID:(NSString *)messageID;
 - (void)stopForwardMomentumContinuation;
 - (void)startForwardMomentumContinuationWithVelocity:(CGFloat)velocityY;
 - (void)forwardMomentumTick:(CADisplayLink *)displayLink;
@@ -216,6 +247,119 @@ CGFloat _baseMsgFieldBGHeight;
 CGFloat _baseInputOriginY;
 
 static const CGFloat DCPendingAttachmentCellHeight = 53.0f;
+static const CGFloat DCForwardedContentInset = 10.0f;
+static const CGFloat DCForwardedHeaderHeight = 16.0f;
+static const CGFloat DCForwardedVerticalInset = 18.0f;
+static const CGFloat DCForwardedSourceFooterHeight = 30.0f;
+static const CGFloat DCChatBodyOriginX = 55.0f;
+static const NSInteger DCForwardedLineTag = 9472;
+static const NSInteger DCForwardedHeaderTag = 9473;
+static const NSInteger DCForwardedSourceTag = 9474;
+static const NSInteger DCForwardedSourceIconTag = 9475;
+static const NSInteger DCForwardedSourceNameTag = 9476;
+static const NSInteger DCForwardedSourceTimestampTag = 9477;
+static const NSInteger DCMessageJumpHighlightTag = 9478;
+
+static UIFont *DCForwardedHeaderFont(void) {
+    UIFont *font = [UIFont fontWithName:@"HelveticaNeue-BoldItalic" size:12.0f];
+    return font ?: [UIFont boldSystemFontOfSize:12.0f];
+}
+
+static BOOL DCForwardedSourceContext(DCMessage *message,
+                                      DCGuild **guildOut,
+                                      DCChannel **channelOut) {
+    if (!message.isForwarded ||
+        !message.forwardSourceMessageID.length ||
+        !message.forwardSourceChannelID.length ||
+        message.forwardSourceUnavailable) {
+        return NO;
+    }
+
+    // Keep the resolved source bound to the forwarded message. READY refreshes
+    // can rebuild the communicator's channel dictionary and drop lazily fetched
+    // thread/channel objects; that must not make an already-visible footer vanish.
+    DCChannel *channel = message.forwardSourceChannel;
+    DCGuild *guild = message.forwardSourceGuild ?: channel.parentGuild;
+
+    if (!channel || !guild) {
+        channel = [DCServerCommunicator.sharedInstance.channels
+            objectForKey:message.forwardSourceChannelID];
+        guild = channel.parentGuild;
+    }
+
+    if (!channel || !channel.readable || !guild) return NO;
+    if (channel.type == DCChannelTypeDM || channel.type == DCChannelTypeGroupDM) return NO;
+
+    if (message.forwardSourceGuildID.length &&
+        ![guild.snowflake isEqualToString:message.forwardSourceGuildID]) {
+        return NO;
+    }
+
+    message.forwardSourceChannel = channel;
+    message.forwardSourceGuild = guild;
+    message.forwardSourceResolutionComplete = YES;
+    message.forwardSourceUnavailable = NO;
+
+    if (guildOut) *guildOut = guild;
+    if (channelOut) *channelOut = channel;
+    return YES;
+}
+
+static void DCConfigureForwardedCellChrome(DCChatTableCell *cell,
+                                           DCMessage *message,
+                                           DCMessageLayout *layout,
+                                           CGFloat tableWidth,
+                                           UIColor *headerColor) {
+    UIView *line = [cell.contentView viewWithTag:DCForwardedLineTag];
+    UILabel *forwardedHeader = (UILabel *)[cell.contentView viewWithTag:DCForwardedHeaderTag];
+
+    cell.profileImage.hidden = NO;
+    cell.avatarDecoration.hidden = NO;
+    cell.timestampLabel.hidden = NO;
+    cell.authorLabel.hidden = NO;
+    cell.authorLabel.font = [UIFont boldSystemFontOfSize:15.0f];
+    CGRect authorFrame = cell.authorLabel.frame;
+    authorFrame.origin.x = DCChatBodyOriginX;
+    cell.authorLabel.frame = authorFrame;
+
+    if (!message.isForwarded) {
+        if (line) line.hidden = YES;
+        if (forwardedHeader) forwardedHeader.hidden = YES;
+        return;
+    }
+
+    if (!line) {
+        line = [[UIView alloc] initWithFrame:CGRectZero];
+        line.tag = DCForwardedLineTag;
+        line.userInteractionEnabled = NO;
+        [cell.contentView addSubview:line];
+    }
+    line.hidden = NO;
+    line.backgroundColor = headerColor;
+
+    if (!forwardedHeader) {
+        forwardedHeader = [[UILabel alloc] initWithFrame:CGRectZero];
+        forwardedHeader.tag = DCForwardedHeaderTag;
+        forwardedHeader.backgroundColor = [UIColor clearColor];
+        forwardedHeader.userInteractionEnabled = NO;
+        forwardedHeader.font = DCForwardedHeaderFont();
+        forwardedHeader.text = @"↪ Forwarded";
+        [cell.contentView addSubview:forwardedHeader];
+    }
+    forwardedHeader.hidden = NO;
+    forwardedHeader.textColor = headerColor;
+    forwardedHeader.font = DCForwardedHeaderFont();
+    forwardedHeader.text = @"↪ Forwarded";
+    forwardedHeader.frame = CGRectMake(DCChatBodyOriginX + DCForwardedContentInset,
+                                       28.0f,
+                                       MAX(0.0f, tableWidth - DCChatBodyOriginX
+                                           - DCForwardedContentInset - 8.0f),
+                                       DCForwardedHeaderHeight);
+
+    CGFloat lineY = 28.0f;
+    CGFloat lineHeight = MAX(2.0f, layout.height - lineY - 7.0f);
+    line.frame = CGRectMake(DCChatBodyOriginX, lineY, 3.0f, lineHeight);
+}
 
 static NSString *DCMimeTypeForAttachmentExtension(NSString *extension, NSString *assetType) {
     NSString *lowercase = [extension lowercaseString];
@@ -623,6 +767,632 @@ static CGFloat DCPresentationRunwayTargetPoints(CGFloat velocityY, CGFloat viewp
 
 
 @implementation DCChatViewController
+
+- (void)highlightMessageWithID:(NSString *)messageID {
+    if (!messageID.length) return;
+
+    NSUInteger index = [self.messages indexOfObjectPassingTest:^BOOL(DCMessage *candidate, NSUInteger idx, BOOL *stop) {
+        return [candidate.snowflake isEqualToString:messageID];
+    }];
+    if (index == NSNotFound) return;
+
+    NSIndexPath *path = [NSIndexPath indexPathForRow:[self rowForModelIndex:index]
+                                          inSection:0];
+    DCChatTableCell *cell = (DCChatTableCell *)[self.chatTableView cellForRowAtIndexPath:path];
+    if (![cell isKindOfClass:[DCChatTableCell class]] ||
+        ![cell.messageSnowflake isEqualToString:messageID]) {
+        return;
+    }
+
+    UIView *existing = [cell viewWithTag:DCMessageJumpHighlightTag];
+    [existing removeFromSuperview];
+
+    UIView *highlight = [[UIView alloc] initWithFrame:cell.bounds];
+    highlight.tag = DCMessageJumpHighlightTag;
+    highlight.userInteractionEnabled = NO;
+    highlight.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    highlight.backgroundColor = self.oldMode
+        ? [UIColor colorWithWhite:0.0f alpha:0.08f]
+        : [UIColor colorWithWhite:1.0f alpha:0.10f];
+    [cell addSubview:highlight];
+
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        NSUInteger currentIndex = [self.messages indexOfObjectPassingTest:^BOOL(DCMessage *candidate, NSUInteger idx, BOOL *stop) {
+            return [candidate.snowflake isEqualToString:messageID];
+        }];
+        if (currentIndex == NSNotFound) return;
+        NSIndexPath *currentPath = [NSIndexPath indexPathForRow:[self rowForModelIndex:currentIndex]
+                                                     inSection:0];
+        DCChatTableCell *currentCell = (DCChatTableCell *)[self.chatTableView cellForRowAtIndexPath:currentPath];
+        if (![currentCell isKindOfClass:[DCChatTableCell class]] ||
+            ![currentCell.messageSnowflake isEqualToString:messageID]) {
+            return;
+        }
+        UIView *currentHighlight = [currentCell viewWithTag:DCMessageJumpHighlightTag];
+        if (!currentHighlight) return;
+        [UIView animateWithDuration:0.45
+                         animations:^{ currentHighlight.alpha = 0.0f; }
+                         completion:^(BOOL finished) { [currentHighlight removeFromSuperview]; }];
+    });
+}
+
+- (void)jumpToMessageID:(NSString *)messageID inChannel:(DCChannel *)channel {
+    if (!messageID.length || !channel.snowflake.length) return;
+    if (channel.parentGuild.snowflake.length && !channel.readable) return;
+
+    NSString *channelID = [channel.snowflake copy];
+    BOOL alreadySelected =
+        [DCServerCommunicator.sharedInstance.selectedChannel.snowflake
+            isEqualToString:channelID];
+
+    if (alreadySelected) {
+        NSUInteger existingIndex = [self.messages indexOfObjectPassingTest:^BOOL(DCMessage *candidate, NSUInteger idx, BOOL *stop) {
+            return [candidate.snowflake isEqualToString:messageID];
+        }];
+        if (existingIndex != NSNotFound) {
+            NSIndexPath *path = [NSIndexPath indexPathForRow:[self rowForModelIndex:existingIndex]
+                                                  inSection:0];
+            [self.chatTableView scrollToRowAtIndexPath:path
+                                      atScrollPosition:UITableViewScrollPositionMiddle
+                                              animated:YES];
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                if ([DCServerCommunicator.sharedInstance.selectedChannel.snowflake
+                        isEqualToString:channelID]) {
+                    [self highlightMessageWithID:messageID];
+                }
+            });
+            return;
+        }
+    } else {
+        [self navigateToChannel:channel];
+    }
+
+    self.unreadPositionUserIntervened = YES;
+    self.unreadNeedsFirstEntryPosition = NO;
+    self.unreadInitialPositionComplete = YES;
+
+    [self invalidatePendingMessageLoads];
+    DCChannelWindow *window = self.currentWindow;
+    NSUInteger generation = ++self.olderLoadGeneration;
+    self.loadingOlderMessages = YES;
+    [self updateEmptyChatLoadingIndicator];
+
+    DCMessageLayoutBuilder *layoutBuilder = self.messageLayoutBuilder;
+    CGFloat layoutWidth = self.chatTableView.bounds.size.width;
+
+    dispatch_async([self get_chat_messages_queue], ^{
+        NSArray *fetched = [[DCMessageStore sharedInstance]
+            loadAroundForChannel:channel
+                         messageID:messageID
+                             limit:MAX(DCInitialMessageLoadCount(), 36)];
+        if (fetched.count) {
+            [layoutBuilder prewarmLayoutCacheForMessages:fetched
+                                          previousMessage:nil
+                                              nextMessage:nil
+                                               tableWidth:layoutWidth];
+        }
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (generation != self.olderLoadGeneration ||
+                self.currentWindow != window ||
+                ![DCServerCommunicator.sharedInstance.selectedChannel.snowflake
+                    isEqualToString:channelID]) {
+                return;
+            }
+
+            self.loadingOlderMessages = NO;
+            if (!fetched.count) {
+                [self updateEmptyChatLoadingIndicator];
+                return;
+            }
+
+            [window.messages removeAllObjects];
+            [window.messages addObjectsFromArray:fetched];
+            window.hasMoreBefore = YES;
+            window.hasSavedContentOffset = NO;
+            DCMessage *newest = window.messages.lastObject;
+            window.hasMoreAfter = !channel.lastMessageId.length ||
+                (DCCompareChatSnowflakes(newest.snowflake, channel.lastMessageId) ==
+                    NSOrderedAscending);
+            window.atPresentTime = !window.hasMoreAfter;
+
+            self.restoringWindowPosition = YES;
+            [self.chatTableView reloadData];
+            [self.chatTableView layoutIfNeeded];
+
+            NSUInteger targetIndex = [window.messages indexOfObjectPassingTest:^BOOL(DCMessage *candidate, NSUInteger idx, BOOL *stop) {
+                return [candidate.snowflake isEqualToString:messageID];
+            }];
+            if (targetIndex != NSNotFound) {
+                NSIndexPath *path = [NSIndexPath indexPathForRow:[self rowForModelIndex:targetIndex]
+                                                      inSection:0];
+                [self.chatTableView scrollToRowAtIndexPath:path
+                                          atScrollPosition:UITableViewScrollPositionMiddle
+                                                  animated:NO];
+                [self.chatTableView layoutIfNeeded];
+            }
+            self.restoringWindowPosition = NO;
+            [self updatePresentTimeFromTablePosition];
+            [self updateJumpToPresentButtonVisibility];
+            [self updateEmptyChatLoadingIndicator];
+            [self updateMessageEdgeLoadingIndicators];
+            [self saveScrollPositionForWindow:window];
+            [[DCMessageStore sharedInstance] scheduleCheckpointForWindow:window];
+
+            if (targetIndex != NSNotFound) {
+                [self highlightMessageWithID:messageID];
+            }
+        });
+    });
+}
+
+- (void)jumpToMessageID:(NSString *)messageID
+              channelID:(NSString *)channelID
+                guildID:(NSString *)guildID {
+    if (!messageID.length || !channelID.length) return;
+
+    DCChannel *channel = nil;
+    if ([DCServerCommunicator.sharedInstance.selectedChannel.snowflake
+            isEqualToString:channelID]) {
+        channel = DCServerCommunicator.sharedInstance.selectedChannel;
+    }
+    if (!channel) {
+        channel = [DCServerCommunicator.sharedInstance.channels objectForKey:channelID];
+    }
+    if (channel) {
+        [self jumpToMessageID:messageID inChannel:channel];
+        return;
+    }
+
+    if (!self.messageJumpResolutionInFlight) {
+        self.messageJumpResolutionInFlight = [NSMutableSet set];
+    }
+    if ([self.messageJumpResolutionInFlight containsObject:channelID]) return;
+    [self.messageJumpResolutionInFlight addObject:channelID];
+
+    NSString *targetChannelID = [channelID copy];
+    NSString *targetMessageID = [messageID copy];
+    NSString *targetGuildID = [guildID copy];
+
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        NSString *path = [NSString stringWithFormat:@"/channels/%@", targetChannelID];
+        NSMutableURLRequest *request = [DCServerCommunicator
+            requestWithPath:path
+                      token:DCServerCommunicator.sharedInstance.token];
+        [request setValue:@"no-store" forHTTPHeaderField:@"Cache-Control"];
+
+        NSError *requestError = nil;
+        NSHTTPURLResponse *response = nil;
+        NSData *data = [NSURLConnection sendSynchronousRequest:request
+                                             returningResponse:&response
+                                                         error:&requestError];
+        NSDictionary *channelJSON = nil;
+        if (!requestError && response.statusCode >= 200 && response.statusCode < 300 && data.length) {
+            id json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+            if ([json isKindOfClass:[NSDictionary class]]) channelJSON = json;
+        }
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self.messageJumpResolutionInFlight removeObject:targetChannelID];
+            if (!channelJSON) return;
+
+            id rawType = [channelJSON objectForKey:@"type"];
+            NSInteger type = [rawType respondsToSelector:@selector(integerValue)]
+                ? [rawType integerValue] : -1;
+            id rawGuildID = [channelJSON objectForKey:@"guild_id"];
+            NSString *resolvedGuildID = [rawGuildID isKindOfClass:[NSString class]]
+                ? rawGuildID : targetGuildID;
+
+            DCGuild *guild = nil;
+            if (resolvedGuildID.length && ![resolvedGuildID isEqualToString:@"@me"]) {
+                for (DCGuild *candidate in DCServerCommunicator.sharedInstance.guilds) {
+                    if ([candidate.snowflake isEqualToString:resolvedGuildID]) {
+                        guild = candidate;
+                        break;
+                    }
+                }
+                if (!guild) return;
+            }
+
+            DCChannel *resolvedChannel = [DCServerCommunicator.sharedInstance.channels
+                objectForKey:targetChannelID];
+            if (!resolvedChannel) {
+                resolvedChannel = [DCChannel new];
+                resolvedChannel.snowflake = targetChannelID;
+            }
+            id rawName = [channelJSON objectForKey:@"name"];
+            if ([rawName isKindOfClass:[NSString class]]) resolvedChannel.name = rawName;
+            id rawParentID = [channelJSON objectForKey:@"parent_id"];
+            resolvedChannel.parentID = [rawParentID isKindOfClass:[NSString class]]
+                ? rawParentID : nil;
+            resolvedChannel.type = type;
+            resolvedChannel.parentGuild = guild;
+            resolvedChannel.readable = YES;
+            id rawLastMessageID = [channelJSON objectForKey:@"last_message_id"];
+            if ([rawLastMessageID isKindOfClass:[NSString class]]) {
+                resolvedChannel.lastMessageId = rawLastMessageID;
+            }
+
+            if (!DCServerCommunicator.sharedInstance.channels) {
+                DCServerCommunicator.sharedInstance.channels = [NSMutableDictionary dictionary];
+            }
+            [DCServerCommunicator.sharedInstance.channels setObject:resolvedChannel
+                                                             forKey:targetChannelID];
+            [self jumpToMessageID:targetMessageID inChannel:resolvedChannel];
+        });
+    });
+}
+
+- (BOOL)handleDiscordMessageURL:(NSURL *)url {
+    if (!url) return NO;
+    NSString *scheme = [[url scheme] lowercaseString];
+    if (![scheme isEqualToString:@"http"] && ![scheme isEqualToString:@"https"]) return NO;
+
+    NSString *host = [[url host] lowercaseString];
+    BOOL discordHost = [host isEqualToString:@"discord.com"] ||
+        [host isEqualToString:@"www.discord.com"] ||
+        [host isEqualToString:@"canary.discord.com"] ||
+        [host isEqualToString:@"ptb.discord.com"] ||
+        [host isEqualToString:@"discordapp.com"] ||
+        [host isEqualToString:@"www.discordapp.com"];
+    if (!discordHost || ![[url path] hasPrefix:@"/channels/"]) return NO;
+
+    NSArray *components = [[url path] componentsSeparatedByString:@"/"];
+    if (components.count < 4) return NO;
+
+    NSString *guildID = components.count > 2 ? [components objectAtIndex:2] : nil;
+    NSString *channelID = components.count > 3 ? [components objectAtIndex:3] : nil;
+    NSString *messageID = components.count > 4 ? [components objectAtIndex:4] : nil;
+
+    if (messageID.length && channelID.length) {
+        [self jumpToMessageID:messageID channelID:channelID guildID:guildID];
+        return YES;
+    }
+    if (channelID.length) {
+        DCChannel *channel = [DCServerCommunicator.sharedInstance.channels objectForKey:channelID];
+        if (channel) {
+            [self navigateToChannel:channel];
+            return YES;
+        }
+    }
+    if (guildID.length && ![guildID isEqualToString:@"@me"]) {
+        for (DCGuild *guild in DCServerCommunicator.sharedInstance.guilds) {
+            if ([guild.snowflake isEqualToString:guildID]) {
+                [self navigateToGuild:guild];
+                return YES;
+            }
+        }
+    }
+    return NO;
+}
+
+- (void)resolveForwardSourceForMessage:(DCMessage *)message {
+    if (!message.isForwarded ||
+        !message.forwardSourceChannelID.length ||
+        message.forwardSourceUnavailable) {
+        return;
+    }
+
+    if (DCForwardedSourceContext(message, NULL, NULL)) {
+        return;
+    }
+
+    DCChannel *knownChannel = [DCServerCommunicator.sharedInstance.channels
+        objectForKey:message.forwardSourceChannelID];
+    if (knownChannel &&
+        (knownChannel.type == DCChannelTypeDM ||
+         knownChannel.type == DCChannelTypeGroupDM)) {
+        message.forwardSourceResolutionComplete = YES;
+        message.forwardSourceUnavailable = YES;
+        return;
+    }
+
+    if (!self.forwardSourceResolutionInFlight) {
+        self.forwardSourceResolutionInFlight = [NSMutableSet set];
+    }
+
+    NSString *sourceChannelID = [message.forwardSourceChannelID copy];
+    if ([self.forwardSourceResolutionInFlight containsObject:sourceChannelID]) {
+        return;
+    }
+    [self.forwardSourceResolutionInFlight addObject:sourceChannelID];
+
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        NSString *path = [NSString stringWithFormat:@"/channels/%@", sourceChannelID];
+        NSMutableURLRequest *request = [DCServerCommunicator
+            requestWithPath:path
+                      token:DCServerCommunicator.sharedInstance.token];
+        [request setValue:@"no-store" forHTTPHeaderField:@"Cache-Control"];
+
+        NSError *requestError = nil;
+        NSHTTPURLResponse *response = nil;
+        NSData *data = [NSURLConnection sendSynchronousRequest:request
+                                             returningResponse:&response
+                                                         error:&requestError];
+
+        NSDictionary *channelJSON = nil;
+        if (!requestError && response.statusCode == 200 && data.length > 0) {
+            NSError *jsonError = nil;
+            id parsed = [NSJSONSerialization JSONObjectWithData:data
+                                                        options:0
+                                                          error:&jsonError];
+            if (!jsonError && [parsed isKindOfClass:[NSDictionary class]]) {
+                channelJSON = parsed;
+            }
+        }
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self.forwardSourceResolutionInFlight removeObject:sourceChannelID];
+
+            BOOL accessDenied = response &&
+                (response.statusCode == 403 || response.statusCode == 404);
+            BOOL resolutionComplete = accessDenied;
+            BOOL sourceUnavailable = accessDenied;
+
+            DCChannel *resolvedChannel = nil;
+            DCGuild *resolvedGuild = nil;
+            NSString *resolvedGuildID = nil;
+
+            if (channelJSON) {
+                id rawType = [channelJSON objectForKey:@"type"];
+                NSInteger type = [rawType respondsToSelector:@selector(integerValue)]
+                    ? [rawType integerValue] : -1;
+                id rawGuildID = [channelJSON objectForKey:@"guild_id"];
+                if ([rawGuildID isKindOfClass:[NSString class]]) {
+                    resolvedGuildID = rawGuildID;
+                }
+
+                BOOL privateChannel =
+                    type == DCChannelTypeDM || type == DCChannelTypeGroupDM;
+                BOOL guildChannel = resolvedGuildID.length > 0 && !privateChannel;
+                if (privateChannel) {
+                    resolutionComplete = YES;
+                    sourceUnavailable = YES;
+                }
+
+                DCGuild *guild = nil;
+                if (guildChannel) {
+                    for (DCGuild *candidate in DCServerCommunicator.sharedInstance.guilds) {
+                        if ([candidate.snowflake isEqualToString:resolvedGuildID]) {
+                            guild = candidate;
+                            break;
+                        }
+                    }
+                }
+
+                if (guild) {
+                    resolvedGuild = guild;
+                    if (!DCServerCommunicator.sharedInstance.channels) {
+                        DCServerCommunicator.sharedInstance.channels =
+                            [NSMutableDictionary dictionary];
+                    }
+                    resolvedChannel = [DCServerCommunicator.sharedInstance.channels
+                        objectForKey:sourceChannelID];
+                    if (!resolvedChannel) {
+                        resolvedChannel = [DCChannel new];
+                        resolvedChannel.snowflake = sourceChannelID;
+                        [DCServerCommunicator.sharedInstance.channels
+                            setObject:resolvedChannel
+                              forKey:sourceChannelID];
+                    }
+
+                    id rawName = [channelJSON objectForKey:@"name"];
+                    if ([rawName isKindOfClass:[NSString class]]) {
+                        resolvedChannel.name = rawName;
+                    }
+                    id rawParentID = [channelJSON objectForKey:@"parent_id"];
+                    resolvedChannel.parentID = [rawParentID isKindOfClass:[NSString class]]
+                        ? rawParentID : nil;
+                    resolvedChannel.type = type;
+                    resolvedChannel.parentGuild = guild;
+                    resolvedChannel.readable = YES;
+
+                    id rawLastMessageID = [channelJSON objectForKey:@"last_message_id"];
+                    if ([rawLastMessageID isKindOfClass:[NSString class]]) {
+                        resolvedChannel.lastMessageId = rawLastMessageID;
+                    }
+                    resolutionComplete = YES;
+                }
+            }
+
+            NSMutableArray *affectedSnowflakes = [NSMutableArray array];
+            NSMutableArray *visiblePaths = [NSMutableArray array];
+            NSArray *visibleRows = [self.chatTableView indexPathsForVisibleRows] ?: @[];
+
+            for (NSUInteger idx = 0; idx < self.messages.count; idx++) {
+                DCMessage *candidate = [self.messages objectAtIndex:idx];
+                if (!candidate.isForwarded ||
+                    ![candidate.forwardSourceChannelID isEqualToString:sourceChannelID]) {
+                    continue;
+                }
+
+                if (resolvedGuildID.length) {
+                    candidate.forwardSourceGuildID = resolvedGuildID;
+                }
+                if (resolvedChannel && resolvedGuild) {
+                    candidate.forwardSourceChannel = resolvedChannel;
+                    candidate.forwardSourceGuild = resolvedGuild;
+                    candidate.forwardSourceResolutionComplete = YES;
+                    candidate.forwardSourceUnavailable = NO;
+                } else if (sourceUnavailable) {
+                    candidate.forwardSourceChannel = nil;
+                    candidate.forwardSourceGuild = nil;
+                    candidate.forwardSourceResolutionComplete = YES;
+                    candidate.forwardSourceUnavailable = YES;
+                }
+                if (candidate.snowflake.length) {
+                    [affectedSnowflakes addObject:candidate.snowflake];
+                }
+
+                NSIndexPath *pathForCandidate = [NSIndexPath
+                    indexPathForRow:[self rowForModelIndex:idx]
+                          inSection:0];
+                if ([visibleRows containsObject:pathForCandidate]) {
+                    [visiblePaths addObject:pathForCandidate];
+                }
+            }
+
+            if (affectedSnowflakes.count) {
+                [[DCCacheManager sharedInstance]
+                    invalidateSnowflakes:affectedSnowflakes];
+            }
+
+            if (visiblePaths.count) {
+                NSInteger expectedRows = (NSInteger)self.messages.count +
+                    ([self unreadSeparatorRow] == NSNotFound ? 0 : 1);
+                if ([self.chatTableView numberOfRowsInSection:0] == expectedRows) {
+                    [self.chatTableView beginUpdates];
+                    [self.chatTableView reloadRowsAtIndexPaths:visiblePaths
+                                              withRowAnimation:UITableViewRowAnimationNone];
+                    [self.chatTableView endUpdates];
+                }
+            }
+
+            if (resolutionComplete && !resolvedChannel) {
+                NSLog(@"[ForwardSource] Source %@ is not available as a guild source (HTTP %ld)",
+                      sourceChannelID, (long)response.statusCode);
+            } else if (channelJSON && !resolvedChannel && resolvedGuildID.length) {
+                NSLog(@"[ForwardSource] Source %@ resolved to guild %@, but that guild is not hydrated yet",
+                      sourceChannelID, resolvedGuildID);
+            }
+        });
+    });
+}
+
+- (void)configureForwardSourceTagForCell:(DCChatTableCell *)cell
+                                  message:(DCMessage *)message
+                                   layout:(DCMessageLayout *)layout
+                               tableWidth:(CGFloat)tableWidth
+                                    color:(UIColor *)color {
+    UIButton *sourceTag = (UIButton *)[cell.contentView viewWithTag:DCForwardedSourceTag];
+    DCGuild *guild = nil;
+    DCChannel *channel = nil;
+    BOOL visible = DCForwardedSourceContext(message, &guild, &channel);
+
+    if (!visible) {
+        if (sourceTag) sourceTag.hidden = YES;
+        [self resolveForwardSourceForMessage:message];
+        return;
+    }
+
+    if (!sourceTag) {
+        sourceTag = [UIButton buttonWithType:UIButtonTypeCustom];
+        sourceTag.tag = DCForwardedSourceTag;
+        sourceTag.backgroundColor = [UIColor clearColor];
+        sourceTag.exclusiveTouch = YES;
+        [sourceTag addTarget:self
+                      action:@selector(tappedForwardSourceTag:)
+            forControlEvents:UIControlEventTouchUpInside];
+
+        UIImageView *icon = [[UIImageView alloc] initWithFrame:CGRectZero];
+        icon.tag = DCForwardedSourceIconTag;
+        icon.contentMode = UIViewContentModeScaleAspectFill;
+        icon.clipsToBounds = YES;
+        icon.userInteractionEnabled = NO;
+        [sourceTag addSubview:icon];
+
+        UILabel *name = [[UILabel alloc] initWithFrame:CGRectZero];
+        name.tag = DCForwardedSourceNameTag;
+        name.backgroundColor = [UIColor clearColor];
+        name.font = [UIFont boldSystemFontOfSize:10.0f];
+        name.lineBreakMode = UILineBreakModeTailTruncation;
+        name.userInteractionEnabled = NO;
+        [sourceTag addSubview:name];
+
+        UILabel *timestamp = [[UILabel alloc] initWithFrame:CGRectZero];
+        timestamp.tag = DCForwardedSourceTimestampTag;
+        timestamp.backgroundColor = [UIColor clearColor];
+        timestamp.font = [UIFont boldSystemFontOfSize:10.0f];
+        timestamp.lineBreakMode = UILineBreakModeClip;
+        timestamp.userInteractionEnabled = NO;
+        [sourceTag addSubview:timestamp];
+
+        [cell.contentView addSubview:sourceTag];
+    }
+
+    sourceTag.hidden = NO;
+    CGFloat tagX = DCChatBodyOriginX + DCForwardedContentInset;
+    CGFloat tagY = MAX(0.0f, layout.height - DCForwardedSourceFooterHeight - 3.0f);
+    CGFloat tagWidth = MAX(0.0f, tableWidth - tagX - 8.0f);
+    sourceTag.frame = CGRectMake(tagX, tagY, tagWidth, DCForwardedSourceFooterHeight);
+
+    UIImageView *icon = (UIImageView *)[sourceTag viewWithTag:DCForwardedSourceIconTag];
+    UILabel *name = (UILabel *)[sourceTag viewWithTag:DCForwardedSourceNameTag];
+    UILabel *timestamp = (UILabel *)[sourceTag viewWithTag:DCForwardedSourceTimestampTag];
+
+    const CGFloat iconSize = 18.0f;
+    CGFloat iconY = floor((DCForwardedSourceFooterHeight - iconSize) * 0.5f);
+    icon.frame = CGRectMake(0.0f, iconY, iconSize, iconSize);
+    UIImage *sourceIcon = guild.icon ?: guild.compositedIcon;
+    icon.image = sourceIcon;
+    icon.layer.cornerRadius = 4.0f;
+    icon.layer.masksToBounds = YES;
+
+    name.text = guild.name ?: @"";
+    name.textColor = color;
+    timestamp.textColor = color;
+
+    NSString *sourceTime = [DCTools prettyTimestampForDate:message.forwardSourceTimestamp];
+    timestamp.text = sourceTime.length
+        ? [NSString stringWithFormat:@"  •  %@  >", sourceTime]
+        : @"";
+
+    const CGFloat contentStartX = iconSize + 8.0f;
+    const CGFloat trailingInset = 6.0f;
+    CGFloat availableWidth = MAX(0.0f, tagWidth - contentStartX - trailingInset);
+
+    CGSize timestampSize = [timestamp.text sizeWithFont:timestamp.font];
+    CGFloat timestampWidth = timestampSize.width;
+    CGFloat maxNameWidth = MAX(0.0f, availableWidth - timestampWidth);
+    CGSize nameSize = [name.text sizeWithFont:name.font];
+    CGFloat nameWidth = MIN(nameSize.width, maxNameWidth);
+
+    const CGFloat labelHeight = 16.0f;
+    CGFloat labelY = floor((DCForwardedSourceFooterHeight - labelHeight) * 0.5f);
+    name.frame = CGRectMake(contentStartX, labelY, nameWidth, labelHeight);
+    timestamp.frame = CGRectMake(contentStartX + nameWidth, labelY,
+                                 timestampWidth, labelHeight);
+}
+
+- (void)tappedForwardSourceTag:(UIButton *)sender {
+    assertMainThread();
+    [self.inputField resignFirstResponder];
+
+    UIView *view = sender;
+    while (view && ![view isKindOfClass:[DCChatTableCell class]]) {
+        view = view.superview;
+    }
+    if (!view) return;
+
+    DCChatTableCell *cell = (DCChatTableCell *)view;
+    if (!cell.messageSnowflake.length) return;
+
+    NSUInteger index = [self.messages indexOfObjectPassingTest:^BOOL(DCMessage *candidate, NSUInteger idx, BOOL *stop) {
+        return [candidate.snowflake isEqualToString:cell.messageSnowflake];
+    }];
+    if (index == NSNotFound) return;
+
+    [self jumpToForwardSourceMessage:[self.messages objectAtIndex:index]];
+}
+
+- (void)jumpToForwardSourceMessage:(DCMessage *)message {
+    DCChannel *channel = nil;
+    if (!DCForwardedSourceContext(message, NULL, &channel)) return;
+    if (!message.forwardSourceMessageID.length) return;
+
+    NSString *sourceChannelID = channel.snowflake;
+    if (!DCServerCommunicator.sharedInstance.channels) {
+        DCServerCommunicator.sharedInstance.channels = [NSMutableDictionary dictionary];
+    }
+    if (sourceChannelID.length &&
+        ![DCServerCommunicator.sharedInstance.channels objectForKey:sourceChannelID]) {
+        [DCServerCommunicator.sharedInstance.channels setObject:channel forKey:sourceChannelID];
+    }
+    [self jumpToMessageID:message.forwardSourceMessageID inChannel:channel];
+}
+
 @synthesize currentWindow = _currentWindow;
 @synthesize loadingOlderMessages = _loadingOlderMessages;
 @synthesize loadingNewerMessages = _loadingNewerMessages;
@@ -885,6 +1655,152 @@ static dispatch_queue_t chat_presentation_queue;
     }
 }
 
+// Capture the server's last-read cursor once per channel entry. Local ACKs
+// must not move an existing separator while the user reads the missed messages.
+- (void)setUnreadBoundaryForChannel:(DCChannel *)channel {
+    self.unreadBoundaryChannelID = channel.snowflake;
+    self.unreadBoundaryReadID = nil;
+
+    // The divider is live API state. Channel archives may contain an older
+    // lastReadMessageId for cold-start presentation, but that value must never
+    // create a New Messages boundary until READY has imported read_state in
+    // this process.
+    if (!DCServerCommunicator.sharedInstance.readyReadStateAvailable ||
+        !self.unreadEntryStateVerified) {
+        return;
+    }
+
+    NSString *readID = channel.lastReadMessageId;
+    NSString *latestID = channel.lastMessageId;
+    BOOL hasUnread = channel.unread || channel.mentionCount > 0;
+    if ([readID isKindOfClass:[NSString class]] && readID.length) {
+        if ([latestID isKindOfClass:[NSString class]] && latestID.length) {
+            hasUnread = hasUnread ||
+                DCCompareChatSnowflakes(readID, latestID) == NSOrderedAscending;
+        }
+        DCMessage *newestLoaded = [self.messages lastObject];
+        if (newestLoaded.snowflake.length) {
+            hasUnread = hasUnread ||
+                DCCompareChatSnowflakes(readID, newestLoaded.snowflake) == NSOrderedAscending;
+        }
+        if (hasUnread) self.unreadBoundaryReadID = readID;
+    }
+
+    NSLog(@"[ChatUnread] READY channel=%@ read=%@ latest=%@ boundary=%@",
+          channel.snowflake, readID, latestID, self.unreadBoundaryReadID);
+}
+
+- (void)scrollToUnreadBoundary {
+    NSInteger separator = [self unreadSeparatorRow];
+    if (separator == NSNotFound || !self.chatTableView) return;
+
+    [self.chatTableView layoutIfNeeded];
+    NSIndexPath *path = [NSIndexPath indexPathForRow:separator inSection:0];
+    CGRect separatorRect = [self.chatTableView rectForRowAtIndexPath:path];
+    // This table is inverted: offset zero is the newest edge. Put the
+    // separator inside the viewport, not at its far edge, where a negative
+    // target would clamp to zero and falsely complete unread positioning.
+    CGFloat viewportHeight = self.chatTableView.bounds.size.height;
+    CGFloat targetOffsetY = CGRectGetMidY(separatorRect) - viewportHeight * 0.35f;
+    CGFloat clampedY = [self clampedOffsetY:targetOffsetY];
+    [self.chatTableView setContentOffset:
+        CGPointMake(self.chatTableView.contentOffset.x, clampedY) animated:NO];
+
+    CGFloat visibleMinY = self.chatTableView.contentOffset.y;
+    CGFloat visibleMaxY = visibleMinY + viewportHeight;
+    BOOL separatorVisible = CGRectGetMaxY(separatorRect) > visibleMinY &&
+                            CGRectGetMinY(separatorRect) < visibleMaxY;
+    NSLog(@"[ChatUnread] Position %@ row=%ld requested=%.0f clamped=%.0f actual=%.0f content=%.0f viewport=%.0f visible=%d",
+          self.unreadBoundaryChannelID, (long)separator, targetOffsetY,
+          clampedY, visibleMinY, self.chatTableView.contentSize.height,
+          viewportHeight, separatorVisible);
+    if (!separatorVisible) return;
+
+    self.unreadInitialPositionComplete = YES;
+    self.unreadNeedsFirstEntryPosition = NO;
+    [self updatePresentTimeFromTablePosition];
+}
+
+- (void)loadWindowAroundUnreadBoundaryForChannel:(DCChannel *)channel {
+    NSString *channelID = [channel.snowflake copy];
+    NSString *readID = [self.unreadBoundaryReadID copy];
+    DCChannelWindow *window = self.currentWindow;
+    DCMessageLayoutBuilder *layoutBuilder = self.messageLayoutBuilder;
+    CGFloat layoutWidth = self.chatTableView.bounds.size.width;
+
+    [self invalidatePendingMessageLoads];
+    NSUInteger generation = ++self.olderLoadGeneration;
+    self.loadingOlderMessages = YES;
+    NSLog(@"[ChatUnread] Loading around cursor %@ in %@", readID, channelID);
+    [self updateEmptyChatLoadingIndicator];
+
+    dispatch_async([self get_chat_messages_queue], ^{
+        // A center-aligned cursor needs enough rows on both sides to produce
+        // scrollable content on tablets as well as phones.
+        NSArray *fetched = [[DCMessageStore sharedInstance]
+            loadAroundForChannel:channel
+                         messageID:readID
+                             limit:MAX(DCInitialMessageLoadCount(), 36)];
+        if (fetched.count) {
+            [layoutBuilder prewarmLayoutCacheForMessages:fetched
+                                          previousMessage:nil
+                                              nextMessage:nil
+                                               tableWidth:layoutWidth];
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (generation != self.olderLoadGeneration || self.currentWindow != window ||
+                ![DCServerCommunicator.sharedInstance.selectedChannel.snowflake
+                    isEqualToString:channelID]) return;
+            self.loadingOlderMessages = NO;
+            if (self.unreadPositionUserIntervened) {
+                [self updateEmptyChatLoadingIndicator];
+                return;
+            }
+            if (!fetched.count) {
+                NSLog(@"[ChatUnread] Around request failed/empty for %@ cursor=%@; will retry on next entry",
+                      channelID, readID);
+                self.unreadNeedsFirstEntryPosition = NO;
+                self.unreadInitialPositionComplete = YES;
+                [[DCMessageStore sharedInstance] forgetChannelOpenedThisSession:channelID];
+                if (!window.messages.count) [self handleChannelLoadCold:channel];
+                [self updateEmptyChatLoadingIndicator];
+                return;
+            }
+            [window.messages removeAllObjects];
+            [window.messages addObjectsFromArray:fetched];
+            window.hasMoreBefore = YES;
+            window.hasSavedContentOffset = NO;
+            DCMessage *newest = window.messages.lastObject;
+            window.hasMoreAfter = !channel.lastMessageId.length ||
+                (DCCompareChatSnowflakes(newest.snowflake, channel.lastMessageId) ==
+                 NSOrderedAscending);
+            window.atPresentTime = !window.hasMoreAfter;
+            self.restoringWindowPosition = YES;
+            [self.chatTableView reloadData];
+            [self.chatTableView layoutIfNeeded];
+            [self scrollToUnreadBoundary];
+            if (self.unreadNeedsFirstEntryPosition) {
+                // A returned history page that cannot expose the boundary
+                // must not permanently consume this session's first visit.
+                NSLog(@"[ChatUnread] Around page did not expose cursor %@ in %@; retry on next entry",
+                      readID, channelID);
+                [[DCMessageStore sharedInstance] forgetChannelOpenedThisSession:channelID];
+                self.unreadNeedsFirstEntryPosition = NO;
+                self.unreadInitialPositionComplete = YES;
+            }
+            self.restoringWindowPosition = NO;
+            [self updateJumpToPresentButtonVisibility];
+            [self updateEmptyChatLoadingIndicator];
+            [self updateMessageEdgeLoadingIndicators];
+            [self saveScrollPositionForWindow:window];
+            [[DCMessageStore sharedInstance] scheduleCheckpointForWindow:window];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self updateVisibleChatMediaResidency];
+            });
+        });
+    });
+}
+
 // Point the controller at the window for whatever channel is now selected.
 // Called at every channel-entry point so the cached window can't go stale.
 - (void)syncWindowForSelectedChannel {
@@ -975,6 +1891,8 @@ static dispatch_queue_t chat_presentation_queue;
 
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
+
+    [self acknowledgeNewestMessageIfFollowingLiveTail];
 
     BOOL experimentalMode =
         [[NSUserDefaults standardUserDefaults] boolForKey:@"experimentalMode"];
@@ -1585,6 +2503,10 @@ static dispatch_queue_t chat_presentation_queue;
 
 - (void)didTapJumpToPresent {
     assertMainThread();
+    self.unreadPositionUserIntervened = YES;
+    self.unreadInitialPositionComplete = YES;
+    self.unreadNeedsFirstEntryPosition = NO;
+    self.unreadRequiresLiveEdgeGesture = NO;
 
     DCChannel *channel = DCServerCommunicator.sharedInstance.selectedChannel;
     DCChannelWindow *window = self.currentWindow;
@@ -1599,6 +2521,8 @@ static dispatch_queue_t chat_presentation_queue;
             self.chatTableView.contentOffset.x,
             -self.chatTableView.contentInset.top);
         [self.chatTableView setContentOffset:presentOffset animated:YES];
+        if (self.chatTableView.contentOffset.y <= 10.0f)
+            [self acknowledgeNewestMessageIfFollowingLiveTail];
         return;
     }
 
@@ -1648,21 +2572,95 @@ static dispatch_queue_t chat_presentation_queue;
 }
 
 - (void)acknowledgeNewestMessageIfFollowingLiveTail {
+    if (!DCServerCommunicator.sharedInstance.readyReadStateAvailable ||
+        !self.unreadEntryStateVerified ||
+        (self.unreadBoundaryReadID.length && !self.unreadInitialPositionComplete) ||
+        self.unreadRequiresLiveEdgeGesture) {
+        return;
+    }
     DCChannel *channel = DCServerCommunicator.sharedInstance.selectedChannel;
     DCChannelWindow *window = self.currentWindow;
     DCMessage *newestMessage = window.messages.lastObject;
 
-    if (!channel || !window || !window.atPresentTime || window.hasMoreAfter ||
+    if (!channel || !window || !self.chatTableView ||
+        !self.view.window || self.restoringWindowPosition ||
+        ![window.channelSnowflake isEqualToString:channel.snowflake] ||
+        !window.atPresentTime || window.hasMoreAfter ||
+        self.chatTableView.contentOffset.y > 10.0f ||
         newestMessage.snowflake.length == 0) {
         return;
     }
 
+    // The channel may be ahead of the cached chat while READY is reconciling.
+    if ([channel.lastMessageId isKindOfClass:[NSString class]] &&
+        channel.lastMessageId.length &&
+        DCCompareChatSnowflakes(newestMessage.snowflake,
+                                channel.lastMessageId) == NSOrderedAscending) {
+        return;
+    }
+
     channel.lastMessageId = newestMessage.snowflake;
+    // Keep this controller's local boundary intact so the marker can remain
+    // visible for the rest of the current visit. On the next channel entry,
+    // the boundary is rebuilt from the API-backed lastReadMessageId, so this
+    // already-read marker cannot return.
+
     if ([channel.lastReadMessageId isEqualToString:newestMessage.snowflake] &&
         channel.mentionCount == 0 && !channel.unread) {
         return;
     }
     [channel ackMessage:newestMessage.snowflake];
+}
+
+- (void)clearUnreadIndicatorAndMarkChannelReadAfterSending {
+    DCChannel *channel = DCServerCommunicator.sharedInstance.selectedChannel;
+    if (!channel.snowflake.length) return;
+
+    NSInteger separator = [self unreadSeparatorRow];
+    NSString *anchorSnowflake = nil;
+    CGFloat anchorViewportY = 0.0f;
+    if (separator != NSNotFound) {
+        [self captureVisibleMessageAnchorSnowflake:&anchorSnowflake
+                                         viewportY:&anchorViewportY];
+    }
+
+    self.unreadBoundaryChannelID = channel.snowflake;
+    self.unreadBoundaryReadID = nil;
+    self.unreadNeedsFirstEntryPosition = NO;
+    self.unreadInitialPositionComplete = YES;
+    self.unreadRequiresLiveEdgeGesture = NO;
+
+    // Sending a message is an explicit interaction with the current channel.
+    // Acknowledge Discord's newest known message even if the user composed
+    // while looking at an older portion of the local message window.
+    NSString *ackMessageID = nil;
+    if ([channel.lastMessageId isKindOfClass:[NSString class]] &&
+        channel.lastMessageId.length) {
+        ackMessageID = channel.lastMessageId;
+    }
+    DCMessage *newestLoaded = self.currentWindow.messages.lastObject;
+    if (newestLoaded.snowflake.length &&
+        (!ackMessageID.length ||
+         DCCompareChatSnowflakes(ackMessageID, newestLoaded.snowflake) ==
+             NSOrderedAscending)) {
+        ackMessageID = newestLoaded.snowflake;
+    }
+    if (ackMessageID.length) {
+        [channel ackMessage:ackMessageID];
+    }
+
+    if (separator == NSNotFound || !self.chatTableView) return;
+
+    BOOL wasRestoring = self.restoringWindowPosition;
+    self.restoringWindowPosition = YES;
+    [self.chatTableView reloadData];
+    [self.chatTableView layoutIfNeeded];
+    if (anchorSnowflake.length) {
+        [self restoreVisibleMessageAnchorSnowflake:anchorSnowflake
+                                         viewportY:anchorViewportY];
+    }
+    self.restoringWindowPosition = wasRestoring;
+    [self saveScrollPositionForWindow:self.currentWindow];
 }
 
 - (BOOL)viewingPresentTime {
@@ -1784,14 +2782,24 @@ static dispatch_queue_t chat_presentation_queue;
 
 - (void)handleReady {
     assertMainThread();
-
     [self invalidatePendingMessageLoads];
+    self.unreadEntryStateVerified = YES;
     [self activateSelectedChannel];
     [self acknowledgeNewestMessageIfFollowingLiveTail];
 }
-    
+
 - (void)handleForwardReconcile {
     assertMainThread();
+    if (DCServerCommunicator.sharedInstance.readyReadStateAvailable) {
+        self.unreadEntryStateVerified = YES;
+        DCChannel *selected = DCServerCommunicator.sharedInstance.selectedChannel;
+        if (selected.snowflake.length &&
+            ![[DCMessageStore sharedInstance] hasOpenedChannelThisSession:selected.snowflake]) {
+            [self activateSelectedChannel];
+            return;
+        }
+    }
+    if (self.unreadNeedsFirstEntryPosition) return;
 
     DCChannel *channel =
         DCServerCommunicator.sharedInstance.selectedChannel;
@@ -2096,7 +3104,14 @@ static dispatch_queue_t chat_presentation_queue;
         DCServerCommunicator.sharedInstance.selectedChannel;
 
     [self refreshSelectedChannelChrome];
-    if (!channel.snowflake.length || !self.chatTableView) {
+    if (!channel.snowflake.length) {
+        return;
+    }
+
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"SelectedChannelChanged"
+                                                        object:channel];
+
+    if (!self.chatTableView) {
         return;
     }
 
@@ -2115,9 +3130,56 @@ static dispatch_queue_t chat_presentation_queue;
     [self syncWindowForSelectedChannel];
     BOOL repairedWindow = [self removeDuplicateMessagesFromWindow:self.currentWindow];
 
+    DCMessageStore *store = [DCMessageStore sharedInstance];
     BOOL changedWindow = previousWindow != self.currentWindow;
-    if (changedWindow) {
-        [self invalidatePendingMessageLoads];
+    BOOL enteringChannel = changedWindow ||
+        ![self.unreadBoundaryChannelID isEqualToString:channel.snowflake];
+    if (changedWindow) [self invalidatePendingMessageLoads];
+
+    BOOL readStateReady = DCServerCommunicator.sharedInstance.readyReadStateAvailable;
+    BOOL firstSessionEntry = readStateReady &&
+        ![store hasOpenedChannelThisSession:channel.snowflake];
+    NSLog(@"[ChatUnread] Enter %@ ready=%d first=%d previous=%@ cached=%lu savedOffset=%d",
+          channel.snowflake, readStateReady, firstSessionEntry,
+          previousWindow.channelSnowflake ?: @"-", (unsigned long)self.messages.count,
+          self.currentWindow.hasSavedContentOffset);
+    BOOL previousIntervention = !enteringChannel && self.unreadPositionUserIntervened;
+    NSString *manualAnchorID = nil;
+    CGFloat manualAnchorY = 0.0f;
+    if (firstSessionEntry && previousIntervention) {
+        [self captureVisibleMessageAnchorSnowflake:&manualAnchorID
+                                         viewportY:&manualAnchorY];
+    }
+    if (enteringChannel) {
+        self.unreadPositionUserIntervened = NO;
+        self.unreadNeedsFirstEntryPosition = NO;
+        self.unreadInitialPositionComplete = YES;
+        self.unreadBoundaryChannelID = channel.snowflake;
+        self.unreadBoundaryReadID = nil;
+        if (readStateReady) {
+            [self setUnreadBoundaryForChannel:channel];
+        }
+        NSString *currentReadID =
+            [channel.lastReadMessageId isKindOfClass:[NSString class]]
+                ? channel.lastReadMessageId : nil;
+        self.unreadRequiresLiveEdgeGesture = self.unreadBoundaryReadID.length > 0 &&
+            DCCompareChatSnowflakes(currentReadID,
+                                    self.unreadBoundaryReadID) != NSOrderedDescending;
+    }
+    self.unreadEntryStateVerified = readStateReady;
+    if (firstSessionEntry) {
+        [store markChannelOpenedThisSession:channel.snowflake];
+        if (!enteringChannel) {
+            [self setUnreadBoundaryForChannel:channel];
+        }
+        self.unreadNeedsFirstEntryPosition =
+            self.unreadBoundaryReadID.length > 0 && !previousIntervention;
+        self.unreadInitialPositionComplete = !self.unreadNeedsFirstEntryPosition;
+        self.unreadRequiresLiveEdgeGesture = self.unreadBoundaryReadID.length > 0;
+        NSLog(@"[ChatUnread] First session entry %@, center=%d, manual=%d cursor=%@ latest=%@",
+              channel.snowflake, self.unreadNeedsFirstEntryPosition,
+              previousIntervention, channel.lastReadMessageId ?: @"-",
+              channel.lastMessageId ?: @"-");
     }
     if (repairedWindow) {
         [[DCMessageStore sharedInstance] scheduleCheckpointForWindow:self.currentWindow];
@@ -2152,6 +3214,10 @@ static dispatch_queue_t chat_presentation_queue;
                                   animated:NO];
     }
 
+    if (manualAnchorID.length) {
+        [self restoreVisibleMessageAnchorSnowflake:manualAnchorID
+                                         viewportY:manualAnchorY];
+    }
     self.restoringWindowPosition = NO;
     [self updateJumpToPresentButtonVisibility];
 
@@ -2160,6 +3226,29 @@ static dispatch_queue_t chat_presentation_queue;
     dispatch_async(dispatch_get_main_queue(), ^{
         [self updateVisibleChatMediaResidency];
     });
+
+    if (self.unreadNeedsFirstEntryPosition && self.unreadBoundaryReadID.length) {
+        DCMessage *oldest = self.messages.count ? [self.messages objectAtIndex:0] : nil;
+        DCMessage *newest = [self.messages lastObject];
+        BOOL containsReadBoundary = oldest.snowflake.length && newest.snowflake.length &&
+            DCCompareChatSnowflakes(oldest.snowflake, self.unreadBoundaryReadID) != NSOrderedDescending &&
+            DCCompareChatSnowflakes(newest.snowflake, self.unreadBoundaryReadID) == NSOrderedDescending;
+        BOOL cacheCurrent = newest.snowflake.length && channel.lastMessageId.length &&
+            DCCompareChatSnowflakes(newest.snowflake, channel.lastMessageId) == NSOrderedSame;
+        if (!containsReadBoundary || !cacheCurrent || self.currentWindow.hasMoreAfter) {
+            [self loadWindowAroundUnreadBoundaryForChannel:channel];
+            return;
+        }
+        if ([self unreadSeparatorRow] != NSNotFound) {
+            self.restoringWindowPosition = YES;
+            [self scrollToUnreadBoundary];
+            self.restoringWindowPosition = NO;
+            [self saveScrollPositionForWindow:self.currentWindow];
+            return;
+        }
+        self.unreadNeedsFirstEntryPosition = NO;
+        self.unreadInitialPositionComplete = YES;
+    }
 
     if (self.messages.count == 0) {
         /*
@@ -2173,6 +3262,8 @@ static dispatch_queue_t chat_presentation_queue;
         }
         return;
     }
+
+    if (self.unreadNeedsFirstEntryPosition) return;
 
     if (!changedWindow) {
         // Returning from a profile/modal while still viewing the same channel.
@@ -2385,6 +3476,41 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     BOOL allowLoading = ![self shouldDeferChatMediaHydration];
     [self updateChatMediaResidencyForCell:(DCChatTableCell *)tableCell
                              allowLoading:allowLoading];
+    [self refreshCustomEmojiViewsForCell:(DCChatTableCell *)tableCell];
+    [self restartVisibleCustomEmojiAnimationsForCell:(DCChatTableCell *)tableCell];
+}
+
+- (void)restartVisibleCustomEmojiAnimationsForCell:(DCChatTableCell *)cell {
+    for (UIView *view in cell.contentTextView.subviews) {
+        if (![view isKindOfClass:[UIImageView class]] ||
+            ![view.accessibilityIdentifier hasPrefix:@"discord-emoji:"]) continue;
+        UIImageView *imageView = (UIImageView *)view;
+        if (!imageView.hidden && imageView.window && imageView.animationImages.count > 1) {
+            CGRect viewRect = [imageView convertRect:imageView.bounds
+                                             toView:self.chatTableView];
+            if (CGRectIntersectsRect(viewRect, self.chatTableView.bounds)) {
+                [imageView stopAnimating];
+                [imageView startAnimating];
+            }
+        }
+    }
+}
+
+- (void)refreshVisibleCustomEmojiViews {
+    for (UITableViewCell *tableCell in self.chatTableView.visibleCells) {
+        if ([tableCell isKindOfClass:[DCChatTableCell class]]) {
+            [self refreshCustomEmojiViewsForCell:(DCChatTableCell *)tableCell];
+        }
+    }
+}
+
+- (void)refreshAndRestartVisibleCustomEmojiAnimations {
+    for (UITableViewCell *tableCell in self.chatTableView.visibleCells) {
+        if (![tableCell isKindOfClass:[DCChatTableCell class]]) continue;
+        DCChatTableCell *cell = (DCChatTableCell *)tableCell;
+        [self refreshCustomEmojiViewsForCell:cell];
+        [self restartVisibleCustomEmojiAnimationsForCell:cell];
+    }
 }
 
 - (void)handleChatMediaPurgeVisible {
@@ -2414,7 +3540,8 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     }
 
     NSInteger rowCount = [self.chatTableView numberOfRowsInSection:0];
-    if (rowCount != self.messages.count) {
+    if (rowCount != (NSInteger)self.messages.count +
+        ([self unreadSeparatorRow] == NSNotFound ? 0 : 1)) {
         NSLog(@"%s: Row count mismatch! Expected %ld but got %ld", __PRETTY_FUNCTION__, (long)self.messages.count, (long)rowCount);
         [self handleAsyncReload];
         return;
@@ -2657,7 +3784,9 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     if (currentNewest.snowflake.length &&
         DCCompareChatSnowflakes(newMessage.snowflake,
                                 currentNewest.snowflake) != NSOrderedDescending) {
-        BOOL followLiveTail = self.chatTableView.contentOffset.y <= 10.0f;
+        BOOL followLiveTail = !self.unreadNeedsFirstEntryPosition &&
+            !self.currentWindow.hasMoreAfter &&
+            self.chatTableView.contentOffset.y <= 10.0f;
         CGPoint previousOffset = self.chatTableView.contentOffset;
         NSString *viewportAnchorSnowflake = nil;
         CGFloat viewportAnchorY = 0.0f;
@@ -2746,6 +3875,9 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
         [[DCMessageStore sharedInstance]
             scheduleCheckpointForWindow:self.currentWindow];
         [self updateJumpToPresentButtonVisibility];
+        if (followLiveTail) {
+            [self acknowledgeNewestMessageIfFollowingLiveTail];
+        }
         return;
     }
 
@@ -2756,6 +3888,8 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
      * already known to be false above.
      */
     BOOL followLiveTail =
+        !self.unreadNeedsFirstEntryPosition &&
+        !self.currentWindow.hasMoreAfter &&
         self.chatTableView.contentOffset.y <= 10.0f;
 
     NSDictionary *liveInsertionPositions = followLiveTail
@@ -2791,7 +3925,8 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
      */
     self.restoringWindowPosition = YES;
 
-    if (rowCount != (NSInteger)oldCount) {
+    if (rowCount != (NSInteger)oldCount +
+        ([self unreadSeparatorRow] == NSNotFound ? 0 : 1)) {
         NSLog(@"%s: Row count mismatch! Expected %ld but got %ld",
               __PRETTY_FUNCTION__,
               (long)oldCount,
@@ -2899,6 +4034,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     [self updateJumpToPresentButtonVisibility];
 
     if (followLiveTail) {
+        [self acknowledgeNewestMessageIfFollowingLiveTail];
         [self animateLiveInsertionFromMessagePositions:liveInsertionPositions];
     }
 }
@@ -2911,8 +4047,18 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
         return;
     }
 
-    if (!self.chatTableView || !self.currentWindow || self.messages.count == 0) {
+    DCChannel *selectedChannel = DCServerCommunicator.sharedInstance.selectedChannel;
+    if (!self.chatTableView || !self.currentWindow || self.messages.count == 0 ||
+        !selectedChannel.snowflake.length ||
+        ![self.currentWindow.channelSnowflake isEqualToString:selectedChannel.snowflake]) {
         return;
+    }
+
+    if ([notification.object isKindOfClass:[DCGuild class]]) {
+        DCGuild *updatedGuild = (DCGuild *)notification.object;
+        if (![updatedGuild.snowflake isEqualToString:selectedChannel.parentGuild.snowflake]) {
+            return;
+        }
     }
 
     /*
@@ -2933,8 +4079,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     CFAbsoluteTime refreshStart = CFAbsoluteTimeGetCurrent();
     NSUInteger refreshed = 0;
 
-    DCGuild *guild =
-        DCServerCommunicator.sharedInstance.selectedChannel.parentGuild;
+    DCGuild *guild = selectedChannel.parentGuild;
 
     NSArray *visiblePaths = [self.chatTableView indexPathsForVisibleRows];
     for (NSIndexPath *indexPath in visiblePaths) {
@@ -3060,6 +4205,11 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     if ([notification.userInfo isKindOfClass:[NSDictionary class]]) {
         [mergedSource addEntriesFromDictionary:notification.userInfo];
     }
+    if (compareMessage.isForwarded && mergedSource.count) {
+        newMessage = [DCTools convertJsonMessage:mergedSource
+                             deferLegacyLayout:NO
+                                       channel:selectedChannel];
+    }
     if (mergedSource.count) {
         newMessage.sourceJSON = [NSDictionary dictionaryWithDictionary:mergedSource];
     }
@@ -3087,10 +4237,40 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
     newMessage.referencedMessage = compareMessage.referencedMessage;
     newMessage.referencedMessageState = compareMessage.referencedMessageState;
+    if (compareMessage.isForwarded && !newMessage.isForwarded) {
+        newMessage.isForwarded = YES;
+        newMessage.forwardSourceMessageID = compareMessage.forwardSourceMessageID;
+        newMessage.forwardSourceChannelID = compareMessage.forwardSourceChannelID;
+        newMessage.forwardSourceGuildID = compareMessage.forwardSourceGuildID;
+        newMessage.forwardSourceTimestamp = compareMessage.forwardSourceTimestamp;
+        newMessage.forwardSourceChannel = compareMessage.forwardSourceChannel;
+        newMessage.forwardSourceGuild = compareMessage.forwardSourceGuild;
+        newMessage.forwardSourceResolutionComplete = compareMessage.forwardSourceResolutionComplete;
+        newMessage.forwardSourceUnavailable = compareMessage.forwardSourceUnavailable;
+        newMessage.pingingUser = NO;
+    } else if (compareMessage.isForwarded && newMessage.isForwarded) {
+        if (!newMessage.forwardSourceChannel) {
+            newMessage.forwardSourceChannel = compareMessage.forwardSourceChannel;
+        }
+        if (!newMessage.forwardSourceGuild) {
+            newMessage.forwardSourceGuild = compareMessage.forwardSourceGuild;
+        }
+        if (!newMessage.forwardSourceGuildID.length) {
+            newMessage.forwardSourceGuildID = compareMessage.forwardSourceGuildID;
+        }
+        if (newMessage.forwardSourceChannel && newMessage.forwardSourceGuild) {
+            newMessage.forwardSourceResolutionComplete = YES;
+            newMessage.forwardSourceUnavailable = NO;
+        } else {
+            newMessage.forwardSourceResolutionComplete = compareMessage.forwardSourceResolutionComplete;
+            newMessage.forwardSourceUnavailable = compareMessage.forwardSourceUnavailable;
+        }
+    }
 
     NSInteger rowCount = [self.chatTableView numberOfRowsInSection:0];
     NSUInteger idx     = [self.messages indexOfObject:compareMessage];
-    if (rowCount != self.messages.count) {
+    if (rowCount != (NSInteger)self.messages.count +
+        ([self unreadSeparatorRow] == NSNotFound ? 0 : 1)) {
         NSLog(@"%s: Row count mismatch! Expected %ld but got %ld", __PRETTY_FUNCTION__, (long)self.messages.count, (long)rowCount);
         [self.messages replaceObjectAtIndex:idx
                                  withObject:newMessage];
@@ -3165,16 +4345,23 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     }
 
     NSInteger rowCount = [self.chatTableView numberOfRowsInSection:0];
-    if (rowCount != self.messages.count) {
+    NSInteger oldSeparatorRow = [self unreadSeparatorRow];
+    if (rowCount != (NSInteger)self.messages.count +
+        ([self unreadSeparatorRow] == NSNotFound ? 0 : 1)) {
         NSLog(@"%s: Row count mismatch! Expected %ld but got %ld", __PRETTY_FUNCTION__, (long)self.messages.count, (long)rowCount);
         [self.messages removeObjectAtIndex:index];
         [self handleAsyncReload];
     } else {
         NSIndexPath *indexPath = [NSIndexPath indexPathForRow:[self rowForModelIndex:index] inSection:0];
-        [self.chatTableView beginUpdates];
         [self.messages removeObjectAtIndex:index];
-        [self.chatTableView deleteRowsAtIndexPaths:@[ indexPath ] withRowAnimation:UITableViewRowAnimationAutomatic];
-        [self.chatTableView endUpdates];
+        if ((oldSeparatorRow != NSNotFound) !=
+            ([self unreadSeparatorRow] != NSNotFound)) {
+            [self.chatTableView reloadData];
+        } else {
+            [self.chatTableView beginUpdates];
+            [self.chatTableView deleteRowsAtIndexPaths:@[ indexPath ] withRowAnimation:UITableViewRowAnimationAutomatic];
+            [self.chatTableView endUpdates];
+        }
     }
 
     NSMutableArray *replyPaths = [NSMutableArray array];
@@ -3295,12 +4482,14 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
     CGPoint point = [recognizer locationInView:self.chatTableView];
     NSIndexPath *indexPath = [self.chatTableView indexPathForRowAtPoint:point];
-    if (!indexPath || indexPath.row >= (NSInteger)self.messages.count) return;
+    if (!indexPath || indexPath.row == [self unreadSeparatorRow]) return;
+    NSInteger messageIndex = [self modelIndexForRow:indexPath.row];
+    if (messageIndex < 0 || messageIndex >= (NSInteger)self.messages.count) return;
 
     self.longPressedIndexPath        = self.touchHighlightIndexPath;
     self.touchHighlightIndexPath     = nil;
 
-    DCMessage *pressed = [self.messages objectAtIndex:[self modelIndexForRow:indexPath.row]];
+    DCMessage *pressed = [self.messages objectAtIndex:messageIndex];
     self.selectedMessage = pressed;
 
     NSString *replyButton = self.replyingToMessage
@@ -3473,6 +4662,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
     BOOL followLiveTail =
         self.currentWindow &&
+        !self.unreadNeedsFirstEntryPosition &&
         !self.currentWindow.hasMoreAfter &&
         self.chatTableView.contentOffset.y <= 10.0f;
 
@@ -3663,12 +4853,13 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
             if (repairedOrder) {
                 NSLog(@"[ChatOrder] Repaired older-history model before presentation");
             }
-
             BOOL didReload = repairedOrder;
             NSInteger rowCount =
                 [self.chatTableView numberOfRowsInSection:0];
 
-            if (rowCount != (NSInteger)oldCount || repairedOrder) {
+            if (rowCount != (NSInteger)oldCount +
+                    ([self unreadSeparatorRow] == NSNotFound ? 0 : 1) ||
+                repairedOrder) {
                 BOOL wasRestoringWindowPosition =
                     self.restoringWindowPosition;
                 self.restoringWindowPosition = YES;
@@ -3677,7 +4868,12 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                 [self.chatTableView layoutIfNeeded];
 
                 if (message == nil) {
-                    self.chatTableView.contentOffset = CGPointZero;
+                    if (self.unreadNeedsFirstEntryPosition &&
+                        [self unreadSeparatorRow] != NSNotFound) {
+                        [self scrollToUnreadBoundary];
+                    } else {
+                        self.chatTableView.contentOffset = CGPointZero;
+                    }
                 } else {
                     [self restoreVisibleMessageAnchorSnowflake:orderAnchorSnowflake
                                                      viewportY:orderAnchorViewportY];
@@ -3690,8 +4886,10 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                 NSMutableArray *indexPaths =
                     [NSMutableArray arrayWithCapacity:deduped.count];
 
-                for (NSUInteger row = oldCount;
-                     row < self.messages.count;
+                NSUInteger separatorOffset =
+                    ([self unreadSeparatorRow] == NSNotFound ? 0 : 1);
+                for (NSUInteger row = oldCount + separatorOffset;
+                     row < self.messages.count + separatorOffset;
                      row++) {
                     [indexPaths addObject:
                         [NSIndexPath indexPathForRow:row
@@ -3720,7 +4918,12 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
              * A nil anchor represents the initial/latest-message load.
              */
             if (message == nil) {
-                self.chatTableView.contentOffset = CGPointZero;
+                if (self.unreadNeedsFirstEntryPosition &&
+                    [self unreadSeparatorRow] != NSNotFound) {
+                    [self scrollToUnreadBoundary];
+                } else {
+                    self.chatTableView.contentOffset = CGPointZero;
+                }
             } else {
                 NSInteger evictCount =
                     (NSInteger)self.messages.count - DCChatWindowCeiling();
@@ -3755,6 +4958,9 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
             self.olderRunwayRequestStartTime = 0.0;
             self.olderRunwayRequestedCount = 0;
 
+            if (message == nil) {
+                [self acknowledgeNewestMessageIfFollowingLiveTail];
+            }
             [self scheduleChatOrderAudit];
             CGFloat runwayVelocity = [self effectiveRunwayVelocityY];
             if (fabs(runwayVelocity) >= 700.0f) {
@@ -3943,8 +5149,9 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
             NSInteger rowCount =
                 [self.chatTableView numberOfRowsInSection:0];
 
-            BOOL didReload =
-                rowCount != (NSInteger)oldCount;
+            BOOL hadSeparator = [self unreadSeparatorRow] != NSNotFound;
+            BOOL didReload = rowCount != (NSInteger)oldCount +
+                (hadSeparator ? 1 : 0);
 
             /*
              * Capture an actual visible message as the viewport anchor before
@@ -3999,6 +5206,9 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
              * the model tail maps to rows beginning at zero.
              */
             [self.messages addObjectsFromArray:deduped];
+            if (hadSeparator != ([self unreadSeparatorRow] != NSNotFound)) {
+                didReload = YES;
+            }
 
             BOOL repairedOrder =
                 [targetWindow repairMessageOrderIfNeeded];
@@ -4179,6 +5389,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
             }
 
             self.restoringWindowPosition = wasRestoringWindowPosition;
+            [self acknowledgeNewestMessageIfFollowingLiveTail];
             self.loadingNewerMessages = NO;
             self.newerRunwayRequestStartTime = 0.0;
             self.newerRunwayRequestedCount = 0;
@@ -4374,7 +5585,30 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     });
 }
 
+- (NSInteger)unreadSeparatorRow {
+    if (!self.unreadBoundaryReadID.length ||
+        ![self.unreadBoundaryChannelID isEqualToString:self.currentWindow.channelSnowflake] ||
+        !self.messages.count) return NSNotFound;
+
+    NSInteger low = 0;
+    NSInteger high = (NSInteger)self.messages.count;
+    while (low < high) {
+        NSInteger mid = low + (high - low) / 2;
+        DCMessage *message = [self.messages objectAtIndex:mid];
+        if (DCCompareChatSnowflakes(message.snowflake, self.unreadBoundaryReadID) !=
+            NSOrderedDescending) low = mid + 1;
+        else high = mid;
+    }
+    // Show the marker only if this window includes messages on both sides
+    // of the authoritative read cursor.
+    if (low == 0 || low >= (NSInteger)self.messages.count) return NSNotFound;
+    return (NSInteger)self.messages.count - low;
+}
+
 - (NSInteger)modelIndexForRow:(NSInteger)row {
+    NSInteger separator = [self unreadSeparatorRow];
+    if (row == separator) return NSNotFound;
+    if (separator != NSNotFound && row > separator) row--;
     return (NSInteger)self.messages.count - 1 - row;
 }
 
@@ -4398,7 +5632,10 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 }
 
 - (NSInteger)rowForModelIndex:(NSInteger)index {
-    return (NSInteger)self.messages.count - 1 - index;
+    NSInteger row = (NSInteger)self.messages.count - 1 - index;
+    NSInteger separator = [self unreadSeparatorRow];
+    if (separator != NSNotFound && row >= separator) row++;
+    return row;
 }
 
 - (DCMessageLayoutBuilder *)messageLayoutBuilder {
@@ -4808,6 +6045,39 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     });
 }
 
+- (void)concealSpoilersInChatCell:(DCChatTableCell *)cell {
+    for (UIView *view in cell.subviews) {
+        DCChatSpoilerView *spoiler = nil;
+        if ([view isKindOfClass:[UILazyImageView class]]) {
+            spoiler = [(UILazyImageView *)view spoilerView];
+        } else if ([view isKindOfClass:[DCChatVideoAttachment class]]) {
+            spoiler = [(DCChatVideoAttachment *)view spoilerView];
+        }
+        [spoiler conceal];
+    }
+}
+
+- (void)concealSpoilersOutsideVisibleChatCells {
+    if (![DCChatSpoilerView hasRevealedSpoilers]) return;
+
+    NSMutableSet *visibleKeys = [NSMutableSet set];
+    for (UITableViewCell *tableCell in [self.chatTableView visibleCells]) {
+        if (![tableCell isKindOfClass:[DCChatTableCell class]]) continue;
+        for (UIView *view in tableCell.subviews) {
+            DCChatSpoilerView *spoiler = nil;
+            if ([view isKindOfClass:[UILazyImageView class]]) {
+                spoiler = [(UILazyImageView *)view spoilerView];
+            } else if ([view isKindOfClass:[DCChatVideoAttachment class]]) {
+                spoiler = [(DCChatVideoAttachment *)view spoilerView];
+            }
+            if (spoiler.spoilerKey.length) {
+                [visibleKeys addObject:spoiler.spoilerKey];
+            }
+        }
+    }
+    [DCChatSpoilerView concealSpoilersOutsideKeys:visibleKeys];
+}
+
 - (void)tableView:(UITableView *)tableView
  didEndDisplayingCell:(UITableViewCell *)tableCell
        forRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -4818,6 +6088,13 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
      */
     if (![tableCell isKindOfClass:[DCChatTableCell class]]) return;
     DCChatTableCell *cell = (DCChatTableCell *)tableCell;
+    [self concealSpoilersInChatCell:cell];
+    for (UIView *view in cell.contentTextView.subviews) {
+        if ([view isKindOfClass:[UIImageView class]] &&
+            [view.accessibilityIdentifier hasPrefix:@"discord-emoji:"]) {
+            [(UIImageView *)view stopAnimating];
+        }
+    }
     for (UIView *subview in [NSArray arrayWithArray:cell.subviews]) {
         if ([subview isKindOfClass:[DCChatGifAttachment class]]) {
             [(DCChatGifAttachment *)subview releaseThumbnailForResidency];
@@ -4831,14 +6108,39 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
          cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    if (indexPath.row == [self unreadSeparatorRow]) {
+        UITableViewCell *separator =
+            [tableView dequeueReusableCellWithIdentifier:@"New Messages Cell"];
+        if (!separator) {
+            NSArray *objects = [[NSBundle mainBundle]
+                loadNibNamed:@"DCChatTableCellNewMessages" owner:nil options:nil];
+            for (id object in objects) {
+                if ([object isKindOfClass:[UITableViewCell class]]) {
+                    separator = object;
+                    break;
+                }
+            }
+        }
+        if (!separator) {
+            separator = [[UITableViewCell alloc]
+                initWithStyle:UITableViewCellStyleDefault
+              reuseIdentifier:@"New Messages Cell"];
+            separator.textLabel.text = @"New Messages";
+        }
+        separator.selectionStyle = UITableViewCellSelectionStyleNone;
+        separator.transform = CGAffineTransformMakeScale(1, -1);
+        return separator;
+    }
     DCChatTableCell *cell;
 
     @autoreleasepool {
-        if (!self.messages || [self.messages count] <= indexPath.row) {
-            NSCAssert(self.messages, @"Messages array is nil");
-            NSCAssert([self.messages count] > indexPath.row, @"Invalid indexPath");
+        NSInteger messageIndex = [self modelIndexForRow:indexPath.row];
+        if (!self.messages || messageIndex < 0 ||
+            messageIndex >= (NSInteger)self.messages.count) {
+            NSCAssert(NO, @"Invalid message row");
+            return nil;
         }
-        DCMessage *messageAtRowIndex = [self.messages objectAtIndex:[self modelIndexForRow:indexPath.row]];
+        DCMessage *messageAtRowIndex = self.messages[messageIndex];
 
         if (self.oldMode) {
         } else {
@@ -4881,6 +6183,9 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
             cell = (DCChatTableCell *)[tableView dequeueReusableCellWithIdentifier:layout.reuseIdentifier];
             cellPerfDequeueEnd = CFAbsoluteTimeGetCurrent();
 
+            UIView *oldJumpHighlight = [cell viewWithTag:DCMessageJumpHighlightTag];
+            [oldJumpHighlight removeFromSuperview];
+
             cell.transform =
                 CGAffineTransformMakeScale(1.0f, -1.0f);
 
@@ -4916,6 +6221,18 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                 [self ensureAvatarForUser:reference.author];
             }
             cellPerfAvatarEnd = CFAbsoluteTimeGetCurrent();
+
+            DCConfigureForwardedCellChrome(cell,
+                                           messageAtRowIndex,
+                                           layout,
+                                           self.chatTableView.width,
+                                           cell.timestampLabel.textColor ?: referenceColor);
+
+            [self configureForwardSourceTagForCell:cell
+                                              message:messageAtRowIndex
+                                               layout:layout
+                                           tableWidth:self.chatTableView.width
+                                                color:cell.timestampLabel.textColor ?: referenceColor];
 
             /*
              * Fast path:
@@ -5150,7 +6467,16 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
             }
             cellPerfHeaderEnd = CFAbsoluteTimeGetCurrent();
 
-            float contentWidth = self.chatTableView.width - 63;
+            CGFloat forwardedInset = messageAtRowIndex.isForwarded
+                ? DCForwardedContentInset : 0.0f;
+            CGFloat forwardedVerticalInset = messageAtRowIndex.isForwarded
+                ? DCForwardedVerticalInset : 0.0f;
+            BOOL isSystemCell = [layout.reuseIdentifier isEqualToString:@"Universal Typehandler Cell"];
+            CGFloat baseContentOriginY = isSystemCell ? 9.0f
+                : (layout.grouped ? 2.0f : (layout.hasReference ? 46.0f : 28.0f));
+            CGFloat contentOriginX = DCChatBodyOriginX + forwardedInset;
+            CGFloat contentOriginY = baseContentOriginY + forwardedVerticalInset;
+            float contentWidth = self.chatTableView.width - 63 - forwardedInset;
 
             // Set content
             cellPerfContentStart = CFAbsoluteTimeGetCurrent();
@@ -5171,9 +6497,9 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                 cell.contentTextView.attributedString = nil;
                 cell.contentTextView.hidden = YES;
                 cell.contentTextView.frame = CGRectMake(
-                    cell.contentTextView.x,
-                    cell.contentTextView.y,
-                    cell.contentTextView.width,
+                    contentOriginX,
+                    contentOriginY,
+                    contentWidth,
                     0
                 );
             } else {
@@ -5188,8 +6514,8 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                 cell.contentTextView.layoutFrame = nil;
                 cell.contentTextView.attributedString = messageAtRowIndex.attributedContent;
                 cell.contentTextView.frame = CGRectMake(
-                    cell.contentTextView.x,
-                    cell.contentTextView.y,
+                    contentOriginX,
+                    contentOriginY,
                     contentWidth,
                     textHeight
                 );
@@ -5203,8 +6529,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
             }
             cellPerfContentEnd = CFAbsoluteTimeGetCurrent();
             cellPerfPostContentStart = CFAbsoluteTimeGetCurrent();
-            UIImage *authorAvatar =
-                [self avatarImageForUser:messageAtRowIndex.author];
+            UIImage *authorAvatar = [self avatarImageForUser:messageAtRowIndex.author];
             if (cell.profileImage.image != authorAvatar) {
                 cell.profileImage.image = authorAvatar;
             }
@@ -5241,11 +6566,17 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                     authorHeight + (hasVisibleContent ? [UIFont systemFontOfSize:14].lineHeight : 0) + 10
                 );
             }
+            if (messageAtRowIndex.isForwarded) {
+                imageViewOffset += DCForwardedVerticalInset;
+            }
             cellPerfPostContentEnd = CFAbsoluteTimeGetCurrent();
 
             cellPerfAttachmentsStart = CFAbsoluteTimeGetCurrent();
             BOOL allowAttachmentHydration =
                 ![self shouldDeferChatMediaHydration];
+            CGFloat attachmentOriginX = DCChatBodyOriginX + forwardedInset;
+            CGFloat attachmentMaximumWidth =
+                self.chatTableView.width - 66 - forwardedInset;
             for (id attachment in messageAtRowIndex.attachments) {
                 @autoreleasepool {
                     if ([attachment isKindOfClass:[UILazyImage class]]) {
@@ -5261,12 +6592,12 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                         CGFloat aspectRatio = sourceSize.width / sourceSize.height;
                         int newWidth  = messageAtRowIndex.isSticker ? 160 : (int)(200 * aspectRatio);
                         int newHeight = messageAtRowIndex.isSticker ? 160 : 200;
-                        if (newWidth > self.chatTableView.width - 66) {
-                            newWidth  = self.chatTableView.width - 66;
+                        if (newWidth > attachmentMaximumWidth) {
+                            newWidth  = attachmentMaximumWidth;
                             newHeight = newWidth / aspectRatio;
                         }
                         imageView.frame = CGRectMake(
-                            55, imageViewOffset, newWidth, newHeight
+                            attachmentOriginX, imageViewOffset, newWidth, newHeight
                         );
                         imageView.imageURL = lazyImage.imageURL;
                         imageViewOffset += newHeight;
@@ -5281,6 +6612,14 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                         imageView.userInteractionEnabled = YES;
 
                         [imageView addGestureRecognizer:singleTap];
+                        if (lazyImage.spoiler) {
+                            DCChatSpoilerView *spoiler = [[DCChatSpoilerView alloc]
+                                initWithFrame:imageView.bounds
+                                  spoilerKey:lazyImage.spoilerKey
+                                 placeholder:lazyImage.spoilerPlaceholder];
+                            imageView.spoilerView = spoiler;
+                            [singleTap requireGestureRecognizerToFail:spoiler.revealTapRecognizer];
+                        }
 
                         [cell addSubview:imageView];
                         if ([self chatMediaSubviewShouldBeResident:imageView]) {
@@ -5313,11 +6652,22 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                         CGFloat aspectRatio = videoSize.width / videoSize.height;
                         int newWidth  = 200 * aspectRatio;
                         int newHeight = 200;
-                        if (newWidth > self.chatTableView.width - 66) {
-                            newWidth  = self.chatTableView.width - 66;
+                        if (newWidth > attachmentMaximumWidth) {
+                            newWidth  = attachmentMaximumWidth;
                             newHeight = newWidth / aspectRatio;
                         }
-                        [video setFrame:CGRectMake(55, imageViewOffset, newWidth, newHeight)];
+                        [video setFrame:CGRectMake(attachmentOriginX, imageViewOffset, newWidth, newHeight)];
+                        if (video.spoiler) {
+                            if (!video.spoilerView) {
+                                video.spoilerView = [[DCChatSpoilerView alloc]
+                                    initWithFrame:video.bounds
+                                      spoilerKey:video.spoilerKey
+                                     placeholder:video.spoilerPlaceholder];
+                            }
+                            [video.spoilerView refreshRevealState];
+                            [singleTap requireGestureRecognizerToFail:
+                                video.spoilerView.revealTapRecognizer];
+                        }
 
                         imageViewOffset += newHeight;
 
@@ -5338,16 +6688,28 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                         CGFloat aspectRatio = gifSize.width / gifSize.height;
                         int newWidth  = (int)(200 * aspectRatio);
                         int newHeight = 200;
-                        if (newWidth > self.chatTableView.width - 66) {
-                            newWidth  = self.chatTableView.width - 66;
+                        if (newWidth > attachmentMaximumWidth) {
+                            newWidth  = attachmentMaximumWidth;
                             newHeight = newWidth / aspectRatio;
                         }
 
                         DCChatGifAttachment *gif = [[DCChatGifAttachment alloc]
-                            initWithFrame:CGRectMake(55, imageViewOffset, newWidth, newHeight)];
+                            initWithFrame:CGRectMake(attachmentOriginX, imageViewOffset, newWidth, newHeight)];
                         gif.gifURL = gifInfo.gifURL;
                         gif.videoBacked = gifInfo.videoBacked;
                         gif.imageURL = gifInfo.thumbnailURL;
+                        if (gifInfo.spoiler) {
+                            DCChatSpoilerView *spoiler = [[DCChatSpoilerView alloc]
+                                initWithFrame:gif.bounds
+                                  spoilerKey:gifInfo.spoilerKey
+                                 placeholder:gifInfo.spoilerPlaceholder];
+                            gif.spoilerView = spoiler;
+                            for (UIGestureRecognizer *recognizer in gif.gestureRecognizers) {
+                                if ([recognizer isKindOfClass:[UITapGestureRecognizer class]]) {
+                                    [recognizer requireGestureRecognizerToFail:spoiler.revealTapRecognizer];
+                                }
+                            }
+                        }
                         imageViewOffset += newHeight;
                         [cell addSubview:gif];
                         if ([self chatMediaSubviewShouldBeResident:gif]) {
@@ -5371,8 +6733,8 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                             CGFloat aspectRatio = (CGFloat)width / height;
                             int newWidth        = 200 * aspectRatio;
                             int newHeight       = 200;
-                            if (newWidth > self.chatTableView.width - 66) {
-                                newWidth  = self.chatTableView.width - 66;
+                            if (newWidth > attachmentMaximumWidth) {
+                                newWidth  = attachmentMaximumWidth;
                                 newHeight = newWidth / aspectRatio;
                             }
                             UIActivityIndicatorView *activityIndicator =
@@ -5380,7 +6742,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                                     initWithActivityIndicatorStyle:
                                         UIActivityIndicatorViewStyleWhite];
                             activityIndicator.center = CGPointMake(
-                                55.0f + (newWidth * 0.5f),
+                                attachmentOriginX + (newWidth * 0.5f),
                                 imageViewOffset + (newHeight * 0.5f));
                             imageViewOffset += newHeight + 11;
 
@@ -5545,6 +6907,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 }
 
 - (void)attributedLabel:(DTAttributedLabel *)label didSelectLinkWithURL:(NSURL *)url {
+    if ([self handleDiscordMessageURL:url]) return;
     [self dc_openResolvedExternalURL:url];
 }
 
@@ -5587,6 +6950,43 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     return button;
 }
 
+- (void)configureCustomEmojiImageView:(UIImageView *)imageView emoji:(DCEmoji *)emoji {
+    UIImage *image = emoji.image.size.width > 0 ? emoji.image : nil;
+    NSArray *frames = (emoji.animated && image.images.count > 1) ? image.images : nil;
+
+    static char kCustomEmojiAnimationSource;
+    if (frames) {
+        // A still poster remains visible when UIKit suspends animation.
+        if (objc_getAssociatedObject(imageView, &kCustomEmojiAnimationSource) != image ||
+            imageView.animationImages.count != frames.count ||
+            imageView.image != [frames objectAtIndex:0]) {
+            [imageView stopAnimating];
+            imageView.animationImages = frames;
+            imageView.animationDuration = image.duration > 0 ? image.duration : 0.1;
+            imageView.animationRepeatCount = 0;
+            imageView.image = [frames objectAtIndex:0];
+            objc_setAssociatedObject(imageView, &kCustomEmojiAnimationSource,
+                                    image, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        if (imageView.window && !imageView.hidden) {
+            CGRect visibleRect = [imageView convertRect:imageView.bounds
+                                                 toView:self.chatTableView];
+            if (CGRectIntersectsRect(visibleRect, self.chatTableView.bounds) &&
+                !imageView.isAnimating) {
+                [imageView startAnimating];
+            }
+        }
+    } else {
+        if (imageView.animationImages) {
+            [imageView stopAnimating];
+            imageView.animationImages = nil;
+        }
+        objc_setAssociatedObject(imageView, &kCustomEmojiAnimationSource,
+                                nil, OBJC_ASSOCIATION_ASSIGN);
+        if (imageView.image != image) imageView.image = image;
+    }
+}
+
 - (UIView *)attributedTextContentView:(DTAttributedTextContentView *)attributedTextContentView
                     viewForAttachment:(DTTextAttachment *)attachment
                                 frame:(CGRect)frame {
@@ -5594,42 +6994,77 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
     DTImageTextAttachment *imageAttachment = (DTImageTextAttachment *)attachment;
     NSURL *url = imageAttachment.contentURL;
-    if (![[url scheme] isEqualToString:@"discord-emoji"]) return nil;
+    if (![[url scheme] isEqualToString:@"discord-emoji"] || !url.host.length) return nil;
 
     DCEmoji *emoji = [DCServerCommunicator.sharedInstance emojiForSnowflake:url.host];
 
     CGRect emojiFrame = frame;
     emojiFrame.origin.y += 3.0f;
     UIImageView *imageView = [[UIImageView alloc] initWithFrame:emojiFrame];
-    imageView.contentMode  = UIViewContentModeScaleAspectFit;
-    if (emoji.image && emoji.image.size.width > 0) {
-        imageView.image = emoji.image;
-    }
+    imageView.contentMode = UIViewContentModeScaleAspectFit;
+    imageView.accessibilityIdentifier = [@"discord-emoji:" stringByAppendingString:url.host];
+    [self configureCustomEmojiImageView:imageView emoji:emoji];
     return imageView;
 }
 
-- (void)emojiImageReady:(NSNotification *)notification {
-    // Refresh visible cells that have attachment runs so they pick up
-    // the newly loaded emoji image via viewForAttachment:frame:
-    for (UITableViewCell *cell in self.chatTableView.visibleCells) {
-        if (![cell isKindOfClass:[DCChatTableCell class]]) continue;
-        DCChatTableCell *chatCell = (DCChatTableCell *)cell;
-        if (!chatCell.contentTextView.attributedString) continue;
+- (void)refreshCustomEmojiViewsForCell:(DCChatTableCell *)cell {
+    if (!cell || cell.contentTextView.hidden) return;
 
-        __block BOOL hasAttachment = NO;
-        [chatCell.contentTextView.attributedString
-            enumerateAttribute:NSAttachmentAttributeName
-                       inRange:NSMakeRange(0, chatCell.contentTextView.attributedString.length)
-                       options:0
-                    usingBlock:^(id value, NSRange range, BOOL *stop) {
-                        if (value) { hasAttachment = YES; *stop = YES; }
-                    }];
+    NSAttributedString *text = cell.contentTextView.attributedString;
+    if (!text.length || [text.string rangeOfString:@"\uFFFC"].location == NSNotFound) return;
 
-        if (hasAttachment) {
-            [chatCell.contentTextView removeAllCustomViews];
-            [chatCell.contentTextView relayoutText];
+    NSMutableSet *emojiIDs = [NSMutableSet set];
+    __block NSUInteger attachmentCount = 0;
+    [text enumerateAttribute:NSAttachmentAttributeName
+                    inRange:NSMakeRange(0, text.length)
+                     options:0
+                  usingBlock:^(id value, NSRange range, BOOL *stop) {
+        if (![value isKindOfClass:[DTImageTextAttachment class]]) return;
+        NSURL *url = ((DTImageTextAttachment *)value).contentURL;
+        if ([[url scheme] isEqualToString:@"discord-emoji"] && url.host.length) {
+            attachmentCount++;
+            [emojiIDs addObject:url.host];
         }
+    }];
+    if (!attachmentCount) return;
+
+    NSUInteger viewCount = 0;
+    BOOL needsLayout = NO;
+    for (UIView *view in cell.contentTextView.subviews) {
+        if (![view isKindOfClass:[UIImageView class]]) continue;
+        NSString *identifier = view.accessibilityIdentifier;
+        if (![identifier hasPrefix:@"discord-emoji:"]) continue;
+        NSString *emojiID = [identifier substringFromIndex:14];
+        if (![emojiIDs containsObject:emojiID]) continue;
+        viewCount++;
+        if (view.hidden) needsLayout = YES;
     }
+
+    if (viewCount < attachmentCount) {
+        // DTCoreText may still index an attachment view that was removed.
+        // Rebuild cached custom views without recomputing the text layout.
+        [cell.contentTextView removeAllCustomViews];
+        [cell.contentTextView layoutSubviewsInRect:CGRectInfinite];
+    } else if (needsLayout) {
+        [cell.contentTextView layoutSubviewsInRect:CGRectInfinite];
+    }
+
+    for (UIView *view in cell.contentTextView.subviews) {
+        if (![view isKindOfClass:[UIImageView class]]) continue;
+        NSString *identifier = view.accessibilityIdentifier;
+        if (![identifier hasPrefix:@"discord-emoji:"]) continue;
+        NSString *emojiID = [identifier substringFromIndex:14];
+        if (![emojiIDs containsObject:emojiID]) continue;
+
+        DCEmoji *emoji = [DCServerCommunicator.sharedInstance emojiForSnowflake:emojiID];
+        UIImageView *imageView = (UIImageView *)view;
+        [self configureCustomEmojiImageView:imageView emoji:emoji];
+        if (!emoji.image) [DCContentManager fetchEmojiImage:emoji];
+    }
+}
+
+- (void)emojiImageReady:(NSNotification *)notification {
+    [self refreshVisibleCustomEmojiViews];
 }
 
 - (void)linkButtonTapped:(DTLinkButton *)button {
@@ -5650,35 +7085,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
         }
     } else if ([scheme isEqualToString:@"discord-role"]) {
     } else if ([scheme isEqualToString:@"https"] || [scheme isEqualToString:@"http"]) {
-        // Check for Discord channel deep link
-        if ([[url host] isEqualToString:@"discord.com"] &&
-            [[url path] hasPrefix:@"/channels/"]) {
-            NSArray *components = [url.path componentsSeparatedByString:@"/"];
-            // path is /channels/{guild_id}/{channel_id}
-            // components: [@"", @"channels", @"{guild_id}", @"{channel_id}"]
-            if (components.count >= 4) {
-                NSString *channelId = components[3];
-                DCChannel *channel = [DCServerCommunicator.sharedInstance.channels 
-                    objectForKey:channelId];
-                if (channel) {
-                    [self navigateToChannel:channel];
-                    return;
-                }
-            } else if (components.count == 3) {
-                NSString *guildId = components[2];
-                DCGuild *guild = nil;
-                for (DCGuild *g in DCServerCommunicator.sharedInstance.guilds) {
-                    if ([g.snowflake isEqualToString:guildId]) {
-                        guild = g;
-                        break;
-                    }
-                }
-                if (guild) {
-                    [self navigateToGuild:guild];
-                    return;
-                }
-            }
-        }
+        if ([self handleDiscordMessageURL:url]) return;
         [self dc_openResolvedExternalURL:url];
     } else {
         [[UIApplication sharedApplication] openURL:url];
@@ -5712,8 +7119,15 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                                                       toRange:range
                                                      inString:mutable
                                                 overrideColor:nil];
-        // Remove the link so it can't be tapped again
-        [mutable removeAttribute:DTLinkAttribute range:range];
+        NSURL *originalLink = [mutable attribute:@"DCMarkdownSpoilerOriginalLink"
+                                             atIndex:range.location
+                                      effectiveRange:NULL];
+        if ([originalLink isKindOfClass:[NSURL class]]) {
+            [mutable addAttribute:DTLinkAttribute value:originalLink range:range];
+        } else {
+            [mutable removeAttribute:DTLinkAttribute range:range];
+        }
+        [mutable removeAttribute:@"DCMarkdownSpoilerOriginalLink" range:range];
         [mutable removeAttribute:DCMarkdownSpoilerAttributeName range:range];
         
         *stop = YES;
@@ -5734,7 +7148,9 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     NSIndexPath *indexPath = [self.chatTableView indexPathForCell:(DCChatTableCell *)view];
     if (!indexPath) return;
 
-    DCMessage *message = [self.messages objectAtIndex:[self modelIndexForRow:indexPath.row]];
+    NSInteger modelIndex = [self modelIndexForRow:indexPath.row];
+    if (modelIndex == NSNotFound || modelIndex >= (NSInteger)self.messages.count) return;
+    DCMessage *message = [self.messages objectAtIndex:modelIndex];
     if (!message.author) return;
 
     [self openUserProfile:message.author];
@@ -5748,6 +7164,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 }
 
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
+    if (indexPath.row == [self unreadSeparatorRow]) return 27.0f;
     NSInteger modelIndex = [self modelIndexForRow:indexPath.row];
     DCMessageLayout *layout = [self layoutForModelIndex:modelIndex];
     if (!layout) return 0;
@@ -5770,6 +7187,9 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     self.viewingPresentTime =
         atNewestLoadedEdge &&
         !self.currentWindow.hasMoreAfter;
+    if (self.viewingPresentTime) {
+        [self acknowledgeNewestMessageIfFollowingLiveTail];
+    }
     [self updateJumpToPresentButtonVisibility];
 }
 
@@ -6026,6 +7446,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
         return;
     }
 
+    [self concealSpoilersOutsideVisibleChatCells];
     [self updateMessageEdgeLoadingIndicators];
 
     if (self.restoringWindowPosition) {
@@ -6055,6 +7476,13 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     self.lastVelocitySampleTime = velocityNow;
     self.lastVelocitySampleOffsetY = scrollView.contentOffset.y;
 
+    // Reconcile inline attachment visibility without reparsing or reloading cells.
+    // Throttle the DTCoreText scan while dragging on older devices.
+    if (velocityNow - self.lastVisibleEmojiRefreshTime >= 0.25) {
+        self.lastVisibleEmojiRefreshTime = velocityNow;
+        [self refreshVisibleCustomEmojiViews];
+    }
+
     // Fast scrolling may reuse resident thumbnails but must not start new media I/O.
     [self updateVisibleChatMediaResidency];
 
@@ -6075,6 +7503,12 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     self.viewingPresentTime =
         atNewestLoadedEdge && windowContainsLiveTail;
 
+    BOOL manualScroll = scrollView.dragging || scrollView.decelerating ||
+        scrollView.tracking || self.forwardMomentumDisplayLink != nil;
+    if (self.viewingPresentTime) {
+        if (manualScroll) self.unreadRequiresLiveEdgeGesture = NO;
+        [self acknowledgeNewestMessageIfFollowingLiveTail];
+    }
     [self updateJumpToPresentButtonVisibility];
 
     if (self.messages.count == 0) {
@@ -6178,9 +7612,15 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                        willDecelerate:(BOOL)decelerate {
     if (scrollView != self.chatTableView) return;
     if (!decelerate) {
+        if (!self.currentWindow.hasMoreAfter &&
+            scrollView.contentOffset.y <= 10.0f) {
+            self.unreadRequiresLiveEdgeGesture = NO;
+            [self acknowledgeNewestMessageIfFollowingLiveTail];
+        }
         self.sampledScrollVelocityY = 0.0f;
         dispatch_async(dispatch_get_main_queue(), ^{
             [self updateVisibleChatMediaResidency];
+            [self refreshAndRestartVisibleCustomEmojiAnimations];
             [self performDeferredWindowTrimIfNeeded];
             [self scheduleChatOrderAudit];
         });
@@ -6192,8 +7632,14 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     if (!self.forwardMomentumDisplayLink) {
         self.sampledScrollVelocityY = 0.0f;
     }
+    if (!self.currentWindow.hasMoreAfter &&
+        scrollView.contentOffset.y <= 10.0f) {
+        self.unreadRequiresLiveEdgeGesture = NO;
+        [self acknowledgeNewestMessageIfFollowingLiveTail];
+    }
     dispatch_async(dispatch_get_main_queue(), ^{
         [self updateVisibleChatMediaResidency];
+        [self refreshAndRestartVisibleCustomEmojiAnimations];
         [self performDeferredWindowTrimIfNeeded];
         [self scheduleChatOrderAudit];
     });
@@ -6282,9 +7728,10 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
     NSInteger trimBatch = DCChatWindowTrimBatch();
     NSInteger evictCount = requestedEvictCount;
+    NSInteger oldSeparator = [self unreadSeparatorRow];
     BOOL inSync =
         ([self.chatTableView numberOfRowsInSection:0] ==
-         (NSInteger)self.messages.count);
+         (NSInteger)self.messages.count + (oldSeparator == NSNotFound ? 0 : 1));
 
     /*
      * Never compact through the viewport.  On the flipped table the newest
@@ -6386,6 +7833,9 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
         }
     }
     [self.messages removeObjectsInRange:tailRange];
+    if ((oldSeparator != NSNotFound && oldSeparator < evictCount) ||
+        ((oldSeparator != NSNotFound) !=
+         ([self unreadSeparatorRow] != NSNotFound))) bulkCompaction = YES;
     [[DCCacheManager sharedInstance] invalidateSnowflakes:evictedIDs];
 
     self.currentWindow.hasMoreAfter = YES;
@@ -6504,9 +7954,10 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
     NSInteger trimBatch = DCChatWindowTrimBatch();
     NSInteger evictCount = requestedEvictCount;
+    NSInteger oldSeparator = [self unreadSeparatorRow];
     BOOL inSync =
         ([self.chatTableView numberOfRowsInSection:0] ==
-         (NSInteger)self.messages.count);
+         (NSInteger)self.messages.count + (oldSeparator == NSNotFound ? 0 : 1));
 
     /*
      * The oldest messages occupy the highest physical rows.  Keep the entire
@@ -6590,8 +8041,9 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
         NSInteger totalRows = (NSInteger)self.messages.count;
         evictPaths = [NSMutableArray arrayWithCapacity:evictCount];
         for (NSInteger m = 0; m < evictCount; m++) {
-            // oldest model indices map to the HIGHEST rows in the flipped table
-            [evictPaths addObject:[NSIndexPath indexPathForRow:(totalRows - 1 - m) inSection:0]];
+            NSInteger row = totalRows - 1 - m;
+            if (oldSeparator != NSNotFound && row >= oldSeparator) row++;
+            [evictPaths addObject:[NSIndexPath indexPathForRow:row inSection:0]];
         }
     }
 
@@ -6605,6 +8057,10 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
         }
     }
     [self.messages removeObjectsInRange:headRange];
+    if ((oldSeparator != NSNotFound &&
+         oldSeparator >= (NSInteger)self.messages.count - evictCount) ||
+        ((oldSeparator != NSNotFound) !=
+         ([self unreadSeparatorRow] != NSNotFound))) bulkCompaction = YES;
     [[DCCacheManager sharedInstance] invalidateSnowflakes:evictedIDs];
     self.currentWindow.hasMoreBefore = YES;
 
@@ -6878,7 +8334,8 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
 - (NSInteger)tableView:(UITableView *)tableView
     numberOfRowsInSection:(NSInteger)section {
-    return [self.messages count];
+    return (NSInteger)self.messages.count +
+        ([self unreadSeparatorRow] == NSNotFound ? 0 : 1);
 }
 
 - (void)resizeInputField {
@@ -7024,6 +8481,9 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
 - (void)scrollViewWillBeginDragging:(UIScrollView *)scrollView {
     if (scrollView == self.chatTableView) {
+        self.unreadPositionUserIntervened = YES;
+        self.unreadInitialPositionComplete = YES;
+        self.unreadNeedsFirstEntryPosition = NO;
         [self stopForwardMomentumContinuation];
         [self clearNewerPaginationProgressGate];
         self.sampledScrollVelocityY = 0.0f;
@@ -7088,6 +8548,11 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
             return;
         }
 
+        self.unreadPositionUserIntervened = YES;
+        self.unreadInitialPositionComplete = YES;
+        self.unreadNeedsFirstEntryPosition = NO;
+        self.unreadRequiresLiveEdgeGesture = NO;
+
         NSString *msg = hasText
             ? [DCTools parseMessage:self.inputField.text
                           withGuild:DCServerCommunicator.sharedInstance.selectedChannel.parentGuild]
@@ -7115,6 +8580,10 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                        sendMessage:msg
                 referencingMessage:replyTarget
                        disablePing:self.disablePing];
+        }
+
+        if (!editingTarget) {
+            [self clearUnreadIndicatorAndMarkChannelReadAfterSending];
         }
 
         if (replyTarget || editingTarget) {
@@ -7153,34 +8622,33 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     [self.inputField resignFirstResponder];
     CGPoint buttonPosition = [sender convertPoint:CGPointZero toView:self.chatTableView];
     NSIndexPath *indexPath = [self.chatTableView indexPathForRowAtPoint:buttonPosition];
-    if (!indexPath) {
-        DBGLOG(@"Tapped referenced message, but indexPath is nil!");
-        return;
-    }
-    DCMessage *messageAtRowIndex = [self.messages objectAtIndex:[self modelIndexForRow:indexPath.row]];
-    if (!messageAtRowIndex.referencedMessage) {
-        DBGLOG(@"Tapped referenced message, but referencedMessage is nil!");
+    if (!indexPath) return;
+
+    NSInteger messageIndex = [self modelIndexForRow:indexPath.row];
+    if (messageIndex < 0 || messageIndex >= (NSInteger)self.messages.count) return;
+    DCMessage *message = [self.messages objectAtIndex:messageIndex];
+    DCMessage *reference = message.referencedMessage;
+    if (!reference.snowflake.length ||
+        message.referencedMessageState == DCMessageReferenceStateDeleted) {
         return;
     }
 
-    if (messageAtRowIndex.referencedMessageState !=
-            DCMessageReferenceStateResolved ||
-        !messageAtRowIndex.referencedMessage.snowflake.length) {
-        return;
+    NSDictionary *referenceMetadata = nil;
+    id rawReference = [message.sourceJSON objectForKey:@"message_reference"];
+    if ([rawReference isKindOfClass:[NSDictionary class]]) {
+        referenceMetadata = rawReference;
     }
 
-    // scroll to referenced message
-    NSUInteger referencedMessageIndex = [self.messages indexOfObjectPassingTest:^BOOL(DCMessage *obj, NSUInteger idx, BOOL *stop) {
-        return [obj.snowflake isEqualToString:messageAtRowIndex.referencedMessage.snowflake];
-    }];
-    if (referencedMessageIndex == NSNotFound) {
-        DBGLOG(@"Referenced message not found in messages array!");
-        return;
-    }
-    [self.chatTableView scrollToRowAtIndexPath:[NSIndexPath indexPathForRow:[self rowForModelIndex:referencedMessageIndex]
-                                                                  inSection:0]
-                              atScrollPosition:UITableViewScrollPositionMiddle
-                                              animated:YES];
+    id rawChannelID = [referenceMetadata objectForKey:@"channel_id"];
+    NSString *channelID = [rawChannelID isKindOfClass:[NSString class]]
+        ? rawChannelID : DCServerCommunicator.sharedInstance.selectedChannel.snowflake;
+    id rawGuildID = [referenceMetadata objectForKey:@"guild_id"];
+    NSString *guildID = [rawGuildID isKindOfClass:[NSString class]]
+        ? rawGuildID : DCServerCommunicator.sharedInstance.selectedGuild.snowflake;
+
+    [self jumpToMessageID:reference.snowflake
+                channelID:channelID
+                  guildID:guildID];
 }
 
 - (void)tappedImage:(UITapGestureRecognizer *)sender {
@@ -7827,6 +9295,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
     BOOL followLiveTail =
         self.currentWindow &&
+        !self.unreadNeedsFirstEntryPosition &&
         !self.currentWindow.hasMoreAfter &&
         self.chatTableView.contentOffset.y <= 10.0f;
     CGFloat previousContentHeight = self.chatTableView.contentSize.height;
@@ -8179,6 +9648,13 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
 - (void)viewWillDisappear:(BOOL)animated {
     [super viewWillDisappear:animated];
+
+    [DCChatSpoilerView concealAllSpoilers];
+    for (UITableViewCell *tableCell in [self.chatTableView visibleCells]) {
+        if ([tableCell isKindOfClass:[DCChatTableCell class]]) {
+            [self concealSpoilersInChatCell:(DCChatTableCell *)tableCell];
+        }
+    }
 
     [self stopForwardMomentumContinuation];
     [self saveScrollPositionForWindow:self.currentWindow];

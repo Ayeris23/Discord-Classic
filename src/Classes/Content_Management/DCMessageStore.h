@@ -30,6 +30,12 @@
 // the store is keyed entirely by channel ID.
 - (DCChannelWindow *)windowForChannel:(NSString *)channelSnowflake;
 
+// Navigation state is process-session state and is never disk checkpointed.
+- (BOOL)hasOpenedChannelThisSession:(NSString *)channelID;
+- (void)markChannelOpenedThisSession:(NSString *)channelID;
+- (void)forgetChannelOpenedThisSession:(NSString *)channelID;
+
+
 // Drop a single channel's window from RAM and disk.
 - (void)removeWindowForChannel:(NSString *)channelSnowflake;
 
@@ -61,4 +67,8 @@
 - (NSArray *)loadAfterForChannel:(DCChannel *)channel
                     afterMessage:(DCMessage *)message
                            limit:(int)limit;
+
+- (NSArray *)loadAroundForChannel:(DCChannel *)channel
+                        messageID:(NSString *)messageID
+                            limit:(int)limit;
 @end

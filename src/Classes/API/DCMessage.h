@@ -12,6 +12,9 @@
 #import "DCTools.h"
 #import "DCUser.h"
 
+@class DCChannel;
+@class DCGuild;
+
 typedef NS_ENUM(NSInteger, DCMessageType) {
     DCMessageTypeDefault                                 = 0,
     DCMessageTypeRecipientAdd                            = 1,
@@ -85,6 +88,18 @@ typedef NS_ENUM(NSInteger, DCMessageReferenceState) {
 @property (assign, nonatomic) NSInteger messageType;
 @property (strong, nonatomic) DCMessage* referencedMessage;
 @property (assign, nonatomic) DCMessageReferenceState referencedMessageState;
+@property (assign, nonatomic) BOOL isForwarded;
+@property (strong, nonatomic) NSString *forwardSourceMessageID;
+@property (strong, nonatomic) NSString *forwardSourceChannelID;
+@property (strong, nonatomic) NSString *forwardSourceGuildID;
+@property (strong, nonatomic) NSDate *forwardSourceTimestamp;
+// Keep resolved source context on the forwarded message itself. READY refreshes
+// may rebuild the communicator's channel registry, but a visible forward should
+// not lose its origin footer merely because that lookup table changed.
+@property (strong, nonatomic) DCChannel *forwardSourceChannel;
+@property (strong, nonatomic) DCGuild *forwardSourceGuild;
+@property (assign, nonatomic) BOOL forwardSourceResolutionComplete;
+@property (assign, nonatomic) BOOL forwardSourceUnavailable;
 @property (strong, nonatomic) NSMutableArray* emojis;
 @property (assign, nonatomic) BOOL isSticker;
 

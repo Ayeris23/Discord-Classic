@@ -8,11 +8,17 @@
 
 #import <UIKit/UIKit.h>
 
+@class DCChatSpoilerView;
+
 @interface DCChatVideoAttachment : UIView
+@property (nonatomic, strong) DCChatSpoilerView *spoilerView;
 @property (strong, nonatomic) IBOutlet UIImageView *playButton;
 @property (weak, nonatomic) IBOutlet UIImageView *thumbnail;
 @property (strong, nonatomic) NSURL *videoURL;
 @property (strong, nonatomic) NSURL *thumbnailURL;
+@property (assign, nonatomic) BOOL spoiler;
+@property (copy, nonatomic) NSString *spoilerKey;
+@property (copy, nonatomic) NSString *spoilerPlaceholder;
 @property (strong, nonatomic) UIImage *thumbnailImage;
 @property (copy, nonatomic) NSString *warningText;
 @property (assign, nonatomic) CGSize naturalSize;

@@ -8,6 +8,8 @@
 
 #import "DCMessageLayoutBuilder.h"
 #import "DCServerCommunicator.h"
+#import "DCChannel.h"
+#import "DCGuild.h"
 #import "DCUser.h"
 #import "UILazyImage.h"
 #import "DCChatVideoAttachment.h"
@@ -17,6 +19,43 @@
 #import "DCCacheManager.h"
 #import "DTCoreTextConstants.h"
 #import <CoreText/CoreText.h>
+
+static const CGFloat DCForwardedContentInset = 10.0f;
+static const CGFloat DCForwardedVerticalInset = 18.0f;
+static const CGFloat DCForwardedSourceFooterHeight = 30.0f;
+
+static BOOL DCForwardedSourceIsVisible(DCMessage *message) {
+    if (!message.isForwarded ||
+        !message.forwardSourceMessageID.length ||
+        !message.forwardSourceChannelID.length ||
+        message.forwardSourceUnavailable) {
+        return NO;
+    }
+
+    // Prefer the source context retained by the forwarded message. READY can
+    // rebuild the communicator channel dictionary, but that must not make an
+    // already-resolved footer disappear from a visible/cached message.
+    DCChannel *channel = message.forwardSourceChannel;
+    DCGuild *guild = message.forwardSourceGuild ?: channel.parentGuild;
+
+    if (!channel || !guild) {
+        channel = [DCServerCommunicator.sharedInstance.channels
+            objectForKey:message.forwardSourceChannelID];
+        guild = channel.parentGuild;
+    }
+
+    if (!channel || !channel.readable || !guild) return NO;
+    if (channel.type == DCChannelTypeDM || channel.type == DCChannelTypeGroupDM) return NO;
+
+    if (message.forwardSourceGuildID.length &&
+        ![guild.snowflake isEqualToString:message.forwardSourceGuildID]) {
+        return NO;
+    }
+
+    message.forwardSourceChannel = channel;
+    message.forwardSourceGuild = guild;
+    return YES;
+}
 
 /*
  * Diagnostics for rare DTCoreText pathologies. This deliberately logs only
@@ -158,6 +197,7 @@ static void DCLogAttributedStringShape(DCMessage *message,
 // default message with no reference attachment.
 + (BOOL)isGroupableMessage:(DCMessage *)message {
     if (!message) return NO;
+    if (message.isForwarded) return NO;
     if (message.messageType != DCMessageTypeDefault) return NO;
     if (message.referencedMessage != nil) return NO;
     return YES;
@@ -168,6 +208,7 @@ static void DCLogAttributedStringShape(DCMessage *message,
 // message immediately after a reply to group under it visually.
 + (BOOL)isGroupableAnchor:(DCMessage *)message {
     if (!message) return NO;
+    if (message.isForwarded) return NO;
     return (message.messageType == DCMessageTypeDefault ||
             message.messageType == DCMessageTypeReply);
 }
@@ -205,10 +246,8 @@ static void DCLogAttributedStringShape(DCMessage *message,
     return [systemTypes containsObject:@(messageType)];
 }
 
-// Type 6 retains the existing behavior of showing an author name in its system cell.
 + (BOOL)shouldShowAuthorNameForMessageType:(NSInteger)messageType {
-    return (messageType == 6)
-        || (messageType != 18 && (messageType < 1 || messageType > 8));
+    return ![self isSystemMessageType:messageType];
 }
 
 #pragma mark - Layout
@@ -224,7 +263,8 @@ static void DCLogAttributedStringShape(DCMessage *message,
     BOOL hasReference = (message.messageType == DCMessageTypeReply);
     BOOL showsAuthorName = [self.class shouldShowAuthorNameForMessageType:message.messageType];
 
-    CGFloat contentWidth = tableWidth - 63;
+    CGFloat contentWidth = tableWidth - 63
+        - (message.isForwarded ? DCForwardedContentInset : 0.0f);
 
     /*
      * The text glyph/frame layout depends on the final attributed string and
@@ -338,7 +378,8 @@ static void DCLogAttributedStringShape(DCMessage *message,
                  textHeight:(CGFloat)textHeight
                  tableWidth:(CGFloat)tableWidth {
     BOOL hasReference = message.messageType == DCMessageTypeReply;
-    CGFloat contentWidth = tableWidth - 63;
+    CGFloat contentWidth = tableWidth - 63
+        - (message.isForwarded ? DCForwardedContentInset : 0.0f);
 
     CGSize authorNameSize = CGSizeZero;
     if (!grouped && showsAuthorName) {
@@ -363,6 +404,17 @@ static void DCLogAttributedStringShape(DCMessage *message,
                 + (hasReference ? 16 : 0),
             (showsAuthorName ? authorNameSize.height : 0) + (hasVisibleContent ? [UIFont systemFontOfSize:14].lineHeight : 0) + padding
         );
+    }
+
+    if ([self.class isSystemMessageType:message.messageType]) {
+        contentHeight = MAX(contentHeight, 40.0f);
+    }
+
+    if (message.isForwarded) {
+        contentHeight += DCForwardedVerticalInset;
+        if (DCForwardedSourceIsVisible(message)) {
+            contentHeight += DCForwardedSourceFooterHeight;
+        }
     }
 
     int attachmentHeight = [self attachmentHeightForMessage:message tableWidth:tableWidth];
@@ -515,8 +567,10 @@ static void DCLogAttributedStringShape(DCMessage *message,
             CGFloat aspectRatio = sourceSize.width / sourceSize.height;
             int newWidth  = message.isSticker ? 160 : (int)(200 * aspectRatio);
             int newHeight = message.isSticker ? 160 : 200;
-            if (newWidth > tableWidth - 66) {
-                newWidth  = tableWidth - 66;
+            CGFloat maximumWidth = tableWidth - 66
+                - (message.isForwarded ? DCForwardedContentInset : 0.0f);
+            if (newWidth > maximumWidth) {
+                newWidth  = maximumWidth;
                 newHeight = newWidth / aspectRatio;
             }
             attachmentHeight += newHeight;
@@ -533,8 +587,10 @@ static void DCLogAttributedStringShape(DCMessage *message,
             CGFloat aspectRatio = sourceSize.width / sourceSize.height;
             int newWidth  = 200 * aspectRatio;
             int newHeight = 200;
-            if (newWidth > tableWidth - 66) {
-                newWidth  = tableWidth - 66;
+            CGFloat maximumWidth = tableWidth - 66
+                - (message.isForwarded ? DCForwardedContentInset : 0.0f);
+            if (newWidth > maximumWidth) {
+                newWidth  = maximumWidth;
                 newHeight = newWidth / aspectRatio;
             }
             attachmentHeight += newHeight;
@@ -549,8 +605,10 @@ static void DCLogAttributedStringShape(DCMessage *message,
             CGFloat aspectRatio = sourceSize.width / sourceSize.height;
             int newWidth  = (int)(200 * aspectRatio);
             int newHeight = 200;
-            if (newWidth > tableWidth - 66) {
-                newWidth  = tableWidth - 66;
+            CGFloat maximumWidth = tableWidth - 66
+                - (message.isForwarded ? DCForwardedContentInset : 0.0f);
+            if (newWidth > maximumWidth) {
+                newWidth  = maximumWidth;
                 newHeight = newWidth / aspectRatio;
             }
             attachmentHeight += newHeight;
@@ -563,8 +621,10 @@ static void DCLogAttributedStringShape(DCMessage *message,
                 CGFloat aspectRatio = (CGFloat)width / height;
                 int newWidth  = 200 * aspectRatio;
                 int newHeight = 200;
-                if (newWidth > tableWidth - 66) {
-                    newWidth  = tableWidth - 66;
+                CGFloat maximumWidth = tableWidth - 66
+                    - (message.isForwarded ? DCForwardedContentInset : 0.0f);
+                if (newWidth > maximumWidth) {
+                    newWidth  = maximumWidth;
                     newHeight = newWidth / aspectRatio;
                 }
                 attachmentHeight += newHeight;

@@ -653,21 +653,33 @@ static DCMarkdownFeatures DCScanMarkdownFeatures(NSString *text) {
             NSUInteger openTick = i;
             NSUInteger contentStart = i + 3;
 
-            NSUInteger langEnd = contentStart;
-            while (langEnd < length && [text characterAtIndex:langEnd] != '\n') {
-                langEnd++;
-            }
-            if (langEnd < length) langEnd++;
-            contentStart = langEnd;
-
             NSRange closeRange = [text rangeOfString:@"```"
                                              options:0
                                                range:NSMakeRange(contentStart, length - contentStart)];
+
+            NSUInteger lineEnd = contentStart;
+            NSUInteger headerLimit = closeRange.location == NSNotFound ? length : closeRange.location;
+            while (lineEnd < headerLimit && [text characterAtIndex:lineEnd] != '\n') {
+                lineEnd++;
+            }
+
+            // A language header is a single token followed by a newline.
+            // If content begins on the opening line, it belongs to the code block.
+            if (lineEnd < headerLimit) {
+                NSString *header = [text substringWithRange:NSMakeRange(contentStart,
+                                                                        lineEnd - contentStart)];
+                NSRegularExpression *language = [self cachedRegexWithPattern:@"^[A-Za-z0-9_+.-]{1,32}$"
+                                                                       options:0];
+                if (header.length == 0 ||
+                    [language firstMatchInString:header options:0
+                                           range:NSMakeRange(0, header.length)]) {
+                    contentStart = lineEnd + 1;
+                }
+            }
             if (closeRange.location == NSNotFound) {
                 closeRange = NSMakeRange(length, 0);
             }
 
-            NSRange blockRange   = NSMakeRange(openTick, NSMaxRange(closeRange) - openTick);
             NSRange contentRange = NSMakeRange(contentStart, closeRange.location - contentStart);
 
             NSDictionary *codeAttrs = @{
@@ -1071,6 +1083,14 @@ static DCMarkdownFeatures DCScanMarkdownFeatures(NSString *text) {
                           toRange:spoilerRange
                          inString:string
                     overrideColor:nil];
+        NSURL *originalLink = [string attribute:DTLinkAttribute
+                                       atIndex:spoilerRange.location
+                                effectiveRange:NULL];
+        if ([originalLink isKindOfClass:[NSURL class]]) {
+            [string addAttribute:@"DCMarkdownSpoilerOriginalLink"
+                           value:originalLink
+                           range:spoilerRange];
+        }
         [string addAttribute:DTLinkAttribute
                        value:spoilerURL ?: [NSNull null]
                        range:spoilerRange];

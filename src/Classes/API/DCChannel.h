@@ -67,6 +67,7 @@ typedef NS_ENUM(NSInteger, DCChannelType) {
 - (void)editMessage:(DCMessage*)message withContent:(NSString*)content;
 - (void)deleteMessage:(DCMessage *)message;
 - (void)ackMessage:(NSString*)message;
+- (void)updateMuteState:(BOOL)muted duration:(NSInteger)durationSeconds;
 - (void)sendImage:(UIImage*)image mimeType:(NSString*)type;
 - (void)sendImage:(UIImage*)image
          mimeType:(NSString*)type
@@ -97,4 +98,5 @@ typedef NS_ENUM(NSInteger, DCChannelType) {
           completion:(DCAttachmentUploadCompletionBlock)completion;
 - (NSArray*)getMessages:(int)numberOfMessages beforeMessage:(DCMessage*)message;
 - (NSArray*)getMessages:(int)numberOfMessages afterMessage:(DCMessage*)message;
+- (NSArray *)getMessages:(int)numberOfMessages aroundMessageID:(NSString *)messageID;
 @end

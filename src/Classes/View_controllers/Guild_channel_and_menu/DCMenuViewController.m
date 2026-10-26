@@ -33,6 +33,7 @@
 @property (strong, nonatomic) NSMutableSet *folderIconHydrationRequests;
 @property (assign, nonatomic) BOOL guildFolderAnimationInProgress;
 @property (assign, nonatomic) BOOL guildTableReloadPending;
+@property (strong, nonatomic) NSMutableDictionary *channelListStatesByGuildKey;
 @end
 
 @implementation DCMenuViewController
@@ -40,6 +41,204 @@
 - (BOOL)isDirectMessagesGuild:(DCGuild *)guild {
     return guild && guild.snowflake == nil &&
            [guild.name isEqualToString:@"Direct Messages"];
+}
+
+- (DCUser *)directMessageBuddyForChannel:(DCChannel *)channel {
+    if (!channel || channel.type != DCChannelTypeDM) return nil;
+
+    DCServerCommunicator *communicator = DCServerCommunicator.sharedInstance;
+    NSString *currentUserID = communicator.snowflake;
+    DCUser *buddy = nil;
+
+    // recipientIDs survive cold caches even when the object relationship has
+    // not been relinked yet. Prefer them so a visible DM can repair itself as
+    // soon as the canonical user registry is hydrated.
+    for (NSString *recipientID in channel.recipientIDs) {
+        if (![recipientID isKindOfClass:[NSString class]] || recipientID.length == 0)
+            continue;
+        if (currentUserID.length && [recipientID isEqualToString:currentUserID])
+            continue;
+        buddy = [communicator userForSnowflake:recipientID];
+        if (buddy) break;
+    }
+
+    if (!buddy) {
+        for (DCUser *recipient in channel.recipients) {
+            if (![recipient isKindOfClass:[DCUser class]]) continue;
+            if (currentUserID.length &&
+                [recipient.snowflake isEqualToString:currentUserID]) {
+                continue;
+            }
+            DCUser *canonical = [communicator userForSnowflake:recipient.snowflake];
+            buddy = canonical ? canonical : recipient;
+            break;
+        }
+    }
+
+    if (!buddy) {
+        for (DCUser *candidate in channel.users) {
+            if (![candidate isKindOfClass:[DCUser class]]) continue;
+            if (currentUserID.length &&
+                [candidate.snowflake isEqualToString:currentUserID]) {
+                continue;
+            }
+            DCUser *canonical = [communicator userForSnowflake:candidate.snowflake];
+            buddy = canonical ? canonical : candidate;
+            break;
+        }
+    }
+
+    if (!buddy) return nil;
+
+    // Keep the channel relationship pointed at the canonical DCUser. This is
+    // especially useful after cached channels are painted before user-cache
+    // hydration has completed.
+    if (channel.recipients.count != 1 ||
+        [channel.recipients objectAtIndex:0] != buddy) {
+        channel.recipients = [NSMutableArray arrayWithObject:buddy];
+
+        NSMutableArray *users = [NSMutableArray arrayWithObject:buddy];
+        DCUser *currentUser = currentUserID.length
+            ? [communicator userForSnowflake:currentUserID] : nil;
+        if (currentUser) [users addObject:currentUser];
+        channel.users = users;
+    }
+
+    return buddy;
+}
+
+- (UIImage *)fallbackAvatarForDMUser:(DCUser *)user channel:(DCChannel *)channel {
+    if (user && user.snowflake.length) {
+        NSUInteger selector = 0;
+        if (user.discriminator == 0) {
+            selector = (NSUInteger)(([user.snowflake longLongValue] >> 22) % 6);
+        } else {
+            selector = (NSUInteger)(user.discriminator % 5);
+        }
+        NSArray *defaults = [DCUser defaultAvatars];
+        if (selector < defaults.count) {
+            UIImage *fallback = [DCContentManager
+                processedIcon:[defaults objectAtIndex:selector]
+                    context:DCAssetContextList];
+            if (fallback) return fallback;
+        }
+    }
+
+    if ([channel.icon isKindOfClass:[UIImage class]]) return channel.icon;
+    return nil;
+}
+
+- (NSString *)channelListStateKeyForGuild:(DCGuild *)guild {
+    if (!guild) return nil;
+    if ([self isDirectMessagesGuild:guild]) return @"__direct_messages__";
+    return guild.snowflake;
+}
+
+- (void)saveChannelListStateForGuild:(DCGuild *)guild {
+    if (!guild || !self.channelTableView) return;
+
+    NSString *key = [self channelListStateKeyForGuild:guild];
+    if (key.length == 0) return;
+
+    if (!self.channelListStatesByGuildKey) {
+        self.channelListStatesByGuildKey = [NSMutableDictionary dictionary];
+    }
+
+    CGFloat minOffsetY = -self.channelTableView.contentInset.top;
+    CGFloat currentOffsetY = self.channelTableView.contentOffset.y;
+    NSMutableDictionary *state = [NSMutableDictionary dictionary];
+    [state setObject:[NSNumber numberWithFloat:currentOffsetY] forKey:@"offsetY"];
+
+    if (currentOffsetY <= minOffsetY + 0.5f) {
+        [state setObject:[NSNumber numberWithBool:YES] forKey:@"atTop"];
+        [self.channelListStatesByGuildKey setObject:state forKey:key];
+        return;
+    }
+
+    NSArray *visibleRows = [self.channelTableView indexPathsForVisibleRows];
+    NSIndexPath *topIndexPath = nil;
+    for (NSIndexPath *indexPath in visibleRows) {
+        if (!topIndexPath || indexPath.row < topIndexPath.row) {
+            topIndexPath = indexPath;
+        }
+    }
+
+    if (topIndexPath && topIndexPath.row < guild.channels.count) {
+        DCChannel *channel = [guild.channels objectAtIndex:topIndexPath.row];
+        if (channel.snowflake.length > 0) {
+            CGRect rowRect = [self.channelTableView rectForRowAtIndexPath:topIndexPath];
+            CGFloat relativeOffset = currentOffsetY - rowRect.origin.y;
+            [state setObject:channel.snowflake forKey:@"channelID"];
+            [state setObject:[NSNumber numberWithFloat:relativeOffset]
+                      forKey:@"relativeOffset"];
+        }
+    }
+
+    [self.channelListStatesByGuildKey setObject:state forKey:key];
+}
+
+- (CGFloat)clampedChannelListOffsetY:(CGFloat)offsetY {
+    CGFloat minOffsetY = -self.channelTableView.contentInset.top;
+    CGFloat maxOffsetY = self.channelTableView.contentSize.height -
+                         self.channelTableView.bounds.size.height +
+                         self.channelTableView.contentInset.bottom;
+    if (maxOffsetY < minOffsetY) maxOffsetY = minOffsetY;
+    return MIN(MAX(offsetY, minOffsetY), maxOffsetY);
+}
+
+- (void)restoreChannelListStateForGuild:(DCGuild *)guild {
+    if (!guild || !self.channelTableView) return;
+
+    NSString *key = [self channelListStateKeyForGuild:guild];
+    NSDictionary *state = key.length ? [self.channelListStatesByGuildKey objectForKey:key] : nil;
+
+    [self.channelTableView layoutIfNeeded];
+
+    CGFloat targetOffsetY = -self.channelTableView.contentInset.top;
+    if (state) {
+        if ([[state objectForKey:@"atTop"] boolValue]) {
+            targetOffsetY = -self.channelTableView.contentInset.top;
+        } else {
+            NSString *channelID = [state objectForKey:@"channelID"];
+            NSNumber *relativeOffset = [state objectForKey:@"relativeOffset"];
+            NSUInteger channelIndex = NSNotFound;
+
+            if (channelID.length > 0) {
+                channelIndex = [guild.channels indexOfObjectPassingTest:^BOOL(DCChannel *channel, NSUInteger idx, BOOL *stop) {
+                    return channel.snowflake.length > 0 &&
+                           [channel.snowflake isEqualToString:channelID];
+                }];
+            }
+
+            if (channelIndex != NSNotFound) {
+                NSIndexPath *indexPath = [NSIndexPath indexPathForRow:channelIndex inSection:0];
+                CGRect rowRect = [self.channelTableView rectForRowAtIndexPath:indexPath];
+                targetOffsetY = rowRect.origin.y + [relativeOffset floatValue];
+            } else {
+                targetOffsetY = [[state objectForKey:@"offsetY"] floatValue];
+            }
+        }
+    }
+
+    targetOffsetY = [self clampedChannelListOffsetY:targetOffsetY];
+    [self.channelTableView setContentOffset:CGPointMake(0.0f, targetOffsetY) animated:NO];
+}
+
+- (BOOL)selectGuildForChannelList:(DCGuild *)guild {
+    NSString *oldKey = [self channelListStateKeyForGuild:self.selectedGuild];
+    NSString *newKey = [self channelListStateKeyForGuild:guild];
+    BOOL changed = (oldKey || newKey) && ![oldKey isEqualToString:newKey];
+
+    if (changed) {
+        [self saveChannelListStateForGuild:self.selectedGuild];
+    }
+    self.selectedGuild = guild;
+    return changed;
+}
+
+- (void)reloadChannelTableForSelectedGuildRestoringScroll {
+    [self.channelTableView reloadData];
+    [self restoreChannelListStateForGuild:self.selectedGuild];
 }
 
 - (void)activateSelectedChannelInExperimentalMode {
@@ -314,6 +513,9 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
+    if (!self.channelListStatesByGuildKey) {
+        self.channelListStatesByGuildKey = [NSMutableDictionary dictionary];
+    }
     self.shouldAttemptColdChatRestore = !self.coldChatRestoreAlreadyHandled;
     // Guard against duplicate registration on viewDidLoad re-fire (iOS 5 memory warning)
     [NSNotificationCenter.defaultCenter removeObserver:self];
@@ -337,6 +539,10 @@
     [NSNotificationCenter.defaultCenter addObserver:self
                                            selector:@selector(updateStatusForUser:)
                                                name:@"USER_PRESENCE_UPDATED"
+                                             object:nil];
+    [NSNotificationCenter.defaultCenter addObserver:self
+                                           selector:@selector(updateStatusForUser:)
+                                               name:@"RELOAD USER DATA"
                                              object:nil];
     // these are resource intensive, do not use whenever possible
     [NSNotificationCenter.defaultCenter addObserver:self
@@ -398,6 +604,41 @@
     [super viewDidUnload];
 }
 
+- (BOOL)channelNeedsMarkAsRead:(DCChannel *)channel {
+    if (!channel) return NO;
+    if (channel.unread || channel.mentionCount > 0) return YES;
+
+    if (channel.lastMessageId.length == 0) return NO;
+    if (channel.lastReadMessageId.length == 0) return YES;
+
+    return ![channel.lastMessageId isEqualToString:channel.lastReadMessageId];
+}
+
+- (UIButton *)actionSheetButtonWithTitle:(NSString *)title inView:(UIView *)view {
+    if ([view isKindOfClass:[UIButton class]]) {
+        UIButton *button = (UIButton *)view;
+        if ([[button titleForState:UIControlStateNormal] isEqualToString:title]) {
+            return button;
+        }
+    }
+
+    for (UIView *subview in view.subviews) {
+        UIButton *button = [self actionSheetButtonWithTitle:title inView:subview];
+        if (button) return button;
+    }
+
+    return nil;
+}
+
+- (void)didPresentActionSheet:(UIActionSheet *)actionSheet {
+    if (actionSheet.tag != 2 || !self.optionChannel) return;
+    if ([self channelNeedsMarkAsRead:self.optionChannel]) return;
+
+    UIButton *markReadButton = [self actionSheetButtonWithTitle:@"Mark As Read"
+                                                         inView:actionSheet];
+    markReadButton.enabled = NO;
+}
+
 - (void)handleLongPress:(UILongPressGestureRecognizer *)gestureRecognizer {
     if (gestureRecognizer.state == UIGestureRecognizerStateBegan) {
         CGPoint point          = [gestureRecognizer locationInView:self.channelTableView];
@@ -411,11 +652,15 @@
         }
         self.optionChannel = channelAtRowIndex;
 
+        NSString *muteTitle = channelAtRowIndex.muted ? @"Unmute Channel" : @"Mute Channel";
         UIActionSheet *actionSheet = [[UIActionSheet alloc] initWithTitle:channelAtRowIndex.name
                                                                  delegate:self
-                                                        cancelButtonTitle:@"Okay"
+                                                        cancelButtonTitle:@"Cancel"
                                                    destructiveButtonTitle:nil
-                                                        otherButtonTitles:@"Copy Channel ID",
+                                                        otherButtonTitles:@"Mark As Read",
+                                                                          @"Copy Link",
+                                                                          muteTitle,
+                                                                          @"Copy ID",
                                                                           nil];
 
         actionSheet.tag = 2;
@@ -481,25 +726,34 @@
             if (![channel.snowflake isEqualToString:channelId]) {
                 continue;
             }
+            [self markColdChatRestoreHandled];
             if (self.selectedChannel &&
                 [self.selectedChannel.snowflake
                     isEqualToString:channelId]) {
-                self.selectedGuild = guild;
+                BOOL guildChanged = [self selectGuildForChannelList:guild];
                 self.selectedChannel = channel;
                 DCServerCommunicator.sharedInstance.selectedGuild = guild;
                 DCServerCommunicator.sharedInstance.selectedChannel = channel;
 
                 if ([self activateSelectedChannelInIPadSplitView]) {
                     [self synchronizeSelectedGuildUI];
-                    [self.channelTableView reloadData];
+                    if (guildChanged) {
+                        [self reloadChannelTableForSelectedGuildRestoringScroll];
+                    } else {
+                        [self.channelTableView reloadData];
+                    }
                 } else if (self.experimentalMode) {
                     [self synchronizeSelectedGuildUI];
-                    [self.channelTableView reloadData];
+                    if (guildChanged) {
+                        [self reloadChannelTableForSelectedGuildRestoringScroll];
+                    } else {
+                        [self.channelTableView reloadData];
+                    }
                     [self activateSelectedChannelInExperimentalMode];
                 }
                 return;
             }
-            self.selectedGuild                                  = guild;
+            BOOL guildChanged                                  = [self selectGuildForChannelList:guild];
             self.selectedChannel                                = channel;
             DCServerCommunicator.sharedInstance.selectedGuild   = guild;
             DCServerCommunicator.sharedInstance.selectedChannel = channel;
@@ -514,14 +768,16 @@
                 if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad &&
                     !self.experimentalMode) {
                     [self synchronizeSelectedGuildUI];
-                    [self.channelTableView reloadData];
+                    if (guildChanged) {
+                        [self reloadChannelTableForSelectedGuildRestoringScroll];
+                    } else {
+                        [self.channelTableView reloadData];
+                    }
                     [self activateSelectedChannelInIPadSplitView];
                 } else if (self.experimentalMode) {
                     [DCServerCommunicator.sharedInstance
                         sendGuildSubscriptionWithGuildId:guild.snowflake
                                                channelId:channel.snowflake];
-                    [channel ackMessage:channel.lastMessageId];
-                    [channel checkIfRead];
                     [self activateSelectedChannelInExperimentalMode];
                 } else {
                     [self performSegueWithIdentifier:@"guilds to chat"
@@ -537,6 +793,10 @@
 // reload
 - (void)handleReady {
     dispatch_async(dispatch_get_main_queue(), ^{
+        // Capture the visible channel anchor before READY replaces guild/channel
+        // objects so the restored position follows the same channel, not a row.
+        [self saveChannelListStateForGuild:self.selectedGuild];
+
         // Refresh selectedGuild pointer if it's the DM guild, or recover if a
         // live GUILD_DELETE removed the guild currently shown in the channel pane.
         BOOL selectedGuildStillExists = NO;
@@ -544,7 +804,7 @@
             for (DCGuild *guild in DCServerCommunicator.sharedInstance.guilds) {
                 if (guild == self.selectedGuild ||
                     (guild.snowflake && [guild.snowflake isEqualToString:self.selectedGuild.snowflake])) {
-                    self.selectedGuild = guild;
+                    [self selectGuildForChannelList:guild];
                     selectedGuildStillExists = YES;
                     break;
                 }
@@ -562,25 +822,20 @@
                 }
             }
 
-            self.selectedGuild = restoredGuild ?: [DCServerCommunicator.sharedInstance.guilds objectAtIndex:0];
+            [self selectGuildForChannelList:(restoredGuild ?: [DCServerCommunicator.sharedInstance.guilds objectAtIndex:0])];
             self.selectedChannel = nil;
         }
 
         DCChannel *canonicalSelectedChannel =
             DCServerCommunicator.sharedInstance.selectedChannel;
-        if (canonicalSelectedChannel) {
-            self.selectedChannel = canonicalSelectedChannel;
-            if (canonicalSelectedChannel.parentGuild) {
-                self.selectedGuild = canonicalSelectedChannel.parentGuild;
-            }
-        } else {
-            self.selectedChannel = nil;
-        }
+        // READY may refresh the active chat without changing which server the
+        // user is browsing. Keep the menu selection independent of that chat.
+        self.selectedChannel = canonicalSelectedChannel;
 
         [self synchronizeSelectedGuildUI];
 
         [self reloadGuildTableFromCanonicalState];
-        [self.channelTableView reloadData];
+        [self reloadChannelTableForSelectedGuildRestoringScroll];
 
         if (!self.refreshControl) {
             self.refreshControl = UIRefreshControl.new;
@@ -614,11 +869,16 @@
         for (DCChannel *channel in guild.channels) {
             if (![channel.snowflake isEqualToString:channelId]) continue;
 
-            self.selectedGuild = guild;
+            [self markColdChatRestoreHandled];
+            BOOL guildChanged = [self selectGuildForChannelList:guild];
             self.selectedChannel = channel;
             DCServerCommunicator.sharedInstance.selectedGuild = guild;
             [self synchronizeSelectedGuildUI];
-            [self.channelTableView reloadData];
+            if (guildChanged) {
+                [self reloadChannelTableForSelectedGuildRestoringScroll];
+            } else {
+                [self.channelTableView reloadData];
+            }
             return;
         }
     }
@@ -632,10 +892,11 @@
         if (![guild.snowflake isEqualToString:guildId]) continue;
         
         dispatch_async(dispatch_get_main_queue(), ^{
-            self.selectedGuild = guild;
+            [self markColdChatRestoreHandled];
+            [self selectGuildForChannelList:guild];
             DCServerCommunicator.sharedInstance.selectedGuild = guild;
             [self synchronizeSelectedGuildUI];
-            [self.channelTableView reloadData];
+            [self reloadChannelTableForSelectedGuildRestoringScroll];
         });
         return;
     }
@@ -739,18 +1000,34 @@
     }
     if (!privateGuild) return;
 
-    NSUInteger idx = [privateGuild.channels
-        indexOfObjectPassingTest:^BOOL(DCChannel *chan, NSUInteger row, BOOL *stop) {
-            if (chan.type != DCChannelTypeDM || chan.recipients.count != 1)
-                return NO;
-            DCUser *buddy = [chan.recipients objectAtIndex:0];
-            return [buddy.snowflake isEqualToString:updatedUser.snowflake];
-        }];
-    if (idx == NSNotFound) return;
+    // Identity/avatar notifications can arrive after the DM channels were
+    // first painted. Update every 1:1 DM that references this user, including
+    // cached channels whose recipient object has not been relinked yet.
+    NSMutableArray *matchingRows = [NSMutableArray array];
+    NSUInteger row = 0;
+    for (DCChannel *channel in privateGuild.channels) {
+        if (channel.type == DCChannelTypeDM) {
+            BOOL referencesUser = [channel.recipientIDs containsObject:updatedUser.snowflake];
+            DCUser *buddy = [self directMessageBuddyForChannel:channel];
+            if (!referencesUser && buddy) {
+                referencesUser = [buddy.snowflake isEqualToString:updatedUser.snowflake];
+            }
 
-    // If the DM list is not currently visible there is nothing to redraw now;
-    // cellForRowAtIndexPath: will read the canonical user's status later.
-    if (![self isDirectMessagesGuild:self.selectedGuild]) return;
+            if (referencesUser) {
+                if (buddy) {
+                    NSString *displayName = [buddy displayName];
+                    if (displayName.length) channel.name = displayName;
+                }
+                [matchingRows addObject:[NSIndexPath indexPathForRow:row inSection:0]];
+            }
+        }
+        row++;
+    }
+
+    if (matchingRows.count == 0 ||
+        ![self isDirectMessagesGuild:self.selectedGuild]) {
+        return;
+    }
 
     NSUInteger modelRowCount = self.selectedGuild.channels.count;
     NSUInteger tableRowCount =
@@ -759,10 +1036,14 @@
         [self.channelTableView reloadData];
         return;
     }
-    if (idx >= modelRowCount) return;
 
-    NSIndexPath *indexPath = [NSIndexPath indexPathForRow:idx inSection:0];
-    [self.channelTableView reloadRowsAtIndexPaths:@[ indexPath ]
+    NSMutableArray *validRows = [NSMutableArray arrayWithCapacity:matchingRows.count];
+    for (NSIndexPath *indexPath in matchingRows) {
+        if ((NSUInteger)indexPath.row < modelRowCount) [validRows addObject:indexPath];
+    }
+    if (validRows.count == 0) return;
+
+    [self.channelTableView reloadRowsAtIndexPaths:validRows
                                  withRowAnimation:UITableViewRowAnimationNone];
 }
 
@@ -913,7 +1194,7 @@
 
     [self synchronizeSelectedGuildUI];
     [self reloadGuildTableFromCanonicalState];
-    [self.channelTableView reloadData];
+    [self reloadChannelTableForSelectedGuildRestoringScroll];
 }
 
 - (void)viewDidAppear:(BOOL)animated {
@@ -921,6 +1202,11 @@
     if (!self.experimentalMode) {
         [[DCConnectionPopup sharedPopup] setHostView:self.view];
     }
+}
+
+- (void)viewWillDisappear:(BOOL)animated {
+    [self saveChannelListStateForGuild:self.selectedGuild];
+    [super viewWillDisappear:animated];
 }
 
 - (void)viewDidDisappear:(BOOL)animated {
@@ -960,20 +1246,83 @@
             }
         }
     } else if (popup.tag == 2) {
+        DCChannel *channel = self.optionChannel;
+        if (!channel) return;
+
         switch (buttonIndex) {
             case 0: {
-                if (!self.optionChannel) {
-                    break; // No channel selected
+                if (![self channelNeedsMarkAsRead:channel]) {
+                    break;
                 }
-                // Copy channel ID
-                UIPasteboard *pasteboard = [UIPasteboard generalPasteboard];
-                pasteboard.string        = self.optionChannel.snowflake;
+                if (channel.lastMessageId.length > 0) {
+                    [channel ackMessage:channel.lastMessageId];
+                } else {
+                    channel.lastReadMessageId = channel.lastMessageId;
+                    channel.mentionCount = 0;
+                    channel.unread = NO;
+                    [NSNotificationCenter.defaultCenter
+                        postNotificationName:@"RELOAD CHANNEL LIST"
+                                      object:channel
+                                    userInfo:@{ @"channelId" : channel.snowflake }];
+                }
                 break;
             }
-            default: {
+            case 1: {
+                NSString *guildID = channel.parentGuild.snowflake.length > 0
+                    ? channel.parentGuild.snowflake : @"@me";
+                NSString *link = [NSString stringWithFormat:
+                    @"https://discord.com/channels/%@/%@", guildID, channel.snowflake];
+                [UIPasteboard generalPasteboard].string = link;
                 break;
             }
+            case 2: {
+                if (channel.muted) {
+                    [channel updateMuteState:NO duration:0];
+                    break;
+                }
+
+                UIActionSheet *muteSheet = [[UIActionSheet alloc]
+                    initWithTitle:[NSString stringWithFormat:@"Mute %@", channel.name]
+                         delegate:self
+                cancelButtonTitle:@"Cancel"
+           destructiveButtonTitle:nil
+                otherButtonTitles:@"For 15 Minutes",
+                                  @"For 1 Hour",
+                                  @"For 3 Hours",
+                                  @"For 8 Hours",
+                                  @"For 24 Hours",
+                                  @"Until I turn it back on",
+                                  nil];
+                muteSheet.tag = 3;
+                [muteSheet showInView:self.view.superview ? self.view.superview : self.view];
+                return;
+            }
+            case 3: {
+                [UIPasteboard generalPasteboard].string = channel.snowflake;
+                break;
+            }
+            default:
+                break;
         }
+        self.optionChannel = nil;
+    } else if (popup.tag == 3) {
+        DCChannel *channel = self.optionChannel;
+        if (!channel) return;
+
+        NSInteger duration = 0;
+        switch (buttonIndex) {
+            case 0: duration = 15 * 60; break;
+            case 1: duration = 60 * 60; break;
+            case 2: duration = 3 * 60 * 60; break;
+            case 3: duration = 8 * 60 * 60; break;
+            case 4: duration = 24 * 60 * 60; break;
+            case 5: duration = -1; break;
+            default:
+                self.optionChannel = nil;
+                return;
+        }
+
+        [channel updateMuteState:YES duration:duration];
         self.optionChannel = nil;
     }
 }
@@ -1050,7 +1399,8 @@
                 [CATransaction commit];
                 return;
             }
-            self.selectedGuild = selectedGuild;
+            [self markColdChatRestoreHandled];
+            [self selectGuildForChannelList:selectedGuild];
 
             // Always route a guild-table selection through the same model-driven
             // synchronization path used by cold restore/viewWillAppear. Besides
@@ -1061,7 +1411,7 @@
             [self synchronizeSelectedGuildUI];
 
             @autoreleasepool {
-                [self.channelTableView reloadData];
+                [self reloadChannelTableForSelectedGuildRestoringScroll];
             }
         } else if (tableView == self.channelTableView) {
             if (!self.selectedGuild || !self.selectedGuild.channels || self.selectedGuild.channels.count <= indexPath.row) {
@@ -1078,6 +1428,7 @@
                 return;
             }
 
+            [self markColdChatRestoreHandled];
             DCServerCommunicator.sharedInstance.selectedChannel = channelAtRowIndex;
             self.selectedChannel                                = channelAtRowIndex;
 
@@ -1085,12 +1436,6 @@
                 sendGuildSubscriptionWithGuildId:self.selectedGuild.snowflake
                                        channelId:self.selectedChannel.snowflake];
 
-            // Mark channel messages as read and refresh the channel object
-            // accordingly
-            [DCServerCommunicator.sharedInstance.selectedChannel
-                ackMessage:DCServerCommunicator.sharedInstance.selectedChannel
-                               .lastMessageId];
-            [DCServerCommunicator.sharedInstance.selectedChannel checkIfRead];
             [tableView deselectRowAtIndexPath:indexPath animated:YES];
 
             if ([self activateSelectedChannelInIPadSplitView]) {
@@ -1420,31 +1765,38 @@
                         cell.nameLabel.frame.size.height
                     );
                 }
-                cell.nameLabel.text = channelAtRowIndex.name;
+                DCUser *buddy = [self directMessageBuddyForChannel:channelAtRowIndex];
+                if (buddy) {
+                    NSString *displayName = [buddy displayName];
+                    if (displayName.length) {
+                        channelAtRowIndex.name = displayName;
+                        cell.nameLabel.text = displayName;
+                    } else {
+                        cell.nameLabel.text = channelAtRowIndex.name;
+                    }
 
-                if (channelAtRowIndex.type == 1 && channelAtRowIndex.users.count == 2) {
-                    DCUser *buddy = [channelAtRowIndex.users firstObject];
+                    // Visible DM rows should be able to finish their own avatar
+                    // hydration. Cold start intentionally warms only a small
+                    // number of DM icons, so relying solely on preload work can
+                    // leave deeper rows showing defaults indefinitely.
+                    if (!buddy.profileImage) [DCTools getUserAvatar:buddy];
+
                     if (buddy.profileImage && buddy.profileImage.size.width > 0) {
                         cell.pfp.image = buddy.profileImage;
                     } else {
-                        cell.pfp.image = channelAtRowIndex.icon;
+                        cell.pfp.image = [self fallbackAvatarForDMUser:buddy
+                                                                  channel:channelAtRowIndex];
                     }
-                } else if (channelAtRowIndex.icon != nil &&
-                           [channelAtRowIndex.icon isKindOfClass:[UIImage class]]) {
-                    cell.pfp.image = channelAtRowIndex.icon;
-                }
-
-                // Presence indicator logic for DM channels (type 1, one-on-one)
-                if (channelAtRowIndex.type == 1
-                    && channelAtRowIndex.users.count == 2) {
-                    DCUser *buddy = [channelAtRowIndex.users firstObject];
 
                     cell.statusImage.image =
                         [DCInterfaceStyle statusImageForStatus:buddy.status];
-
                     cell.statusImage.hidden = NO;
                 } else {
-                    // Hide status indicator for non-DM or group channels
+                    // Always overwrite reused-cell state, even when recipient
+                    // hydration is temporarily incomplete.
+                    cell.nameLabel.text = channelAtRowIndex.name;
+                    cell.pfp.image = [channelAtRowIndex.icon isKindOfClass:[UIImage class]]
+                        ? channelAtRowIndex.icon : nil;
                     cell.statusImage.hidden = YES;
                 }
             }
@@ -1508,13 +1860,21 @@
                 );
             }
             cell.channelName.text = channelAtRowIndex.name;
-            cell.channelName.textColor = channelAtRowIndex.unread
-                ? [UIColor whiteColor]
-                : [UIColor colorWithRed:128.0 / 255.0
-                                  green:132.0 / 255.0
-                                   blue:143.0 / 255.0
-                                  alpha:1.0];
-            cell.alpha = channelAtRowIndex.muted ? 0.05 : 1.0;
+            UIColor *readChannelColor = [UIColor colorWithRed:128.0 / 255.0
+                                                        green:132.0 / 255.0
+                                                         blue:143.0 / 255.0
+                                                        alpha:1.0];
+            if (channelAtRowIndex.muted) {
+                // Muted channels always use the read-state color. Dim only the
+                // name so mentions and other channel chrome remain legible.
+                cell.channelName.textColor = readChannelColor;
+                cell.channelName.alpha = 0.45;
+            } else {
+                cell.channelName.textColor = channelAtRowIndex.unread
+                    ? [UIColor whiteColor] : readChannelColor;
+                cell.channelName.alpha = 1.0;
+            }
+            cell.alpha = 1.0;
 
             return cell;
         }

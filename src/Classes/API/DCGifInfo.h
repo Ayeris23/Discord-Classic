@@ -11,6 +11,9 @@
 @interface DCGifInfo : NSObject
 @property (strong, nonatomic) NSURL *gifURL;
 @property (strong, nonatomic) NSURL *thumbnailURL;
+@property (assign, nonatomic) BOOL spoiler;
+@property (copy, nonatomic) NSString *spoilerKey;
+@property (copy, nonatomic) NSString *spoilerPlaceholder;
 @property (assign, nonatomic) CGSize naturalSize;
 @property (assign, nonatomic, getter=isVideoBacked) BOOL videoBacked;
 @end

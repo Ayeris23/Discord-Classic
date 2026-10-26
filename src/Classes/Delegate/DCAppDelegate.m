@@ -22,6 +22,7 @@
 #import "DCContentManager.h"
 #import "DCMessageStore.h"
 #import "DCMenuViewController.h"
+#import "APLSlideMenuViewController.h"
 #import "DCChatViewController.h"
 #import "DCTools.h"
 #import "DCImageViewController.h"
@@ -60,10 +61,24 @@ static void DCConfigureMediaAudioSession(void) {
 
 static UIImage *DCDefaultPrivateChannelIcon(DCChannel *channel) {
     if (!channel.snowflake.length) return nil;
-    NSNumber *longId = @([channel.snowflake longLongValue]);
-    int selector = (int)(([longId longLongValue] >> 22) % 6);
-    return [DCContentManager processedIcon:[[DCUser defaultAvatars] objectAtIndex:selector]
-                                   context:DCAssetContextList];
+
+    // All fallback DM icons share six source images. Build each list tile once.
+    static NSArray *processedDefaults = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        NSMutableArray *images = [NSMutableArray arrayWithCapacity:6];
+        for (UIImage *avatar in [DCUser defaultAvatars]) {
+            UIImage *processed = [DCContentManager processedIcon:avatar
+                                                        context:DCAssetContextList];
+            [images addObject:processed ?: avatar];
+        }
+        processedDefaults = [images copy];
+    });
+
+    unsigned long long channelID = [channel.snowflake longLongValue];
+    NSUInteger selector = (NSUInteger)((channelID >> 22) % 6);
+    return selector < processedDefaults.count
+        ? [processedDefaults objectAtIndex:selector] : nil;
 }
 
 static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
@@ -140,7 +155,9 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
     UIViewController *root = self.window.rootViewController;
     UIViewController *menuContainer = root;
 
-    if ([root isKindOfClass:[UISplitViewController class]]) {
+    if ([root isKindOfClass:[APLSlideMenuViewController class]]) {
+        menuContainer = ((APLSlideMenuViewController *)root).leftMenuViewController;
+    } else if ([root isKindOfClass:[UISplitViewController class]]) {
         UISplitViewController *splitViewController = (UISplitViewController *)root;
         if (splitViewController.viewControllers.count == 0) return nil;
         menuContainer = [splitViewController.viewControllers objectAtIndex:0];
@@ -377,10 +394,6 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
                    (unsigned long)cachedUsers.count);
             [self relinkCachedPrivateChannelsAfterUserHydration];
 
-            // Ensure a READY that raced the late hydration cannot accidentally
-            // shrink the durable user cache. saveUsers: performs the archive on
-            // DCCacheManager's serial queue.
-            [cache saveUsers:[communicator loadedUsersSnapshot]];
         });
     });
 }
@@ -491,6 +504,7 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
         DBGLOG(@"[ColdStartPerf] Guild/channel cache restore: %.3fs",
                CFAbsoluteTimeGetCurrent() - guildCacheStart);
         if (cachedGuilds.count) {
+            CFAbsoluteTime setupStart = CFAbsoluteTimeGetCurrent();
             DCServerCommunicator.sharedInstance.guilds = [cachedGuilds mutableCopy];
             // Persist guild ordering/folder settings with user info.
             // Rebuild displayGuilds from those IDs instead of unarchiving a second
@@ -533,9 +547,16 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
                 DCServerCommunicator.sharedInstance.currentUserInfo = stub;
             }
 
+            CFTimeInterval identityTime = CFAbsoluteTimeGetCurrent() - setupStart;
+            CFAbsoluteTime graphStart = CFAbsoluteTimeGetCurrent();
+            CFTimeInterval iconTime = 0;
+            CFTimeInterval privateIconTime = 0;
+            NSUInteger privateIconCount = 0;
+            NSUInteger restoredChannelCount = 0;
             NSMutableDictionary *channels = [NSMutableDictionary dictionary];
             NSMutableDictionary *roles = [NSMutableDictionary dictionary];
             NSMutableDictionary *emojis = [NSMutableDictionary dictionary];
+            NSArray *defaultGuildIcons = [DCUser defaultAvatars];
             for (DCGuild *guild in cachedGuilds) {
                 for (NSString *roleID in guild.roles) {
                     id role = [guild.roles objectForKey:roleID];
@@ -553,17 +574,19 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
                 // menu paint already has a finished 48pt composite. Hash-backed
                 // guilds show this default only until SDWebImage hydrates the real
                 // icon below.
+                CFAbsoluteTime iconStart = CFAbsoluteTimeGetCurrent();
                 if (isPrivateGuild) {
                     guild.icon = [DCInterfaceStyle privateGuildIconImage];
                 } else if (guild.snowflake.length > 0) {
                     unsigned long long value = [guild.snowflake longLongValue];
                     NSUInteger selector = (NSUInteger)((value >> 22) % 6);
-                    NSArray *defaults = [DCUser defaultAvatars];
-                    if (selector < defaults.count)
-                        guild.icon = [defaults objectAtIndex:selector];
+                    if (selector < defaultGuildIcons.count)
+                        guild.icon = [defaultGuildIcons objectAtIndex:selector];
                 }
+                iconTime += CFAbsoluteTimeGetCurrent() - iconStart;
 
                 for (DCChannel *channel in guild.channels) {
+                    restoredChannelCount++;
                     channel.parentGuild = guild;
 
                     // lastMessageId, lastReadMessageId and mentionCount are already
@@ -591,7 +614,10 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
                             channel.type = DCChannelTypeGroupDM;
                         channel.recipients = [NSMutableArray array];
                         channel.users = [NSMutableArray array];
+                        CFAbsoluteTime privateIconStart = CFAbsoluteTimeGetCurrent();
                         channel.icon = DCDefaultPrivateChannelIcon(channel);
+                        privateIconTime += CFAbsoluteTimeGetCurrent() - privateIconStart;
+                        privateIconCount++;
                     }
 
                     if (channel.snowflake) {
@@ -607,7 +633,14 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
             DCServerCommunicator.sharedInstance.channels = channels;
             DCServerCommunicator.sharedInstance.loadedRoles = roles;
             DCServerCommunicator.sharedInstance.loadedEmojis = emojis;
+            NSLog(@"[GuildCachePerf] setup identity %.3fs graph %.3fs (guildIcons %.3fs, dmIcons %.3fs/%lu), guilds %lu channels %lu roles %lu emojis %lu",
+                  identityTime, CFAbsoluteTimeGetCurrent() - graphStart,
+                  iconTime, privateIconTime, (unsigned long)privateIconCount,
+                  (unsigned long)cachedGuilds.count,
+                  (unsigned long)restoredChannelCount, (unsigned long)roles.count,
+                  (unsigned long)emojis.count);
 
+            CFAbsoluteTime navigationStart = CFAbsoluteTimeGetCurrent();
             // Restore main-menu server selection first. If a saved chat exists,
             // restoreCachedChatNavigationStackIfPossible intentionally overrides
             // this with that chat's parent guild immediately afterward.
@@ -617,6 +650,9 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
             // visible presentation. The chat's viewWillAppear then restores its
             // DCChannelWindow normally, so there is no menu frame or push animation.
             [self restoreCachedChatNavigationStackIfPossible];
+            NSLog(@"[GuildCachePerf] navigation %.3fs, total post-decode %.3fs",
+                  CFAbsoluteTimeGetCurrent() - navigationStart,
+                  CFAbsoluteTimeGetCurrent() - setupStart);
 
             // If cold launch restored directly into a server chat, start rehydrating
             // that server's persisted banner hash immediately. SDWebImage will use

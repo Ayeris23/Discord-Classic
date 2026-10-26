@@ -42,9 +42,6 @@
 - (DCGuild *)guildWithSnowflake:(NSString *)guildID;
 - (DCGuild *)privateGuild;
 - (DCGuild *)reconcilePrivateChannelsFromReady:(NSArray *)privateChannels;
-- (NSMutableArray *)reconcileReadyGuilds:(NSArray *)guildJsons
-                           mergedMembers:(NSArray *)mergedMembers
-                            privateGuild:(DCGuild *)privateGuild;
 - (void)mergeGuildCreateSnapshot:(NSDictionary *)d intoGuild:(DCGuild *)guild;
 - (DCChannel *)channelInGuild:(DCGuild *)guild withSnowflake:(NSString *)channelID;
 - (void)ensureChannel:(DCChannel *)channel

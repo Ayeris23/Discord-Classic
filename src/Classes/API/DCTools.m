@@ -64,6 +64,12 @@ static BOOL DCNeedsLegacyUnicodeCompatibility(void) {
                                                        options:NSNumericSearch] == NSOrderedAscending);
 }
 
+static BOOL DCIsLegacyEmojiSymbol(unichar ch) {
+    return (ch >= 0x2300 && ch <= 0x23FF) ||
+           (ch >= 0x2600 && ch <= 0x27BF) ||
+           (ch >= 0x2B00 && ch <= 0x2BFF);
+}
+
 static BOOL DCIsModernEmojiScalar(uint32_t scalar) {
     /*
      * Covers the supplementary emoji/symbol blocks that matter to the old
@@ -219,15 +225,16 @@ static CTFontRef DCCreateInstalledAppleColorEmojiFont(CGFloat pointSize) {
     return CTFontCreateWithName(CFSTR("AppleColorEmoji"), pointSize, NULL);
 }
 
-static BOOL DCAttributedStringContainsModernEmojiCandidate(NSAttributedString *attributed) {
+static BOOL DCAttributedStringContainsEmojiCandidate(NSAttributedString *attributed) {
     NSString *plain = attributed.string;
     NSUInteger length = plain.length;
-    for (NSUInteger i = 0; i + 1 < length; i++) {
-        unichar high = [plain characterAtIndex:i];
-        if (high < 0xD800 || high > 0xDBFF) continue;
+    for (NSUInteger i = 0; i < length; i++) {
+        unichar ch = [plain characterAtIndex:i];
+        if (DCIsLegacyEmojiSymbol(ch)) return YES;
+        if (ch < 0xD800 || ch > 0xDBFF || i + 1 >= length) continue;
         unichar low = [plain characterAtIndex:i + 1];
         if (low < 0xDC00 || low > 0xDFFF) continue;
-        if (DCIsModernEmojiScalar(DCScalarFromSurrogatePair(high, low))) return YES;
+        if (DCIsModernEmojiScalar(DCScalarFromSurrogatePair(ch, low))) return YES;
         i++;
     }
     return NO;
@@ -236,7 +243,7 @@ static BOOL DCAttributedStringContainsModernEmojiCandidate(NSAttributedString *a
 static void DCApplyLegacyUnicodeCompatibility(DCMessage *message) {
     if (!DCNeedsLegacyUnicodeCompatibility() ||
         !message.attributedContent.length ||
-        !DCAttributedStringContainsModernEmojiCandidate(message.attributedContent)) {
+        !DCAttributedStringContainsEmojiCandidate(message.attributedContent)) {
         return;
     }
 
@@ -250,6 +257,19 @@ static void DCApplyLegacyUnicodeCompatibility(DCMessage *message) {
         if (cluster.location == NSNotFound || cluster.length == 0) {
             index++;
             continue;
+        }
+
+        // Older Foundation versions can report a variation selector as a
+        // separate cluster even when it modifies the preceding emoji scalar.
+        if (cluster.length == 2 && NSMaxRange(cluster) < plain.length &&
+            [plain characterAtIndex:NSMaxRange(cluster)] == 0xFE0F) {
+            unichar high = [plain characterAtIndex:cluster.location];
+            unichar low = [plain characterAtIndex:cluster.location + 1];
+            if (high >= 0xD800 && high <= 0xDBFF &&
+                low >= 0xDC00 && low <= 0xDFFF &&
+                DCIsModernEmojiScalar(DCScalarFromSurrogatePair(high, low))) {
+                cluster.length++;
+            }
         }
 
         NSUInteger cursor = cluster.location;
@@ -281,18 +301,44 @@ static void DCApplyLegacyUnicodeCompatibility(DCMessage *message) {
         }
 
         if (modernEmojiScalarCount == 0) {
+            // Older emoji symbols can resolve to a missing glyph in DTCoreText's
+            // default font even when an upgraded AppleColorEmoji has that glyph.
+            unichar base = [plain characterAtIndex:cluster.location];
+            if (DCIsLegacyEmojiSymbol(base)) {
+                id existingFont = [rendered attribute:(NSString *)kCTFontAttributeName
+                                              atIndex:cluster.location
+                                       effectiveRange:NULL];
+                CGFloat pointSize = existingFont ? CTFontGetSize((__bridge CTFontRef)existingFont) : 14.0f;
+                CTFontRef emojiFont = DCCreateInstalledAppleColorEmojiFont(pointSize > 0 ? pointSize : 14.0f);
+                if (emojiFont) {
+                    CGGlyph glyph = 0;
+                    if (CTFontGetGlyphsForCharacters(emojiFont, &base, &glyph, 1) && glyph) {
+                        [rendered addAttribute:(NSString *)kCTFontAttributeName
+                                         value:(__bridge id)emojiFont
+                                         range:cluster];
+                    }
+                    CFRelease(emojiFont);
+                }
+            }
             index = NSMaxRange(cluster);
             continue;
         }
 
         /*
-         * Only a single supplementary scalar is safe to hand directly to the
-         * old shaper.  Anything compositional gets a placeholder until the app
-         * has a sequence-aware emoji renderer.
+         * Only an independent supplementary emoji scalar, optionally followed
+         * by U+FE0F, is safe to route through the installed font. Other
+         * composite sequences still require a sequence-aware renderer.
          */
-        BOOL simpleSingleScalar = (scalarCount == 1 &&
-                                   modernEmojiScalarCount == 1 &&
-                                   cluster.length == 2);
+        // Emoji presentation selectors accompany older, independently supported
+        // emoji such as U+1F171. The old CoreText shaper can fail to
+        // render the full sequence even when the base emoji glyph exists.
+        BOOL hasEmojiPresentationSelector =
+            (scalarCount == 2 && modernEmojiScalarCount == 1 &&
+             cluster.length == 3 &&
+             [plain characterAtIndex:NSMaxRange(cluster) - 1] == 0xFE0F);
+        BOOL simpleSingleScalar = (modernEmojiScalarCount == 1 &&
+                                   ((scalarCount == 1 && cluster.length == 2) ||
+                                    hasEmojiPresentationSelector));
         BOOL characterSetSupportsScalar = simpleSingleScalar &&
             emojiCharacterSet &&
             CFCharacterSetIsLongCharacterMember(emojiCharacterSet,
@@ -322,11 +368,16 @@ static void DCApplyLegacyUnicodeCompatibility(DCMessage *message) {
             CTFontRef emojiFont = DCCreateInstalledAppleColorEmojiFont(pointSize);
             if (emojiFont) {
                 if (!characterSetSupportsScalar && cmapGlyph != 0) {
-                    NSString *baseString = [plain substringWithRange:cluster];
+                    NSRange glyphRange = NSMakeRange(cluster.location, 2);
+                    NSString *baseString = [plain substringWithRange:glyphRange];
                     CTGlyphInfoRef glyphInfo = CTGlyphInfoCreateWithGlyph((CGGlyph)cmapGlyph,
                                                                            emojiFont,
                                                                            (__bridge CFStringRef)baseString);
                     if (glyphInfo) {
+                        if (hasEmojiPresentationSelector) {
+                            [rendered deleteCharactersInRange:NSMakeRange(cluster.location + 2, 1)];
+                            cluster.length = 2;
+                        }
                         [rendered addAttribute:(NSString *)kCTFontAttributeName
                                          value:(__bridge id)emojiFont
                                          range:cluster];
@@ -345,6 +396,10 @@ static void DCApplyLegacyUnicodeCompatibility(DCMessage *message) {
                     }
                     /* Do not risk the old fallback path without the override. */
                 } else {
+                    if (hasEmojiPresentationSelector) {
+                        [rendered deleteCharactersInRange:NSMakeRange(cluster.location + 2, 1)];
+                        cluster.length = 2;
+                    }
                     [rendered addAttribute:(NSString *)kCTFontAttributeName
                                      value:(__bridge id)emojiFont
                                      range:cluster];
@@ -518,7 +573,26 @@ static NSUInteger DCImageMemoryCost(UIImage *image) {
            (NSUInteger)CGImageGetHeight(cgImage);
 }
 
+static NSString *DCPrettyTimestampForDate(NSDate *date) {
+    if (!date) return @"";
+
+    static NSDateFormatter *prettyDateFormatter = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        prettyDateFormatter = [NSDateFormatter new];
+        prettyDateFormatter.dateStyle = NSDateFormatterShortStyle;
+        prettyDateFormatter.timeStyle = NSDateFormatterShortStyle;
+        prettyDateFormatter.doesRelativeDateFormatting = YES;
+    });
+
+    return [prettyDateFormatter stringFromDate:date] ?: @"";
+}
+
 @implementation DCTools
+
++ (NSString *)prettyTimestampForDate:(NSDate *)date {
+    return DCPrettyTimestampForDate(date);
+}
 
 + (BOOL)isOriginalIPad {
     static BOOL isOriginalIPad = NO;
@@ -1121,12 +1195,121 @@ static void DCFillMissingUserFieldsFromJSON(DCUser *user, NSDictionary *jsonUser
     NSString *measurementMode = @"none";
 
     DCMessage *newMessage = DCMessage.new;
-    // The message-window cache persists this server payload verbatim and replays
-    // it through this same converter on cold restore. Keep rendering logic here
-    // as the single source of truth.
-    if ([jsonMessage isKindOfClass:[NSDictionary class]]) {
-        newMessage.sourceJSON = [NSDictionary dictionaryWithDictionary:jsonMessage];
+    // The message-window cache persists the server payload verbatim and replays
+    // it through this same converter on cold restore. Forwarded messages keep
+    // that wrapper payload while rendering the immutable message snapshot.
+    NSDictionary *sourceJSON = [jsonMessage isKindOfClass:[NSDictionary class]]
+        ? jsonMessage : nil;
+    if (sourceJSON) {
+        newMessage.sourceJSON = [NSDictionary dictionaryWithDictionary:sourceJSON];
     }
+
+    NSDictionary *forwardReference = nil;
+    NSDictionary *forwardSnapshot = nil;
+    NSString *forwardSourceTimestampRaw = nil;
+    id rawForwardReference = [sourceJSON objectForKey:@"message_reference"];
+    id rawForwardType = [rawForwardReference isKindOfClass:[NSDictionary class]]
+        ? [(NSDictionary *)rawForwardReference objectForKey:@"type"] : nil;
+    if ([rawForwardReference isKindOfClass:[NSDictionary class]] &&
+        [rawForwardType respondsToSelector:@selector(integerValue)] &&
+        [rawForwardType integerValue] == DCMessageReferenceTypeForward) {
+        forwardReference = rawForwardReference;
+
+        id rawSnapshots = [sourceJSON objectForKey:@"message_snapshots"];
+        if ([rawSnapshots isKindOfClass:[NSArray class]] &&
+            [(NSArray *)rawSnapshots count] > 0) {
+            id rawSnapshot = [(NSArray *)rawSnapshots objectAtIndex:0];
+            if ([rawSnapshot isKindOfClass:[NSDictionary class]]) {
+                id rawSnapshotMessage = [(NSDictionary *)rawSnapshot objectForKey:@"message"];
+                if ([rawSnapshotMessage isKindOfClass:[NSDictionary class]]) {
+                    forwardSnapshot = rawSnapshotMessage;
+                }
+            }
+        }
+    }
+
+    if (forwardSnapshot) {
+        id rawForwardTimestamp = [forwardSnapshot objectForKey:@"timestamp"];
+        if ([rawForwardTimestamp isKindOfClass:[NSString class]]) {
+            forwardSourceTimestampRaw = rawForwardTimestamp;
+        }
+
+        NSMutableDictionary *renderJSON =
+            [NSMutableDictionary dictionaryWithDictionary:sourceJSON];
+        [renderJSON addEntriesFromDictionary:forwardSnapshot];
+
+        // A forward is its own message for ownership, ordering, caching and
+        // navigation. Only the renderable content comes from the snapshot.
+        NSArray *wrapperKeys = @[
+            @"id", @"channel_id", @"guild_id", @"author", @"member",
+            @"timestamp", @"message_reference", @"message_snapshots"
+        ];
+        for (NSString *key in wrapperKeys) {
+            id value = [sourceJSON objectForKey:key];
+            if (value) {
+                [renderJSON setObject:value forKey:key];
+            } else {
+                [renderJSON removeObjectForKey:key];
+            }
+        }
+
+        // The outer content is an optional forwarding note. Keep it visible
+        // without introducing a second text renderer.
+        NSString *forwardNote = [[sourceJSON objectForKey:@"content"]
+            isKindOfClass:[NSString class]] ? [sourceJSON objectForKey:@"content"] : nil;
+        NSString *snapshotContent = [[forwardSnapshot objectForKey:@"content"]
+            isKindOfClass:[NSString class]] ? [forwardSnapshot objectForKey:@"content"] : nil;
+        if (forwardNote.length && snapshotContent.length) {
+            [renderJSON setObject:[NSString stringWithFormat:@"%@\n\n%@",
+                                   forwardNote, snapshotContent]
+                         forKey:@"content"];
+        } else if (forwardNote.length) {
+            [renderJSON setObject:forwardNote forKey:@"content"];
+        } else if (snapshotContent) {
+            [renderJSON setObject:snapshotContent forKey:@"content"];
+        }
+
+        // Snapshot type can describe the source message (including a reply),
+        // but the snapshot intentionally omits reply attribution. Render the
+        // forward as one self-contained chat message instead of fabricating a
+        // broken reply preview.
+        [renderJSON setObject:@(DCMessageTypeDefault) forKey:@"type"];
+        jsonMessage = renderJSON;
+
+        newMessage.isForwarded = YES;
+        id sourceMessageID = [forwardReference objectForKey:@"message_id"];
+        id sourceChannelID = [forwardReference objectForKey:@"channel_id"];
+        id sourceGuildID = [forwardReference objectForKey:@"guild_id"];
+        if ([sourceMessageID isKindOfClass:[NSString class]])
+            newMessage.forwardSourceMessageID = sourceMessageID;
+        if ([sourceChannelID isKindOfClass:[NSString class]])
+            newMessage.forwardSourceChannelID = sourceChannelID;
+        if ([sourceGuildID isKindOfClass:[NSString class]])
+            newMessage.forwardSourceGuildID = sourceGuildID;
+
+        // If READY already hydrated the source channel, bind that resolved
+        // context directly to the message. The communicator's channel map is
+        // rebuilt during refreshes; the forwarded block itself should retain
+        // the source it already resolved.
+        if (newMessage.forwardSourceChannelID.length) {
+            DCChannel *sourceChannel = [DCServerCommunicator.sharedInstance.channels
+                objectForKey:newMessage.forwardSourceChannelID];
+            DCGuild *sourceGuild = sourceChannel.parentGuild;
+            BOOL isPrivateSource = sourceChannel &&
+                (sourceChannel.type == DCChannelTypeDM ||
+                 sourceChannel.type == DCChannelTypeGroupDM);
+            if (sourceChannel && sourceGuild && sourceChannel.readable &&
+                !isPrivateSource) {
+                newMessage.forwardSourceChannel = sourceChannel;
+                newMessage.forwardSourceGuild = sourceGuild;
+                newMessage.forwardSourceResolutionComplete = YES;
+            } else if (isPrivateSource) {
+                newMessage.forwardSourceResolutionComplete = YES;
+                newMessage.forwardSourceUnavailable = YES;
+            }
+        }
+    }
+
     @autoreleasepool {
         NSDictionary *author = [jsonMessage objectForKey:@"author"];
         NSString *authorId   = author ? [author objectForKey:@"id"] : nil;
@@ -1153,7 +1336,8 @@ static void DCFillMissingUserFieldsFromJSON(DCUser *user, NSDictionary *jsonUser
         }
 
         // load referenced message if it exists
-        float contentWidth = UIScreen.mainScreen.bounds.size.width - 63;
+        float contentWidth = UIScreen.mainScreen.bounds.size.width - 63
+            - (newMessage.isForwarded ? 10.0f : 0.0f);
 
         id rawType = [jsonMessage objectForKey:@"type"];
 
@@ -1288,7 +1472,6 @@ static void DCFillMissingUserFieldsFromJSON(DCUser *user, NSDictionary *jsonUser
         static dispatch_once_t messageDateFormatOnceToken;
         static NSDateFormatter *fractionalDateFormatter;
         static NSDateFormatter *wholeSecondDateFormatter;
-        static NSDateFormatter *prettyDateFormatter;
         dispatch_once(&messageDateFormatOnceToken, ^{
             NSLocale *posix = [[NSLocale alloc] initWithLocaleIdentifier:@"en_US_POSIX"];
 
@@ -1300,10 +1483,6 @@ static void DCFillMissingUserFieldsFromJSON(DCUser *user, NSDictionary *jsonUser
             wholeSecondDateFormatter.locale = posix;
             wholeSecondDateFormatter.dateFormat = @"yyyy-MM-dd'T'HH:mm:ssZ";
 
-            prettyDateFormatter = [NSDateFormatter new];
-            prettyDateFormatter.dateStyle = NSDateFormatterShortStyle;
-            prettyDateFormatter.timeStyle = NSDateFormatterShortStyle;
-            prettyDateFormatter.doesRelativeDateFormatting = YES;
         });
 
         // Normalize timezone +HH:MM -> +HHMM for iOS 5 compatibility.
@@ -1318,6 +1497,24 @@ static void DCFillMissingUserFieldsFromJSON(DCUser *user, NSDictionary *jsonUser
         newMessage.timestamp = [fractionalDateFormatter dateFromString:rawTimestamp];
         if (newMessage.timestamp == nil && rawTimestamp.length) {
             newMessage.timestamp = [wholeSecondDateFormatter dateFromString:rawTimestamp];
+        }
+
+        if (newMessage.isForwarded && forwardSourceTimestampRaw.length) {
+            NSString *rawForwardTimestamp = forwardSourceTimestampRaw;
+            if (rawForwardTimestamp.length > 6) {
+                NSString *tzPart = [rawForwardTimestamp substringFromIndex:rawForwardTimestamp.length - 6];
+                if ([tzPart characterAtIndex:3] == ':') {
+                    rawForwardTimestamp = [rawForwardTimestamp
+                        stringByReplacingCharactersInRange:NSMakeRange(rawForwardTimestamp.length - 3, 1)
+                        withString:@""];
+                }
+            }
+            newMessage.forwardSourceTimestamp =
+                [fractionalDateFormatter dateFromString:rawForwardTimestamp];
+            if (!newMessage.forwardSourceTimestamp) {
+                newMessage.forwardSourceTimestamp =
+                    [wholeSecondDateFormatter dateFromString:rawForwardTimestamp];
+            }
         }
 
         id editedTimestampValue = [jsonMessage objectForKey:@"edited_timestamp"];
@@ -1339,9 +1536,7 @@ static void DCFillMissingUserFieldsFromJSON(DCUser *user, NSDictionary *jsonUser
             }
         }
 
-        newMessage.prettyTimestamp = newMessage.timestamp
-            ? [prettyDateFormatter stringFromDate:newMessage.timestamp]
-            : @"";
+        newMessage.prettyTimestamp = [DCTools prettyTimestampForDate:newMessage.timestamp];
 
         NSString *systemContent = DCSystemMessageDisplayContent(newMessage, jsonMessage);
         if (systemContent.length) {
@@ -1611,10 +1806,39 @@ static void DCFillMissingUserFieldsFromJSON(DCUser *user, NSDictionary *jsonUser
         NSArray *attachments = [jsonMessage objectForKey:@"attachments"];
         if (attachments) {
             for (NSDictionary *attachment in attachments) {
+                NSString *attachmentName = [[attachment objectForKey:@"filename"]
+                    isKindOfClass:[NSString class]] ? [attachment objectForKey:@"filename"] : nil;
+                id flagsValue = [attachment objectForKey:@"flags"];
+                BOOL spoilerFlag = [flagsValue respondsToSelector:@selector(unsignedIntegerValue)] &&
+                    (([flagsValue unsignedIntegerValue] & (1U << 3)) != 0);
+                BOOL attachmentSpoiler = [attachmentName hasPrefix:@"SPOILER_"] ||
+                    spoilerFlag || [[attachment objectForKey:@"is_spoiler"] isEqual:@YES];
+                NSString *attachmentIdentifier = [NSString stringWithFormat:@"%@",
+                    [attachment objectForKey:@"id"] ?: [attachment objectForKey:@"url"] ?: @""];
+                NSString *attachmentSpoilerKey = [NSString stringWithFormat:@"%@:%@:%@",
+                    messageChannelID ?: @"", newMessage.snowflake ?: @"", attachmentIdentifier];
+                NSString *attachmentPlaceholder = [[attachment objectForKey:@"placeholder"]
+                    isKindOfClass:[NSString class]] ? [attachment objectForKey:@"placeholder"] : nil;
                 id contentTypeValue = [attachment objectForKey:@"content_type"];
                 NSString *fileType = [contentTypeValue isKindOfClass:[NSString class]]
                     ? [(NSString *)contentTypeValue lowercaseString]
                     : nil;
+                if (!fileType.length) {
+                    NSString *extension = attachmentName.pathExtension.lowercaseString;
+                    if (!extension.length) {
+                        NSString *urlString = [[attachment objectForKey:@"url"]
+                            isKindOfClass:[NSString class]] ? [attachment objectForKey:@"url"] : nil;
+                        NSURL *attachmentURL = [NSURL URLWithString:urlString];
+                        extension = [[[attachmentURL path] pathExtension] lowercaseString];
+                    }
+                    if ([@[@"png", @"jpg", @"jpeg", @"gif", @"webp"] containsObject:extension]) {
+                        fileType = [@"image/" stringByAppendingString:extension];
+                    } else if ([extension isEqualToString:@"mov"]) {
+                        fileType = @"video/quicktime";
+                    } else if ([extension isEqualToString:@"mp4"]) {
+                        fileType = @"video/mp4";
+                    }
+                }
                 // Image Attachments
                 // Image attachments — includes PNG, JPG, WebP, and GIF.
                 // WebP files need format=png appended so iOS can decode them.
@@ -1682,11 +1906,17 @@ static void DCFillMissingUserFieldsFromJSON(DCUser *user, NSDictionary *jsonUser
                         gif.gifURL = DCRegisterChatMediaURL([NSURL URLWithString:attachmentURL], messageChannelID, newMessage.snowflake);
                         gif.thumbnailURL = DCRegisterChatMediaURL(urlString, messageChannelID, newMessage.snowflake);
                         gif.naturalSize = CGSizeMake(width, height);
+                        gif.spoiler = attachmentSpoiler;
+                        gif.spoilerKey = attachmentSpoilerKey;
+                        gif.spoilerPlaceholder = attachmentPlaceholder;
                         [newMessage.attachments addObject:gif];
                     } else {
                         UILazyImage *lazyImage = [UILazyImage new];
                         lazyImage.imageURL = DCRegisterChatMediaURL(attachmentNSURL, messageChannelID, newMessage.snowflake);
                         lazyImage.naturalSize = CGSizeMake(width, height);
+                        lazyImage.spoiler = attachmentSpoiler;
+                        lazyImage.spoilerKey = attachmentSpoilerKey;
+                        lazyImage.spoilerPlaceholder = attachmentPlaceholder;
                         [newMessage.attachments addObject:lazyImage];
                     }
 
@@ -1752,6 +1982,9 @@ static void DCFillMissingUserFieldsFromJSON(DCUser *user, NSDictionary *jsonUser
                         ? DCRegisterChatMediaURL([NSURL URLWithString:baseURL], messageChannelID, newMessage.snowflake)
                         : nil;
 
+                    video.spoiler = attachmentSpoiler;
+                    video.spoilerKey = attachmentSpoilerKey;
+                    video.spoilerPlaceholder = attachmentPlaceholder;
                     [newMessage.attachments addObject:video];
 
                     // Thumbnail pixels are resident only while the attachment is visible.
@@ -1778,8 +2011,14 @@ static void DCFillMissingUserFieldsFromJSON(DCUser *user, NSDictionary *jsonUser
                         filename = [filename stringByReplacingOccurrencesOfString:@"\r" withString:@" "];
                         filename = [filename stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
 
+                        if (attachmentSpoiler && [filename hasPrefix:@"SPOILER_"]) {
+                            filename = [filename substringFromIndex:8];
+                        }
                         NSString *fileTag = [NSString stringWithFormat:@"[📄 %@](%@)",
                             filename, registeredAttachmentURL.absoluteString];
+                        if (attachmentSpoiler) {
+                            fileTag = [NSString stringWithFormat:@"||%@||", fileTag];
+                        }
                         newMessage.content = newMessage.content.length
                             ? [newMessage.content stringByAppendingFormat:@"\n%@", fileTag]
                             : fileTag;
@@ -1856,6 +2095,12 @@ static void DCFillMissingUserFieldsFromJSON(DCUser *user, NSDictionary *jsonUser
                     newMessage.pingingUser = true;
                 }
             }
+        }
+
+        if (newMessage.isForwarded) {
+            // Mentions inside an immutable snapshot are presentation only and
+            // must not make the newly forwarded wrapper behave like a live ping.
+            newMessage.pingingUser = NO;
         }
 
         perfMentionsEnd = CFAbsoluteTimeGetCurrent();
@@ -1988,6 +2233,9 @@ static void DCFillMissingUserFieldsFromJSON(DCUser *user, NSDictionary *jsonUser
                     + (newMessage.referencedMessage != nil ? 16 : 0),
                 minHeight
             );
+            if (newMessage.isForwarded) {
+                newMessage.contentHeight += 18.0f;
+            }
         }
         newMessage.authorNameWidth = 60 + authorNameSize.width;
         perfTailEnd = CFAbsoluteTimeGetCurrent();
@@ -2385,7 +2633,7 @@ static void DCFillMissingUserFieldsFromJSON(DCUser *user, NSDictionary *jsonUser
         static NSRegularExpression *regex;
         dispatch_once(&onceToken, ^{
             regex = [NSRegularExpression
-                regularExpressionWithPattern:@":(\\w+):"
+                regularExpressionWithPattern:@"(?<!<)(?<!<a):(\\w+):"
                                      options:NSRegularExpressionCaseInsensitive
                                        error:NULL];
         });

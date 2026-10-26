@@ -46,8 +46,17 @@
 @property (assign, nonatomic) BOOL unread;
 // Number of pings a guild has
 @property (nonatomic, readonly) NSInteger mentionCount;
-// Members of the guild for display (can contain roles)
+// Legacy dense member list retained for compatibility with older callers.
 @property (strong, nonatomic) NSMutableArray* members;
+// Sparse Discord member-list stream keyed by absolute list index.
+@property (strong, nonatomic) NSMutableDictionary *memberListItems;
+// Invalidated stream positions may remain visible until a replacement SYNC.
+@property (strong, nonatomic) NSMutableIndexSet *memberListStaleIndexes;
+// Ordered group metadata from GUILD_MEMBER_LIST_UPDATE.
+@property (strong, nonatomic) NSArray *memberListGroups;
+// Discord list identifier and the channel whose permissions produced it.
+@property (strong, nonatomic) NSString *memberListID;
+@property (strong, nonatomic) NSString *memberListChannelID;
 // Roles in the guild
 @property (strong, nonatomic) NSMutableDictionary* roles;
 // Array of the current user's roles in the guild

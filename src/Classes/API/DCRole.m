@@ -1,4 +1,5 @@
 #import "DCRole.h"
+#import "DCCacheManager.h"
 
 @implementation DCRole
 
@@ -35,6 +36,7 @@
 }
 
 - (id)initWithCoder:(NSCoder *)aDecoder {
+    CFAbsoluteTime decodeStart = DCCacheGuildProfileBegin();
     self = [super init];
     if (self) {
         self.snowflake = [aDecoder decodeObjectForKey:@"snowflake"];
@@ -49,6 +51,7 @@
         self.mentionable = [aDecoder decodeBoolForKey:@"mentionable"];
         self.flags = [aDecoder decodeIntegerForKey:@"flags"];
     }
+    DCCacheGuildProfileEnd(DCCacheGuildObjectTypeRole, decodeStart);
     return self;
 }
 @end

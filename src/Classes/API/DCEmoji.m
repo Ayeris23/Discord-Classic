@@ -1,4 +1,5 @@
 #import "DCEmoji.h"
+#import "DCCacheManager.h"
 
 @implementation DCEmoji
 
@@ -12,12 +13,14 @@
 }
 
 - (id)initWithCoder:(NSCoder *)aDecoder {
+    CFAbsoluteTime decodeStart = DCCacheGuildProfileBegin();
     self = [super init];
     if (self) {
         self.name = [aDecoder decodeObjectForKey:@"name"];
         self.snowflake = [aDecoder decodeObjectForKey:@"snowflake"];
         self.animated = [aDecoder decodeBoolForKey:@"animated"];
     }
+    DCCacheGuildProfileEnd(DCCacheGuildObjectTypeEmoji, decodeStart);
     return self;
 }
 

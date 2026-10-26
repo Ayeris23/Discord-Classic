@@ -16,6 +16,27 @@
 @class DCUserInfo;
 @class DCEmoji;
 
+// Temporary decode profiler for the synchronous guild-cache restore.
+typedef NS_ENUM(NSUInteger, DCCacheGuildObjectType) {
+    DCCacheGuildObjectTypeGuild,
+    DCCacheGuildObjectTypeChannel,
+    DCCacheGuildObjectTypeRole,
+    DCCacheGuildObjectTypeEmoji
+};
+
+typedef NS_ENUM(NSUInteger, DCCacheGuildDecodeStep) {
+    DCCacheGuildDecodeStepChannels,
+    DCCacheGuildDecodeStepRoles,
+    DCCacheGuildDecodeStepEmojis,
+    DCCacheGuildDecodeStepOverwrites
+};
+
+FOUNDATION_EXPORT CFAbsoluteTime DCCacheGuildProfileBegin(void);
+FOUNDATION_EXPORT void DCCacheGuildProfileEnd(DCCacheGuildObjectType type,
+                                               CFAbsoluteTime start);
+FOUNDATION_EXPORT void DCCacheGuildProfileStep(DCCacheGuildDecodeStep step,
+                                                CFAbsoluteTime start);
+
 @interface DCMessageCacheEntry : NSObject
 @property (nonatomic) CGFloat cellHeight;
 @property (nonatomic) CGFloat contentHeight;

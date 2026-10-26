@@ -22,7 +22,7 @@
 #ifdef DEBUG
 #define DBGLOG(...) NSLog(__VA_ARGS__)
 #else
-#define DBGLOG(...) do { } while (0)
+#define DBGLOG(...) do { if (0) NSLog(__VA_ARGS__); } while (0)
 #endif
 
 #define TICK(var)   NSDate *tick_##var = [NSDate date]
@@ -100,6 +100,7 @@ typedef NSString DCSnowflake;
 + (NSDictionary *)parseJSON:(NSString *)json;
 + (void)alert:(NSString *)title withMessage:(NSString *)message;
 + (NSData *)checkData:(NSData *)response withError:(NSError *)error;
++ (NSString *)prettyTimestampForDate:(NSDate *)date;
 + (BOOL)isOriginalIPad;
 
 + (DCMessage *)convertJsonMessage:(NSDictionary *)jsonMessage;

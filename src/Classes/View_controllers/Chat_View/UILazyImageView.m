@@ -1,5 +1,6 @@
 #include "UILazyImageView.h"
 #import "DCChatMediaManager.h"
+#import "DCChatSpoilerView.h"
 #import "DCServerCommunicator.h"
 
 @interface UILazyImageView ()
@@ -12,6 +13,7 @@
 @end
 
 @implementation UILazyImageView
+@synthesize spoilerView = _spoilerView;
 
 - (void)dc_commonInit {
     if (self.loadingSpinner) return;
@@ -54,6 +56,7 @@
     self.loadingSpinner.center =
         CGPointMake(CGRectGetMidX(self.bounds), CGRectGetMidY(self.bounds));
     [self bringSubviewToFront:self.loadingSpinner];
+    if (self.spoilerView) [self bringSubviewToFront:self.spoilerView];
 }
 
 - (void)dc_updateLoadingState {
@@ -69,6 +72,17 @@
         [self.loadingSpinner startAnimating];
     } else {
         [self.loadingSpinner stopAnimating];
+    }
+}
+
+- (void)setSpoilerView:(DCChatSpoilerView *)spoilerView {
+    if (_spoilerView == spoilerView) return;
+    [_spoilerView removeFromSuperview];
+    _spoilerView = spoilerView;
+    if (spoilerView) {
+        spoilerView.frame = self.bounds;
+        [self addSubview:spoilerView];
+        [self bringSubviewToFront:spoilerView];
     }
 }
 

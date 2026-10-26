@@ -15,6 +15,8 @@
 @interface DCMessageStore ()
 @property (nonatomic, strong) NSMutableDictionary *channelWindows; // channelID -> DCChannelWindow
 @property (nonatomic, strong) NSMutableDictionary *checkpointGenerations; // channelID -> NSNumber
+@property (nonatomic, strong) NSMutableSet *openedChannels;
+
 @end
 
 @implementation DCMessageDelta
@@ -94,6 +96,7 @@ static NSArray *DCNormalizeFetchedMessages(NSArray *messages,
     if (self) {
         _channelWindows = [NSMutableDictionary dictionary];
         _checkpointGenerations = [NSMutableDictionary dictionary];
+        _openedChannels = [NSMutableSet set];
     }
     return self;
 }
@@ -114,6 +117,14 @@ static NSArray *DCNormalizeFetchedMessages(NSArray *messages,
 
     NSArray *newer = [channel getMessages:limit afterMessage:message];
     return DCNormalizeFetchedMessages(newer, channel.snowflake, message, YES);
+}
+
+- (NSArray *)loadAroundForChannel:(DCChannel *)channel
+                        messageID:(NSString *)messageID
+                            limit:(int)limit {
+    if (!channel || !messageID.length) return nil;
+    NSArray *fetched = [channel getMessages:limit aroundMessageID:messageID];
+    return DCNormalizeFetchedMessages(fetched, channel.snowflake, nil, NO);
 }
 
 - (DCMessageDelta *)reconcileForwardForChannel:(DCChannel *)channel
@@ -147,6 +158,18 @@ static NSArray *DCNormalizeFetchedMessages(NSArray *messages,
         delta.candidateMessages = fetched;
     }
     return delta;
+}
+
+- (BOOL)hasOpenedChannelThisSession:(NSString *)channelID {
+    return channelID.length && [self.openedChannels containsObject:channelID];
+}
+
+- (void)markChannelOpenedThisSession:(NSString *)channelID {
+    if (channelID.length) [self.openedChannels addObject:channelID];
+}
+
+- (void)forgetChannelOpenedThisSession:(NSString *)channelID {
+    if (channelID.length) [self.openedChannels removeObject:channelID];
 }
 
 - (DCChannelWindow *)windowForChannel:(NSString *)channelSnowflake {
@@ -246,6 +269,7 @@ static NSArray *DCNormalizeFetchedMessages(NSArray *messages,
     @synchronized (self) {
         [self.channelWindows removeAllObjects];
         [self.checkpointGenerations removeAllObjects];
+        [self.openedChannels removeAllObjects];
     }
     [[DCCacheManager sharedInstance] invalidateAllMessageWindows];
 }

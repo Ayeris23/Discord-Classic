@@ -257,6 +257,7 @@ typedef NS_ENUM(uint64_t, DCGatewayCapabilities) {
 @property (strong, nonatomic) DCChannel* selectedChannel;
 
 @property (assign, nonatomic) BOOL didAuthenticate;
+@property (assign, nonatomic) BOOL readyReadStateAvailable;
 
 @property (nonatomic) dispatch_queue_t accessQueue;
 
@@ -273,6 +274,9 @@ typedef NS_ENUM(uint64_t, DCGatewayCapabilities) {
 - (void)sendHeartbeat:(NSTimer*)timer;
 - (void)sendJSON:(NSDictionary*)dictionary;
 - (void)sendGuildSubscriptionWithGuildId:(NSString*)guildId channelId:(NSString*)channelId;
+- (void)sendGuildMemberListSubscriptionWithGuildId:(NSString *)guildId
+                                           channelId:(NSString *)channelId
+                                              ranges:(NSArray *)ranges;
 // Materialize a guild banner through the shared SDWebImage-backed loader.
 - (void)loadGuildIconHash:(NSString *)iconHash forGuild:(DCGuild *)guild;
 - (void)loadGuildBannerHash:(NSString *)bannerHash forGuild:(DCGuild *)guild;

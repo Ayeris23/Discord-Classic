@@ -7,12 +7,21 @@
 //
 
 #import "DCGuild.h"
+#import "DCCacheManager.h"
 #import "DCChannel.h"
 #import "DCContentManager.h"
 
 @implementation DCGuild
 
 @synthesize icon = _icon;
+
+- (id)init {
+    self = [super init];
+    if (self) {
+        self.members = [NSMutableArray array];
+    }
+    return self;
+}
 
 - (void)setIcon:(UIImage *)icon {
     if (_icon == icon) return;
@@ -81,6 +90,7 @@ refreshMarker:
 }
 
 - (id)initWithCoder:(NSCoder *)aDecoder {
+    CFAbsoluteTime decodeStart = DCCacheGuildProfileBegin();
     self = [super init];
     if (self) {
         self.snowflake   = [aDecoder decodeObjectForKey:@"snowflake"];
@@ -88,10 +98,25 @@ refreshMarker:
         self.ownerID     = [aDecoder decodeObjectForKey:@"ownerID"];
         self.memberCount = [aDecoder decodeIntegerForKey:@"memberCount"];
         self.muted       = [aDecoder decodeBoolForKey:@"muted"];
+        CFAbsoluteTime stepStart = DCCacheGuildProfileBegin();
         self.channels    = [aDecoder decodeObjectForKey:@"channels"];
-        self.roles       = [[aDecoder decodeObjectForKey:@"roles"] mutableCopy];
-        self.userRoles   = [[aDecoder decodeObjectForKey:@"userRoles"] mutableCopy];
-        self.emojis      = [[aDecoder decodeObjectForKey:@"emojis"] mutableCopy];
+        DCCacheGuildProfileStep(DCCacheGuildDecodeStepChannels, stepStart);
+
+        stepStart = DCCacheGuildProfileBegin();
+        id cachedRoles = [aDecoder decodeObjectForKey:@"roles"];
+        self.roles = [cachedRoles isKindOfClass:[NSMutableDictionary class]]
+            ? cachedRoles : [cachedRoles mutableCopy];
+        DCCacheGuildProfileStep(DCCacheGuildDecodeStepRoles, stepStart);
+
+        id cachedUserRoles = [aDecoder decodeObjectForKey:@"userRoles"];
+        self.userRoles = [cachedUserRoles isKindOfClass:[NSMutableArray class]]
+            ? cachedUserRoles : [cachedUserRoles mutableCopy];
+
+        stepStart = DCCacheGuildProfileBegin();
+        id cachedEmojis = [aDecoder decodeObjectForKey:@"emojis"];
+        self.emojis = [cachedEmojis isKindOfClass:[NSMutableDictionary class]]
+            ? cachedEmojis : [cachedEmojis mutableCopy];
+        DCCacheGuildProfileStep(DCCacheGuildDecodeStepEmojis, stepStart);
         self.iconID    = [aDecoder decodeObjectForKey:@"iconID"];
         self.iconURL   = [aDecoder decodeObjectForKey:@"iconURL"];
         self.bannerID  = [aDecoder decodeObjectForKey:@"bannerID"];
@@ -115,6 +140,7 @@ refreshMarker:
         if (!self.userRoles) self.userRoles = [NSMutableArray array];
         if (!self.emojis) self.emojis = [NSMutableDictionary dictionary];
     }
+    DCCacheGuildProfileEnd(DCCacheGuildObjectTypeGuild, decodeStart);
     return self;
 }
 

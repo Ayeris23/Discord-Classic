@@ -9,6 +9,7 @@
 #import "DCChatGifAttachment.h"
 #import "DCResourceManager.h"
 #import "DCChatMediaManager.h"
+#import "DCChatSpoilerView.h"
 #import <ImageIO/ImageIO.h>
 #import <MediaPlayer/MediaPlayer.h>
 #import <SDWebImage/SDWebImageDownloader.h>
@@ -271,6 +272,7 @@ static UIImage *DCGifCreateBudgetedAnimation(NSData *data,
     [self bringSubviewToFront:self.playbackOverlay];
     [self bringSubviewToFront:self.playbackSpinner];
     [self bringSubviewToFront:self.gifBadge];
+    if (self.spoilerView) [self bringSubviewToFront:self.spoilerView];
 }
 
 - (void)setImage:(UIImage *)image {

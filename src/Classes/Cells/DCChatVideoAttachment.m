@@ -9,6 +9,7 @@
 #import "DCInterfaceStyle.h"
 #import "DCChatVideoAttachment.h"
 #import "DCChatMediaManager.h"
+#import "DCChatSpoilerView.h"
 #import "DCServerCommunicator.h"
 
 @interface DCChatVideoAttachment ()
@@ -20,6 +21,7 @@
 @end
 
 @implementation DCChatVideoAttachment
+@synthesize spoilerView = _spoilerView;
 
 - (void)dc_applyContainerConfiguration {
     self.backgroundColor = [UIColor blackColor];
@@ -207,6 +209,17 @@
     [self dc_buildDisplayHierarchyIfNeeded];
 }
 
+- (void)setSpoilerView:(DCChatSpoilerView *)spoilerView {
+    if (_spoilerView == spoilerView) return;
+    [_spoilerView removeFromSuperview];
+    _spoilerView = spoilerView;
+    if (spoilerView) {
+        spoilerView.frame = self.bounds;
+        [self addSubview:spoilerView];
+        [self bringSubviewToFront:spoilerView];
+    }
+}
+
 - (void)setThumbnailImage:(UIImage *)thumbnailImage {
     _thumbnailImage = thumbnailImage;
     if (self.thumbnail) {
@@ -245,6 +258,7 @@
     [self bringSubviewToFront:self.playButton];
     [self bringSubviewToFront:self.loadingSpinner];
     [self bringSubviewToFront:self.videoWarning];
+    if (self.spoilerView) [self bringSubviewToFront:self.spoilerView];
     [self dc_startThumbnailLoadIfNeededAllowLoading:allowLoading];
 }
 

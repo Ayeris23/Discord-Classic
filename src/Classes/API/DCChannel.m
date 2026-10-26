@@ -7,8 +7,11 @@
 //
 
 #import "DCChannel.h"
+#import "DCCacheManager.h"
 #include <objc/NSObjCRuntime.h>
 #include <CoreFoundation/CFBase.h>
+#include <stdint.h>
+#include <string.h>
 #include <Foundation/Foundation.h>
 #include "DCChatViewController.h"
 #include "DCMessage.h"
@@ -150,6 +153,9 @@ totalBytesExpectedToWrite:(NSInteger)totalBytesExpectedToWrite {
 @interface DCChannel ()
 
 @property NSURLConnection *connection;
+- (NSArray *)getMessages:(int)numberOfMessages
+                cursorID:(NSString *)cursorID
+               parameter:(NSString *)parameter;
 
 @end
 
@@ -952,8 +958,106 @@ static dispatch_queue_t channel_send_queue;
     });
 }
 
+- (void)updateMuteState:(BOOL)muted duration:(NSInteger)durationSeconds {
+    if (self.snowflake.length == 0) return;
+
+    DCServerCommunicator *communicator = DCServerCommunicator.sharedInstance;
+    NSString *guildID = self.parentGuild.snowflake.length > 0
+        ? self.parentGuild.snowflake : @"@me";
+
+    NSMutableDictionary *channelOverride = [NSMutableDictionary dictionary];
+    [channelOverride setObject:[NSNumber numberWithBool:muted] forKey:@"muted"];
+
+    if (muted) {
+        NSMutableDictionary *muteConfig = [NSMutableDictionary dictionary];
+        [muteConfig setObject:[NSNumber numberWithInteger:durationSeconds]
+                       forKey:@"selected_time_window"];
+
+        if (durationSeconds < 0) {
+            [muteConfig setObject:[NSNull null] forKey:@"end_time"];
+        } else {
+            NSDate *endDate = [NSDate dateWithTimeIntervalSinceNow:(NSTimeInterval)durationSeconds];
+            NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+            formatter.locale = [[NSLocale alloc] initWithLocaleIdentifier:@"en_US_POSIX"];
+            formatter.timeZone = [NSTimeZone timeZoneForSecondsFromGMT:0];
+            formatter.dateFormat = @"yyyy-MM-dd'T'HH:mm:ss.SSS'Z'";
+            NSString *endTime = [formatter stringFromDate:endDate];
+            if (endTime.length > 0) [muteConfig setObject:endTime forKey:@"end_time"];
+        }
+        [channelOverride setObject:muteConfig forKey:@"mute_config"];
+    } else {
+        [channelOverride setObject:[NSNull null] forKey:@"mute_config"];
+    }
+
+    NSDictionary *body = [NSDictionary dictionaryWithObject:
+        [NSDictionary dictionaryWithObject:channelOverride forKey:self.snowflake]
+                                                  forKey:@"channel_overrides"];
+    NSError *jsonError = nil;
+    NSData *bodyData = [NSJSONSerialization dataWithJSONObject:body options:0 error:&jsonError];
+    if (!bodyData || jsonError) return;
+
+    BOOL previousMuted = self.muted;
+    self.muted = muted;
+    [communicator.userChannelSettings setObject:[NSNumber numberWithBool:muted]
+                                         forKey:self.snowflake];
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [NSNotificationCenter.defaultCenter
+            postNotificationName:@"RELOAD CHANNEL LIST"
+                          object:self
+                        userInfo:@{ @"channelId" : self.snowflake }];
+    });
+
+    dispatch_async([self get_channel_event_queue], ^{
+        NSString *path = [NSString stringWithFormat:@"/users/@me/guilds/%@/settings", guildID];
+        NSMutableURLRequest *urlRequest = [DCServerCommunicator
+            requestWithPath:path token:communicator.token];
+        [urlRequest setValue:@"no-store" forHTTPHeaderField:@"Cache-Control"];
+        [urlRequest setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+        [urlRequest setHTTPMethod:@"PATCH"];
+        [urlRequest setHTTPBody:bodyData];
+
+        NSError *error = nil;
+        NSHTTPURLResponse *response = nil;
+        [NSURLConnection sendSynchronousRequest:urlRequest
+                              returningResponse:&response
+                                          error:&error];
+
+        NSInteger statusCode = response ? response.statusCode : 0;
+        if (error || statusCode < 200 || statusCode >= 300) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                self.muted = previousMuted;
+                [communicator.userChannelSettings
+                    setObject:[NSNumber numberWithBool:previousMuted]
+                       forKey:self.snowflake];
+                [NSNotificationCenter.defaultCenter
+                    postNotificationName:@"RELOAD CHANNEL LIST"
+                                  object:self
+                                userInfo:@{ @"channelId" : self.snowflake }];
+            });
+        }
+    });
+}
+
+
 - (NSArray *)getMessages:(int)numberOfMessages
            beforeMessage:(DCMessage *)message {
+    return [self getMessages:numberOfMessages
+                  cursorID:message.snowflake
+                 parameter:@"before"];
+}
+
+- (NSArray *)getMessages:(int)numberOfMessages
+         aroundMessageID:(NSString *)messageID {
+    if (!messageID.length) return nil;
+    return [self getMessages:numberOfMessages
+                  cursorID:messageID
+                 parameter:@"around"];
+}
+
+- (NSArray *)getMessages:(int)numberOfMessages
+                cursorID:(NSString *)cursorID
+               parameter:(NSString *)parameter {
     NSMutableArray *messages = NSMutableArray.new;
     NSData *response         = nil;
     // Generate URL from args
@@ -963,11 +1067,11 @@ static dispatch_queue_t channel_send_queue;
     if (numberOfMessages) {
         [path appendString:[NSString stringWithFormat:@"limit=%d", numberOfMessages]];
     }
-    if (numberOfMessages && message) {
+    if (numberOfMessages && cursorID.length) {
         [path appendString:@"&"];
     }
-    if (message) {
-        [path appendString:[NSString stringWithFormat:@"before=%@", message.snowflake]];
+    if (cursorID.length) {
+        [path appendFormat:@"%@=%@", parameter, cursorID];
     }
 
     NSMutableURLRequest *urlRequest = [DCServerCommunicator
@@ -1061,8 +1165,10 @@ static dispatch_queue_t channel_send_queue;
         return messages;
     }
 
-    [DCTools alert:@"No messages!"
-        withMessage:@"No further messages could be found"];
+    if ([parameter isEqualToString:@"before"]) {
+        [DCTools alert:@"No messages!"
+            withMessage:@"No further messages could be found"];
+    }
 
     return nil;
 }
@@ -1299,6 +1405,110 @@ static dispatch_queue_t channel_send_queue;
     return messages.count > 0 ? messages : nil;
 }
 
+// Fixed-width cache representation of Discord's permission-overwrite entries.
+// Runtime permissionOverwrites remains an NSArray of API-shaped dictionaries.
+// Each record stores type (1 byte), id, allow and deny (8 bytes each).
+static NSUInteger DCCompactOverwritesDecodedChannels = 0;
+static NSUInteger DCCompactOverwritesDecodedEntries = 0;
+static NSUInteger DCCompactOverwritesDecodedBytes = 0;
+
+static BOOL DCParseCacheUnsigned64(id value, uint64_t *number) {
+    if (![value isKindOfClass:[NSString class]]) return NO;
+    const char *digits = [(NSString *)value UTF8String];
+    if (!digits || !*digits || (digits[0] == '0' && digits[1] != '\0')) return NO;
+    uint64_t result = 0;
+    for (const unsigned char *p = (const unsigned char *)digits; *p; ++p) {
+        if (*p < '0' || *p > '9') return NO;
+        uint64_t digit = *p - '0';
+        if (result > (UINT64_MAX - digit) / 10) return NO;
+        result = result * 10 + digit;
+    }
+    *number = result;
+    return YES;
+}
+
+static void DCWriteCacheUInt64(uint8_t *bytes, uint64_t value) {
+    for (NSUInteger i = 0; i < 8; ++i) {
+        bytes[i] = (uint8_t)(value & 0xff);
+        value >>= 8;
+    }
+}
+
+static uint64_t DCReadCacheUInt64(const uint8_t *bytes) {
+    uint64_t value = 0;
+    for (NSInteger i = 7; i >= 0; --i) value = (value << 8) | bytes[i];
+    return value;
+}
+
+static NSData *DCPackChannelOverwrites(NSArray *overwrites) {
+    if (!overwrites.count) return nil;
+    NSMutableData *packed = [NSMutableData dataWithBytes:"DCOW\x01" length:5];
+    for (id object in overwrites) {
+        if (![object isKindOfClass:[NSDictionary class]]) return nil;
+        NSDictionary *entry = (NSDictionary *)object;
+        // Preserve any unknown or nonstandard payload using legacy NSCoding.
+        if (entry.count != 4) return nil;
+        id typeValue = [entry objectForKey:@"type"];
+        if (![typeValue isKindOfClass:[NSNumber class]]) return nil;
+        NSInteger type = [typeValue integerValue];
+        if (type != 0 && type != 1) return nil;
+        uint64_t identifier = 0, allow = 0, deny = 0;
+        if (!DCParseCacheUnsigned64([entry objectForKey:@"id"], &identifier) ||
+            !DCParseCacheUnsigned64([entry objectForKey:@"allow"], &allow) ||
+            !DCParseCacheUnsigned64([entry objectForKey:@"deny"], &deny)) return nil;
+        uint8_t bytes[25];
+        bytes[0] = (uint8_t)type;
+        DCWriteCacheUInt64(bytes + 1, identifier);
+        DCWriteCacheUInt64(bytes + 9, allow);
+        DCWriteCacheUInt64(bytes + 17, deny);
+        [packed appendBytes:bytes length:sizeof(bytes)];
+    }
+    return packed;
+}
+
+static NSArray *DCUnpackChannelOverwrites(NSData *data) {
+    const NSUInteger headerSize = 5;
+    const NSUInteger recordSize = 25;
+    NSUInteger length = data.length;
+    if (length < headerSize || (length - headerSize) % recordSize != 0 ||
+        (length - headerSize) / recordSize > 100000) return nil;
+    const uint8_t *bytes = (const uint8_t *)data.bytes;
+    if (memcmp(bytes, "DCOW\x01", headerSize) != 0) return nil;
+    NSUInteger count = (length - headerSize) / recordSize;
+    NSMutableArray *overwrites = [NSMutableArray arrayWithCapacity:count];
+    for (NSUInteger i = 0; i < count; ++i) {
+        const uint8_t *record = bytes + headerSize + i * recordSize;
+        if (record[0] != 0 && record[0] != 1) return nil;
+        NSString *identifier = [NSString stringWithFormat:@"%llu",
+                                (unsigned long long)DCReadCacheUInt64(record + 1)];
+        NSString *allow = [NSString stringWithFormat:@"%llu",
+                           (unsigned long long)DCReadCacheUInt64(record + 9)];
+        NSString *deny = [NSString stringWithFormat:@"%llu",
+                          (unsigned long long)DCReadCacheUInt64(record + 17)];
+        [overwrites addObject:[NSDictionary dictionaryWithObjectsAndKeys:
+                               identifier, @"id", allow, @"allow", deny, @"deny",
+                               [NSNumber numberWithUnsignedChar:record[0]], @"type", nil]];
+    }
+    ++DCCompactOverwritesDecodedChannels;
+    DCCompactOverwritesDecodedEntries += count;
+    DCCompactOverwritesDecodedBytes += length;
+    return overwrites;
+}
+
++ (void)resetCompactOverwriteCacheStats {
+    DCCompactOverwritesDecodedChannels = 0;
+    DCCompactOverwritesDecodedEntries = 0;
+    DCCompactOverwritesDecodedBytes = 0;
+}
+
++ (void)getCompactOverwriteCacheChannels:(NSUInteger *)channels
+                                 entries:(NSUInteger *)entries
+                                  bytes:(NSUInteger *)bytes {
+    if (channels) *channels = DCCompactOverwritesDecodedChannels;
+    if (entries) *entries = DCCompactOverwritesDecodedEntries;
+    if (bytes) *bytes = DCCompactOverwritesDecodedBytes;
+}
+
 #pragma mark - NSCoding
 
 - (void)encodeWithCoder:(NSCoder *)aCoder {
@@ -1311,7 +1521,14 @@ static dispatch_queue_t channel_send_queue;
     [aCoder encodeBool:self.muted               forKey:@"muted"];
     [aCoder encodeBool:self.readable            forKey:@"readable"];
     [aCoder encodeBool:self.writeable           forKey:@"writeable"];
-    [aCoder encodeObject:self.permissionOverwrites forKey:@"permissionOverwrites"];
+    if (self.permissionOverwrites.count) {
+        NSData *compact = DCPackChannelOverwrites(self.permissionOverwrites);
+        if (compact) {
+            [aCoder encodeObject:compact forKey:@"permissionOverwritesCompact"];
+        } else {
+            [aCoder encodeObject:self.permissionOverwrites forKey:@"permissionOverwrites"];
+        }
+    }
     [aCoder encodeInteger:self.type             forKey:@"type"];
     [aCoder encodeInteger:self.position         forKey:@"position"];
     [aCoder encodeObject:self.iconID            forKey:@"iconID"];
@@ -1348,6 +1565,7 @@ static dispatch_queue_t channel_send_queue;
 }
 
 - (id)initWithCoder:(NSCoder *)aDecoder {
+    CFAbsoluteTime decodeStart = DCCacheGuildProfileBegin();
     self = [super init];
     if (self) {
         self.snowflake         = [aDecoder decodeObjectForKey:@"snowflake"];
@@ -1362,19 +1580,36 @@ static dispatch_queue_t channel_send_queue;
             ? [aDecoder decodeBoolForKey:@"readable"] : YES;
         self.writeable         = [aDecoder containsValueForKey:@"writeable"]
             ? [aDecoder decodeBoolForKey:@"writeable"] : YES;
-        id decodedOverwrites   = [aDecoder decodeObjectForKey:@"permissionOverwrites"];
-        self.permissionOverwrites = [decodedOverwrites isKindOfClass:[NSArray class]]
-            ? decodedOverwrites : [NSArray array];
+        CFAbsoluteTime overwritesStart = DCCacheGuildProfileBegin();
+        id compact = [aDecoder decodeObjectForKey:@"permissionOverwritesCompact"];
+        if (compact) {
+            if (![compact isKindOfClass:[NSData class]]) {
+                [NSException raise:NSInvalidArgumentException
+                            format:@"Invalid compact channel permission cache type"];
+            }
+            NSArray *restored = DCUnpackChannelOverwrites(compact);
+            if (!restored) {
+                [NSException raise:NSInvalidArgumentException
+                            format:@"Invalid compact channel permission cache data"];
+            }
+            self.permissionOverwrites = restored;
+        } else {
+            id decodedOverwrites = [aDecoder decodeObjectForKey:@"permissionOverwrites"];
+            self.permissionOverwrites = [decodedOverwrites isKindOfClass:[NSArray class]]
+                ? decodedOverwrites : [NSArray array];
+        }
+        DCCacheGuildProfileStep(DCCacheGuildDecodeStepOverwrites, overwritesStart);
         self.type              = (DCChannelType)[aDecoder decodeIntegerForKey:@"type"];
         self.position          = [aDecoder decodeIntegerForKey:@"position"];
         self.iconID            = [aDecoder decodeObjectForKey:@"iconID"];
         self.recipientIDs      = [aDecoder decodeObjectForKey:@"recipientIDs"];
-        self.recipients        = [NSMutableArray array];
-        self.users             = [NSArray array];
+        // Recipient objects are linked after cached users are hydrated.
+        // Guild channels do not need empty recipient or user arrays.
         // Older archives contain only recipientNames. Those names are left as
         // display fallback in self.name; after one live READY the archive will
         // be rewritten with stable recipientIDs.
     }
+    DCCacheGuildProfileEnd(DCCacheGuildObjectTypeChannel, decodeStart);
     return self;
 }
 

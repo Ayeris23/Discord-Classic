@@ -117,16 +117,6 @@
         return;
     }
 
-    // Mark channel messages as read and refresh the channel object accordingly
-    [DCServerCommunicator.sharedInstance.selectedChannel
-        ackMessage:DCServerCommunicator.sharedInstance.selectedChannel
-                       .lastMessageId];
-    [DCServerCommunicator.sharedInstance.selectedChannel checkIfRead];
-
-    // Remove the blue indicator since the channel has been read
-    [[self.tableView cellForRowAtIndexPath:indexPath]
-        setAccessoryType:UITableViewCellAccessoryDisclosureIndicator];
-
     // Transition to chat view
     [self performSegueWithIdentifier:@"Channels to Chat" sender:self];
 }
@@ -138,11 +128,6 @@
             [segue destinationViewController];
 
         if ([chatViewController isKindOfClass:[DCChatViewController class]]) {
-            // Initialize messages
-            [NSNotificationCenter.defaultCenter
-                postNotificationName:@"NUKE CHAT DATA"
-                              object:nil];
-
             // Add a '#' if appropriate to the channel name in the navigation bar
             NSString *formattedChannelName;
             if (DCServerCommunicator.sharedInstance.selectedChannel.type == 0) {
@@ -154,12 +139,6 @@
             }
             chatViewController.navigationItem.title = formattedChannelName;
 
-            // Populate the message view with the last 50 messages
-            [chatViewController getMessages:50 beforeMessage:nil];
-
-            // Chat view is watching the present conversation (auto scroll with
-            // new messages)
-            [chatViewController setViewingPresentTime:true];
         }
     } else if ([segue.identifier isEqualToString:@"Channels to RightSidebar"]) {
         DCCInfoViewController *rightSidebar = [segue destinationViewController];

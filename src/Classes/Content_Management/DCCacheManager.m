@@ -15,6 +15,38 @@
 #import "DCChannelWindow.h"
 #import "DCServerCommunicator.h"
 #import "DCTools.h"
+#include <string.h>
+
+@interface DCChannel (CompactOverwriteCacheStats)
++ (void)resetCompactOverwriteCacheStats;
++ (void)getCompactOverwriteCacheChannels:(NSUInteger *)channels
+                                 entries:(NSUInteger *)entries
+                                  bytes:(NSUInteger *)bytes;
+@end
+
+// Profiling is active only during the synchronous cold-start guild decode.
+static BOOL DCGuildProfileActive = NO;
+static NSUInteger DCGuildProfileCounts[4];
+static CFTimeInterval DCGuildProfileTimes[4];
+static CFTimeInterval DCGuildProfileStepTimes[4];
+
+CFAbsoluteTime DCCacheGuildProfileBegin(void) {
+    return ([NSThread isMainThread] && DCGuildProfileActive)
+        ? CFAbsoluteTimeGetCurrent() : 0;
+}
+
+void DCCacheGuildProfileEnd(DCCacheGuildObjectType type, CFAbsoluteTime start) {
+    if (start == 0 || ![NSThread isMainThread] || !DCGuildProfileActive ||
+        type > DCCacheGuildObjectTypeEmoji) return;
+    DCGuildProfileCounts[type]++;
+    DCGuildProfileTimes[type] += CFAbsoluteTimeGetCurrent() - start;
+}
+
+void DCCacheGuildProfileStep(DCCacheGuildDecodeStep step, CFAbsoluteTime start) {
+    if (start == 0 || ![NSThread isMainThread] || !DCGuildProfileActive ||
+        step > DCCacheGuildDecodeStepOverwrites) return;
+    DCGuildProfileStepTimes[step] += CFAbsoluteTimeGetCurrent() - start;
+}
 
 @implementation DCMessageCacheEntry
 @end
@@ -978,10 +1010,65 @@ static const NSInteger DCGatewayCheckpointVersion = 1;
 - (NSArray *)loadCachedGuilds {
     NSString *path = [self guildCachePath];
     if (![[NSFileManager defaultManager] fileExistsAtPath:path]) return nil;
+
+    // Keep the archive format unchanged while separately measuring file reading
+    // and NSCoding reconstruction. The temporary data buffer is released when
+    // decoding completes.
     @try {
-        return [NSKeyedUnarchiver unarchiveObjectWithFile:path];
+        NSArray *guilds = nil;
+        @autoreleasepool {
+            CFAbsoluteTime readStart = CFAbsoluteTimeGetCurrent();
+            NSData *data = [NSData dataWithContentsOfFile:path];
+            CFTimeInterval readTime = CFAbsoluteTimeGetCurrent() - readStart;
+            if (!data) {
+                NSLog(@"[GuildCachePerf] Could not read guild archive");
+                return nil;
+            }
+
+            [DCChannel resetCompactOverwriteCacheStats];
+            memset(DCGuildProfileCounts, 0, sizeof(DCGuildProfileCounts));
+            memset(DCGuildProfileTimes, 0, sizeof(DCGuildProfileTimes));
+            memset(DCGuildProfileStepTimes, 0, sizeof(DCGuildProfileStepTimes));
+            CFAbsoluteTime decodeStart = CFAbsoluteTimeGetCurrent();
+            DCGuildProfileActive = YES;
+            id decoded = nil;
+            @try {
+                decoded = [NSKeyedUnarchiver unarchiveObjectWithData:data];
+            }
+            @finally {
+                DCGuildProfileActive = NO;
+            }
+            CFTimeInterval decodeTime = CFAbsoluteTimeGetCurrent() - decodeStart;
+            NSLog(@"[GuildCachePerf] archive %lu bytes read %.3fs decode %.3fs total %.3fs",
+                  (unsigned long)data.length, readTime, decodeTime,
+                  readTime + decodeTime);
+            NSLog(@"[GuildCachePerf] objects guild %lu/%.1fms channel %lu/%.1fms role %lu/%.1fms emoji %lu/%.1fms (inclusive)",
+                  (unsigned long)DCGuildProfileCounts[DCCacheGuildObjectTypeGuild],
+                  1000.0 * DCGuildProfileTimes[DCCacheGuildObjectTypeGuild],
+                  (unsigned long)DCGuildProfileCounts[DCCacheGuildObjectTypeChannel],
+                  1000.0 * DCGuildProfileTimes[DCCacheGuildObjectTypeChannel],
+                  (unsigned long)DCGuildProfileCounts[DCCacheGuildObjectTypeRole],
+                  1000.0 * DCGuildProfileTimes[DCCacheGuildObjectTypeRole],
+                  (unsigned long)DCGuildProfileCounts[DCCacheGuildObjectTypeEmoji],
+                  1000.0 * DCGuildProfileTimes[DCCacheGuildObjectTypeEmoji]);
+            NSLog(@"[GuildCachePerf] nested channel lists %.1fms roles %.1fms emojis %.1fms channel overwrites %.1fms (inclusive)",
+                  1000.0 * DCGuildProfileStepTimes[DCCacheGuildDecodeStepChannels],
+                  1000.0 * DCGuildProfileStepTimes[DCCacheGuildDecodeStepRoles],
+                  1000.0 * DCGuildProfileStepTimes[DCCacheGuildDecodeStepEmojis],
+                  1000.0 * DCGuildProfileStepTimes[DCCacheGuildDecodeStepOverwrites]);
+            NSUInteger compactChannels = 0, compactEntries = 0, compactBytes = 0;
+            [DCChannel getCompactOverwriteCacheChannels:&compactChannels
+                                                entries:&compactEntries
+                                                  bytes:&compactBytes];
+            NSLog(@"[GuildCachePerf] compact overwrites %lu channels, %lu entries, %lu bytes",
+                  (unsigned long)compactChannels, (unsigned long)compactEntries,
+                  (unsigned long)compactBytes);
+            if ([decoded isKindOfClass:[NSArray class]]) guilds = decoded;
+        }
+        return guilds;
     }
     @catch (NSException *e) {
+        DCGuildProfileActive = NO;
         NSLog(@"[DCCacheManager] Guild cache corrupt, discarding: %@", e);
         [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
         return nil;

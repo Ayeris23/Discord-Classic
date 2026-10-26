@@ -17,6 +17,7 @@
 		2CEBF29A2AE2FE4500EC7812 /* MediaPlayer.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2CEBF2992AE2FE4500EC7812 /* MediaPlayer.framework */; };
 		2CF920112AF7F17B00249D6A /* QuickLook.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2CF920102AF7F17B00249D6A /* QuickLook.framework */; };
 		2CF9205D2B02CAB700249D6A /* AssetsLibrary.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2CF9205C2B02CAB700249D6A /* AssetsLibrary.framework */; };
+		2F094ECA308B0EA5009DCF0F /* DCChatSpoilerView.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F094EC9308B0EA5009DCF0F /* DCChatSpoilerView.m */; };
 		2F0FFB2B2F4EC89100EE361F /* asu_pid.entitlements in Resources */ = {isa = PBXBuildFile; fileRef = 2F0FFB2A2F4EC89100EE361F /* asu_pid.entitlements */; };
 		2F1120862F4E913F00159D64 /* Images.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 2F111FCC2F4E913F00159D64 /* Images.xcassets */; };
 		2F1120872F4E913F00159D64 /* bannerBottomShadow.png in Resources */ = {isa = PBXBuildFile; fileRef = 2F111FCF2F4E913F00159D64 /* bannerBottomShadow.png */; };
@@ -564,6 +565,7 @@
 		9FDE61CDBE304A9B989107DC /* DCInterfaceStyle.m in Sources */ = {isa = PBXBuildFile; fileRef = 7DFC9E25F7D54E268A2D0499 /* DCInterfaceStyle.m */; };
 		A15C0A03123456789ABCDEF0 /* DCConnectionPopup.m in Sources */ = {isa = PBXBuildFile; fileRef = A15C0A02123456789ABCDEF0 /* DCConnectionPopup.m */; };
 		A15D00012F6F000000000001 /* DCIPadSplitViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = A15D00032F6F000000000003 /* DCIPadSplitViewController.m */; };
+		AB181001CABB101000000001 /* DCChatTableCellNewMessages.xib in Resources */ = {isa = PBXBuildFile; fileRef = AB181002CABB101000000001 /* DCChatTableCellNewMessages.xib */; };
 		F22BFBD64E9A4137B1343EEC /* DCInterfaceAssetCatalog.m in Sources */ = {isa = PBXBuildFile; fileRef = 422F4AE731E2409BAE181FE0 /* DCInterfaceAssetCatalog.m */; };
 /* End PBXBuildFile section */
 
@@ -579,6 +581,8 @@
 		2CEBF2992AE2FE4500EC7812 /* MediaPlayer.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MediaPlayer.framework; path = System/Library/Frameworks/MediaPlayer.framework; sourceTree = SDKROOT; };
 		2CF920102AF7F17B00249D6A /* QuickLook.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuickLook.framework; path = System/Library/Frameworks/QuickLook.framework; sourceTree = SDKROOT; };
 		2CF9205C2B02CAB700249D6A /* AssetsLibrary.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AssetsLibrary.framework; path = System/Library/Frameworks/AssetsLibrary.framework; sourceTree = SDKROOT; };
+		2F094EC8308B0EA5009DCF0F /* DCChatSpoilerView.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCChatSpoilerView.h; sourceTree = "<group>"; };
+		2F094EC9308B0EA5009DCF0F /* DCChatSpoilerView.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCChatSpoilerView.m; sourceTree = "<group>"; };
 		2F0FFB2A2F4EC89100EE361F /* asu_pid.entitlements */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.xml; path = asu_pid.entitlements; sourceTree = "<group>"; };
 		2F111FCC2F4E913F00159D64 /* Images.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Images.xcassets; sourceTree = "<group>"; };
 		2F111FCF2F4E913F00159D64 /* bannerBottomShadow.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = bannerBottomShadow.png; sourceTree = "<group>"; };
@@ -1398,6 +1402,7 @@
 		A15C0A02123456789ABCDEF0 /* DCConnectionPopup.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = DCConnectionPopup.m; sourceTree = "<group>"; };
 		A15D00022F6F000000000002 /* DCIPadSplitViewController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCIPadSplitViewController.h; sourceTree = "<group>"; };
 		A15D00032F6F000000000003 /* DCIPadSplitViewController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCIPadSplitViewController.m; sourceTree = "<group>"; };
+		AB181002CABB101000000001 /* DCChatTableCellNewMessages.xib */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.xib; path = DCChatTableCellNewMessages.xib; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1849,6 +1854,7 @@
 				2F11207B2F4E913F00159D64 /* DCChatGroupedTableCell.xib */,
 				2F11207C2F4E913F00159D64 /* DCChatReplyTableCell.xib */,
 				2F11207D2F4E913F00159D64 /* DCChatTableCell.xib */,
+				AB181002CABB101000000001 /* DCChatTableCellNewMessages.xib */,
 				2F11207E2F4E913F00159D64 /* DCChatVideoAttachment.xib */,
 				2F11207F2F4E913F00159D64 /* DCUniversalTableCell.xib */,
 				2F1120802F4E913F00159D64 /* OldMode */,
@@ -2372,6 +2378,8 @@
 		2F11231E2F4EB0AD00159D64 /* Cells */ = {
 			isa = PBXGroup;
 			children = (
+				2F094EC8308B0EA5009DCF0F /* DCChatSpoilerView.h */,
+				2F094EC9308B0EA5009DCF0F /* DCChatSpoilerView.m */,
 				2F11231F2F4EB0AD00159D64 /* DCChannelViewCell.h */,
 				2F1123202F4EB0AD00159D64 /* DCChannelViewCell.m */,
 				2F1123212F4EB0AD00159D64 /* DCChatTableCell.h */,
@@ -2984,6 +2992,7 @@
 				2F1120952F4E913F00159D64 /* preferences@2x.png in Resources */,
 				2F11209B2F4E913F00159D64 /* BarButton@2x.png in Resources */,
 				2F1121212F4E913F00159D64 /* DCChatTableCell.xib in Resources */,
+				AB181001CABB101000000001 /* DCChatTableCellNewMessages.xib in Resources */,
 				2F1120C02F4E913F00159D64 /* DefaultAvatar0.png in Resources */,
 				2F32F40B3057AF25003BF841 /* CameraButtonWidePressed@2x.png in Resources */,
 				2F1120F62F4E913F00159D64 /* pfpOverlay@2x.png in Resources */,
@@ -3282,6 +3291,7 @@
 				2F1122652F4EA03000159D64 /* sharpyuv_csp.c in Sources */,
 				2FFA39562F987C2C00E67A40 /* DTAttributedLabel.m in Sources */,
 				2F1122A42F4EA03000159D64 /* lossless_sse2.c in Sources */,
+				2F094ECA308B0EA5009DCF0F /* DCChatSpoilerView.m in Sources */,
 				2FFA39772F987C2C00E67A40 /* DTListItemHTMLElement.m in Sources */,
 				2F1122A92F4EA03000159D64 /* rescaler_mips_dsp_r2.c in Sources */,
 				2F1122512F4EA03000159D64 /* Base64.m in Sources */,
