@@ -237,9 +237,9 @@ typedef enum {
     outputStream = (__bridge_transfer NSOutputStream *)writeStream;
 
     if ([hostURL.scheme isEqualToString:WSSchemeSecure]) {
-        [inputStream setProperty:NSStreamSocketSecurityLevelTLSv1
+        [inputStream setProperty:NSStreamSocketSecurityLevelNegotiatedSSL
                           forKey:NSStreamSocketSecurityLevelKey];
-        [outputStream setProperty:NSStreamSocketSecurityLevelTLSv1
+        [outputStream setProperty:NSStreamSocketSecurityLevelNegotiatedSSL
                            forKey:NSStreamSocketSecurityLevelKey];
     }
 

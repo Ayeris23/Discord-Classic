@@ -655,7 +655,7 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
 }
 
 + (NSMutableURLRequest *)requestWithPath:(NSString *)path token:(NSString *)token {
-    NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:@"https://discord.com/api/v9%@", path]];
+    NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:@"https://discordapp.com/api/v9%@", path]];
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url
                                                        cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
                                                    timeoutInterval:15];
@@ -663,7 +663,7 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
     [req setValue:@"*/*" forHTTPHeaderField:@"Accept"];
     [req setValue:[self superPropertiesBase64] forHTTPHeaderField:@"X-Super-Properties"];
     [req setValue:@"en-US" forHTTPHeaderField:@"x-discord-locale"];
-    [req setValue:@"https://discord.com/channels/@me" forHTTPHeaderField:@"Referrer"];
+    [req setValue:@"https://discordapp.com/channels/@me" forHTTPHeaderField:@"Referrer"];
     [req setValue:@"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15" forHTTPHeaderField:@"User-Agent"];
     if (token.length > 0) {
         [req setValue:token forHTTPHeaderField:@"Authorization"];
