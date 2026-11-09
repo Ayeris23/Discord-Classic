@@ -15,7 +15,7 @@ typedef NS_ENUM(NSInteger, DCLoginErrorCode) {
     DCLoginErrorCodeInvalidJSON    = 2, // Couldn't parse server response
     DCLoginErrorCodeBadCredentials = 3, // Wrong email or password
     DCLoginErrorCodeTwoFactor      = 4, // 2FA required — ticket in userInfo
-    DCLoginErrorCodeCaptcha        = 5, // hCaptcha required — dead end on iOS 5/6
+    DCLoginErrorCodeCaptcha        = 5, // CAPTCHA challenge required
     DCLoginErrorCodeServerError    = 6, // Discord returned an error message
 };
 
@@ -24,6 +24,9 @@ extern NSString *const DCLoginErrorTwoFactorTicketKey; // NSString, when code ==
 extern NSString *const DCLoginErrorServerMessageKey;   // NSString, human-readable from Discord
 extern NSString *const DCLoginErrorFingerprintKey;
 extern NSString *const DCLoginErrorInstanceIDKey;
+extern NSString *const DCLoginErrorCaptchaSitekeyKey;
+extern NSString *const DCLoginErrorCaptchaRqdataKey;
+extern NSString *const DCLoginErrorCaptchaServiceKey;
 
 @interface DCLoginManager : NSObject
 

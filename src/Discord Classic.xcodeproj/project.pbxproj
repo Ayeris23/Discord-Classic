@@ -562,6 +562,8 @@
 		2FFA3A7B2F98879E00E67A40 /* NSObject+DTRuntime.m in Sources */ = {isa = PBXBuildFile; fileRef = 2FFA3A372F98879E00E67A40 /* NSObject+DTRuntime.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
 		2FFA3A7E2F98899400E67A40 /* DTAnimatedGIF.m in Sources */ = {isa = PBXBuildFile; fileRef = 2FFA3A7D2F98899400E67A40 /* DTAnimatedGIF.m */; };
 		2FFA3A822F9B0AD600E67A40 /* default.css.c in Sources */ = {isa = PBXBuildFile; fileRef = 2FFA3A812F9B0AD600E67A40 /* default.css.c */; };
+		2FFF0D5830A18A7A006A19BE /* CaptchaProbe.html in Resources */ = {isa = PBXBuildFile; fileRef = 2FFF0D5730A18A7A006A19BE /* CaptchaProbe.html */; };
+		2FFF0D5B30A18A92006A19BE /* DCCaptchaCompatibilityViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 2FFF0D5A30A18A92006A19BE /* DCCaptchaCompatibilityViewController.m */; };
 		9FDE61CDBE304A9B989107DC /* DCInterfaceStyle.m in Sources */ = {isa = PBXBuildFile; fileRef = 7DFC9E25F7D54E268A2D0499 /* DCInterfaceStyle.m */; };
 		A15C0A03123456789ABCDEF0 /* DCConnectionPopup.m in Sources */ = {isa = PBXBuildFile; fileRef = A15C0A02123456789ABCDEF0 /* DCConnectionPopup.m */; };
 		A15D00012F6F000000000001 /* DCIPadSplitViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = A15D00032F6F000000000003 /* DCIPadSplitViewController.m */; };
@@ -1393,6 +1395,9 @@
 		2FFA3A7C2F98899400E67A40 /* DTAnimatedGIF.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DTAnimatedGIF.h; sourceTree = "<group>"; };
 		2FFA3A7D2F98899400E67A40 /* DTAnimatedGIF.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DTAnimatedGIF.m; sourceTree = "<group>"; };
 		2FFA3A812F9B0AD600E67A40 /* default.css.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = default.css.c; sourceTree = "<group>"; };
+		2FFF0D5730A18A7A006A19BE /* CaptchaProbe.html */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.html; path = CaptchaProbe.html; sourceTree = "<group>"; };
+		2FFF0D5930A18A92006A19BE /* DCCaptchaCompatibilityViewController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCCaptchaCompatibilityViewController.h; sourceTree = "<group>"; };
+		2FFF0D5A30A18A92006A19BE /* DCCaptchaCompatibilityViewController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCCaptchaCompatibilityViewController.m; sourceTree = "<group>"; };
 		422F4AE731E2409BAE181FE0 /* DCInterfaceAssetCatalog.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = DCInterfaceAssetCatalog.m; sourceTree = "<group>"; };
 		5BA0983D2D2058E4009F7726 /* discord.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = discord.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		7D2DF2048B574519BF851AA9 /* DCInterfaceAssetCatalog.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = DCInterfaceAssetCatalog.h; sourceTree = "<group>"; };
@@ -1476,6 +1481,7 @@
 		2F111FC82F4E913F00159D64 /* Assets */ = {
 			isa = PBXGroup;
 			children = (
+				2FFF0D5630A18A7A006A19BE /* HTML */,
 				2F111FC92F4E913F00159D64 /* Bundles */,
 				2F111FCB2F4E913F00159D64 /* Catalogs */,
 				2F111FCD2F4E913F00159D64 /* Images */,
@@ -2535,6 +2541,8 @@
 		2F11235C2F4EB0AD00159D64 /* Welcome_and_login */ = {
 			isa = PBXGroup;
 			children = (
+				2FFF0D5930A18A92006A19BE /* DCCaptchaCompatibilityViewController.h */,
+				2FFF0D5A30A18A92006A19BE /* DCCaptchaCompatibilityViewController.m */,
 				2F1DF6892F53B61E009C44CE /* DCTokenLoginPage.h */,
 				2F1DF68A2F53B61E009C44CE /* DCTokenLoginPage.m */,
 				2F11235D2F4EB0AD00159D64 /* DCIntroductionPage.h */,
@@ -2908,6 +2916,14 @@
 			path = Runtime;
 			sourceTree = "<group>";
 		};
+		2FFF0D5630A18A7A006A19BE /* HTML */ = {
+			isa = PBXGroup;
+			children = (
+				2FFF0D5730A18A7A006A19BE /* CaptchaProbe.html */,
+			);
+			path = HTML;
+			sourceTree = "<group>";
+		};
 		9D43EA28E6394828AFD75534 /* Interface */ = {
 			isa = PBXGroup;
 			children = (
@@ -3176,6 +3192,7 @@
 				2F11210C2F4E913F00159D64 /* Discord.png in Resources */,
 				2F1120B32F4E913F00159D64 /* C-Spotify@2x.png in Resources */,
 				2F1120E12F4E913F00159D64 /* Default-568h@2x.png in Resources */,
+				2FFF0D5830A18A7A006A19BE /* CaptchaProbe.html in Resources */,
 				2F32F3F1305635BA003BF841 /* DownPressed.png in Resources */,
 				2F1120882F4E913F00159D64 /* bannerBottomShadow@2x.png in Resources */,
 				2F1120C12F4E913F00159D64 /* DefaultAvatar0@2x.png in Resources */,
@@ -3283,6 +3300,7 @@
 				2F1122EC2F4EA03000159D64 /* SDWebImageDecoder.m in Sources */,
 				2F1122D82F4EA03000159D64 /* muxinternal.c in Sources */,
 				2F1122C12F4EA03000159D64 /* filter_enc.c in Sources */,
+				2FFF0D5B30A18A92006A19BE /* DCCaptchaCompatibilityViewController.m in Sources */,
 				2FFA39732F987C2C00E67A40 /* DTImage+HTML.m in Sources */,
 				2F1122F02F4EA03000159D64 /* SDWebImagePrefetcher.m in Sources */,
 				2F1122D12F4EA03000159D64 /* vp8l_enc.c in Sources */,

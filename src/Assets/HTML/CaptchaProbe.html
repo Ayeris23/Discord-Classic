@@ -1,0 +1,657 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>hCaptcha compatibility probe</title>
+<style>
+body { background:#28292e; color:#eee; font:14px Helvetica,Arial,sans-serif; margin:12px; }
+#widget { min-height:125px; max-width:340px; margin:10px 0 14px; border:1px dashed #667381; padding:7px; box-sizing:border-box; overflow:visible; }
+#status { font-size:13px; color:#cad3dd; line-height:1.5; }
+.small { font-size:11px; color:#aeb6c2; }
+</style>
+<script type="text/javascript">
+(function () {
+    var runID = __RUN_ID__;
+    var startedAt = new Date().getTime();
+    var sitekey = __SITEKEY_JSON__;
+    var rqdata = __RQDATA_JSON__;
+    var probeMode = __PROBE_MODE__;
+    var withPolyfills = probeMode !== 0;
+    var bridgeID = 0;
+    var widgetDone = false;
+    var statusChecksStarted = false;
+    var manualRenderRequested = false;
+    var stringifyBeforePolyfills = JSON.stringify;
+    var mimeTestReady = false;
+    var mimeTestStarted = false;
+
+    function report(message) {
+        var elapsed = new Date().getTime() - startedAt;
+        var text = '[+' + elapsed + 'ms] ' + String(message);
+        var status = document.getElementById('status');
+        if (status) { status.innerHTML = text.replace(/&/g, '&amp;').replace(/</g, '&lt;'); }
+        var frame = document.createElement('iframe');
+        frame.style.display = 'none';
+        frame.setAttribute('data-probe-id', String(++bridgeID));
+        frame.src = 'dccaptcha-log://event?run=' + runID + '&message=' + encodeURIComponent(text);
+        document.body.appendChild(frame);
+        setTimeout(function () { if (frame.parentNode) { frame.parentNode.removeChild(frame); } }, 1500);
+    }
+
+    function resourceLabel(url) {
+        // Omit query strings because CAPTCHA challenge parameters may be sensitive.
+        var link = document.createElement('a');
+        link.href = url || '';
+        return link.protocol + '//' + link.host + link.pathname;
+    }
+
+    function inspectScripts(label) {
+        var scripts = document.getElementsByTagName('script');
+        report(label + ': script elements=' + scripts.length);
+        for (var i = 0; i < scripts.length; ++i) {
+            if (!scripts[i].src) { continue; }
+            var cors = scripts[i].getAttribute('crossorigin');
+            report('Script ' + (i + 1) + ': ' + resourceLabel(scripts[i].src) +
+                   ', crossorigin=' + (cors === null ? 'unset' : cors) +
+                   ', readyState=' + (scripts[i].readyState || 'unknown'));
+        }
+    }
+
+    function rectSummary(element) {
+        if (!element) { return '(missing)'; }
+        var x = 0, y = 0, width = 0, height = 0;
+        try {
+            if (element.getBoundingClientRect) {
+                var rect = element.getBoundingClientRect();
+                x = Math.round(rect.left); y = Math.round(rect.top);
+                width = Math.round(rect.right - rect.left);
+                height = Math.round(rect.bottom - rect.top);
+            } else {
+                width = element.offsetWidth || 0;
+                height = element.offsetHeight || 0;
+            }
+        } catch (ignored) { return '(geometry unavailable)'; }
+        var viewHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+        var viewWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+        var visible = width > 0 && height > 0 && x < viewWidth && y < viewHeight &&
+                      x + width > 0 && y + height > 0;
+        return 'x=' + x + ' y=' + y + ' w=' + width + ' h=' + height +
+               ' inViewport=' + visible;
+    }
+
+    function styleSummary(element) {
+        if (!element) { return '(missing)'; }
+        try {
+            var style = window.getComputedStyle ? window.getComputedStyle(element, null) : element.currentStyle;
+            if (!style) { return '(computed style unavailable)'; }
+            return 'display=' + style.display + ', visibility=' + style.visibility +
+                   ', opacity=' + style.opacity + ', position=' + style.position;
+        } catch (ignored) { return '(computed style threw)'; }
+    }
+
+    function inspectWidgetGeometry(label) {
+        var target = document.getElementById('widget');
+        var viewWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+        var viewHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+        report(label + ': viewport=' + viewWidth + 'x' + viewHeight +
+               ' scrollY=' + (window.pageYOffset || document.documentElement.scrollTop || 0) +
+               ' widget=' + rectSummary(target) + ' ' + styleSummary(target));
+        if (!target) { return; }
+        var frames = target.getElementsByTagName('iframe');
+        report(label + ': iframe count=' + frames.length);
+        for (var i = 0; i < frames.length && i < 4; ++i) {
+            var frame = frames[i];
+            var src = frame.getAttribute('src') || frame.src || '';
+            report(label + ': widget frame ' + (i + 1) + ' src=' + resourceLabel(src) +
+                   ' ' + rectSummary(frame) + ' ' + styleSummary(frame));
+        }
+        var all = document.getElementsByTagName('iframe');
+        var extra = 0;
+        for (var j = 0; j < all.length && extra < 4; ++j) {
+            var other = all[j];
+            if (other.getAttribute('data-probe-id')) { continue; }
+            var parent = other;
+            var insideTarget = false;
+            while (parent) {
+                if (parent === target) { insideTarget = true; break; }
+                parent = parent.parentNode;
+            }
+            if (insideTarget) { continue; }
+            extra++;
+            report(label + ': other provider frame ' + extra + ' src=' +
+                   resourceLabel(other.getAttribute('src') || other.src || '') +
+                   ' ' + rectSummary(other) + ' ' + styleSummary(other));
+        }
+    }
+
+    function monitorScriptResources() {
+        // Resource errors do not reliably reach window.onerror in older WebKit.
+        if (!document.addEventListener) {
+            report('DOM resource event capture unavailable');
+            return;
+        }
+        function record(event) {
+            var target = event.target || event.srcElement;
+            if (!target || !target.tagName) { return; }
+            var tag = String(target.tagName).toLowerCase();
+            if (tag === 'iframe' && !target.getAttribute('data-probe-id')) {
+                var frameURL = target.getAttribute('src') || target.src || '';
+                report('Provider frame ' + event.type + ': ' + resourceLabel(frameURL) +
+                       ' ' + rectSummary(target));
+                return;
+            }
+            if (tag !== 'script' || !target.src) { return; }
+            report('Resource ' + event.type + ': ' + resourceLabel(target.src) +
+                   ', crossorigin=' + (target.getAttribute('crossorigin') || 'unset'));
+        }
+        document.addEventListener('error', record, true);
+        document.addEventListener('load', record, true);
+    }
+
+    function features() {
+        var list = [
+            'Promise=' + (typeof window.Promise),
+            'fetch=' + (typeof window.fetch),
+            'Map=' + (typeof window.Map),
+            'Array.from=' + (typeof Array.from),
+            'Object.assign=' + (typeof Object.assign),
+            'classList=' + (typeof document.documentElement.classList)
+        ];
+        report('Browser features: ' + list.join(', '));
+    }
+
+    window.onerror = function (message, url, line) {
+        report('JavaScript error: ' + message + ' at ' + (url || 'inline') + ':' + (line || '?'));
+        return false;
+    };
+
+    function loadScript(url, name, callback) {
+        var script = document.createElement('script');
+        var finished = false;
+        var timer = setTimeout(function () {
+            if (!finished) {
+                finished = true;
+                report(name + ': timeout after 20 seconds (network, TLS, or script error)');
+            }
+        }, 20000);
+        function done(ok) {
+            if (finished) { return; }
+            finished = true;
+            clearTimeout(timer);
+            report(name + ': ' + (ok ? 'script downloaded' : 'script load failed'));
+            if (callback) { callback(ok); }
+        }
+        script.type = 'text/javascript';
+        script.onload = function () { done(true); };
+        script.onreadystatechange = function () {
+            if (this.readyState === 'loaded' || this.readyState === 'complete') { done(true); }
+        };
+        script.onerror = function () { done(false); };
+        script.src = url;
+        document.getElementsByTagName('head')[0].appendChild(script);
+    }
+
+    function renderWidget(api, reason) {
+        if (widgetDone) { report('Duplicate render attempt ignored'); return; }
+        if (!api || typeof api.render !== 'function') {
+            report('Render attempted before hCaptcha API became available');
+            return;
+        }
+        widgetDone = true;
+        report(reason + '; rendering widget');
+        try {
+            var widgetID = api.render('widget', {
+                'sitekey': sitekey,
+                'size': 'compact',
+                'callback': function (token) {
+                    var size = token ? String(token).length : 0;
+                    report('Verification callback received (' + size + ' token characters). Diagnostic only: NOT sent to Discord.');
+                },
+                'error-callback': function (error) {
+                    report('hCaptcha widget error: ' + error);
+                    inspectWidgetGeometry('At widget error');
+                },
+                'expired-callback': function () { report('hCaptcha response expired'); },
+                'open-callback': function () { report('Challenge opened'); },
+                'close-callback': function () { report('Challenge closed'); }
+            });
+            report('hCaptcha render() returned widget ID ' + widgetID + '; this does not prove verification works');
+            setTimeout(function () {
+                var target = document.getElementById('widget');
+                var frames = target ? target.getElementsByTagName('iframe') : [];
+                report('Widget container iframe count: ' + frames.length);
+                inspectWidgetGeometry('2 seconds after render');
+            }, 2000);
+            setTimeout(function () { inspectWidgetGeometry('8 seconds after render'); }, 8000);
+            if (rqdata && typeof api.setData === 'function') {
+                api.setData(widgetID, { 'rqdata': rqdata });
+                report('Challenge-specific rqdata supplied to widget');
+            }
+        } catch (error) {
+            report('hCaptcha render error: ' + error);
+        }
+    }
+
+    window.dcHCaptchaLoaded = function () {
+        report('hCaptcha documented onload callback fired');
+        renderWidget(window.hcaptcha, 'SDK ready callback');
+    };
+
+    window.dcTryManualRender = function () {
+        if (manualRenderRequested) { report('Manual render already requested'); return; }
+        manualRenderRequested = true;
+        report('Manual render requested by user (diagnostic; SDK may not be ready)');
+        statusSnapshot('Immediately before manual render');
+        renderWidget(window.hcaptcha, 'User-requested manual test');
+    };
+
+    function statusSnapshot(label) {
+        var target = document.getElementById('widget');
+        var frames = target ? target.getElementsByTagName('iframe') : [];
+        var globalFrames = document.getElementsByTagName('iframe');
+        var providerFrames = 0;
+        for (var i = 0; i < globalFrames.length; ++i) {
+            if (!globalFrames[i].getAttribute('data-probe-id')) { providerFrames++; }
+        }
+        report(label + ': hcaptcha=' + typeof window.hcaptcha +
+               ', render=' + (window.hcaptcha ? typeof window.hcaptcha.render : 'unavailable') +
+               ', loader=' + typeof window.hCaptchaLoader +
+               ', widget iframes=' + frames.length +
+               ', other provider iframes=' + providerFrames +
+               ', render attempted=' + widgetDone);
+    }
+
+    function shallowJSONShape(value, replacer) {
+        var summary = 'replacer=' + typeof replacer;
+        if (!value || typeof value !== 'object') { return summary; }
+        try {
+            summary += ', class=' + Object.prototype.toString.call(value);
+        } catch (ignored) { summary += ', class=unavailable'; }
+        try {
+            if (Object.prototype.toString.call(value) === '[object MimeTypeArray]') {
+                summary += ', matchesNavigatorMimeTypes=' + (value === navigator.mimeTypes);
+            }
+        } catch (ignoredMime) { summary += ', matchesNavigatorMimeTypes=unavailable'; }
+        try {
+            var count = 0;
+            for (var key in value) {
+                count++;
+                if (count >= 24) { break; }
+            }
+            summary += ', enumerableKeys=' + (count >= 24 ? '24+' : String(count));
+        } catch (ignored2) { summary += ', enumerableKeys=unavailable'; }
+        try {
+            var item = value;
+            var found = 'none in first 4 levels';
+            for (var depth = 0; item && depth < 4; depth++) {
+                var descriptor = Object.getOwnPropertyDescriptor(item, 'toJSON');
+                if (descriptor) {
+                    var kind = descriptor.get || descriptor.set ? 'accessor' : typeof descriptor.value;
+                    found = 'depth ' + depth + ' (' + kind + ')';
+                    break;
+                }
+                item = Object.getPrototypeOf(item);
+            }
+            summary += ', toJSON=' + found;
+        } catch (ignored3) { summary += ', toJSON=unavailable'; }
+        return summary;
+    }
+
+    window.dcTestNativeMimeStringify = function () {
+        if (probeMode !== 3 || !mimeTestReady) {
+            report('MIME serialization test is available only after JS Only has loaded');
+            return;
+        }
+        if (mimeTestStarted) { report('MIME serialization test already started'); return; }
+        mimeTestStarted = true;
+        var button = document.getElementById('mime-test-button');
+        if (button) { button.disabled = true; }
+        report('Standalone MIME test: no hCaptcha scripts have been requested');
+        report('JSON.stringify unchanged since page startup=' + (JSON.stringify === stringifyBeforePolyfills));
+        var mime = navigator.mimeTypes;
+        report('Native MIME object: ' + shallowJSONShape(mime, undefined));
+        try {
+            var baseline = JSON.stringify({ 'probe': true, 'count': 1 });
+            report('Plain-object JSON baseline completed; length=' + baseline.length);
+        } catch (error) {
+            report('Plain-object JSON baseline threw: ' + error);
+            return;
+        }
+        report('JSON.stringify(navigator.mimeTypes) BEGIN; this may freeze old WebKit');
+        var start = new Date().getTime();
+        try {
+            var result = JSON.stringify(mime);
+            report('JSON.stringify(navigator.mimeTypes) END after ' +
+                   (new Date().getTime() - start) + 'ms, result length=' +
+                   (result ? result.length : 0));
+        } catch (error2) {
+            report('JSON.stringify(navigator.mimeTypes) THROW: ' + error2);
+        }
+    };
+
+    // Convert the legacy native MIME collection to plain JSON data without
+    // traversing its plugin back-references in JavaScriptCore's stringifier.
+    function mimeDataSnapshot(collection) {
+        var snapshot = {};
+        var count = 0;
+        var skipped = 0;
+        var capped = false;
+        var keys = [];
+        try { keys = Object.keys(collection); }
+        catch (ignored) {
+            for (var key in collection) {
+                try {
+                    if (Object.prototype.hasOwnProperty.call(collection, key)) {
+                        keys.push(key);
+                    }
+                } catch (ignoredKey) {}
+                if (keys.length >= 129) { break; }
+            }
+        }
+        for (var i = 0; i < keys.length; ++i) {
+            if (count >= 128) { capped = true; break; }
+            var field;
+            try { field = collection[keys[i]]; }
+            catch (ignoredValue) { skipped++; continue; }
+            var kind = typeof field;
+            if (field === null || kind === 'string' || kind === 'number' || kind === 'boolean') {
+                snapshot[keys[i]] = field;
+            } else if (kind === 'object') {
+                var mime = {};
+                var properties = ['type', 'description', 'suffixes'];
+                for (var j = 0; j < properties.length; ++j) {
+                    try {
+                        var value = field[properties[j]];
+                        if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+                            mime[properties[j]] = value;
+                        }
+                    } catch (ignoredProperty) {}
+                }
+                try {
+                    var plugin = field.enabledPlugin;
+                    if (plugin && typeof plugin === 'object') {
+                        var pluginInfo = {};
+                        var pluginProperties = ['name', 'description', 'filename'];
+                        for (var k = 0; k < pluginProperties.length; ++k) {
+                            try {
+                                var detail = plugin[pluginProperties[k]];
+                                if (typeof detail === 'string') { pluginInfo[pluginProperties[k]] = detail; }
+                            } catch (ignoredPlugin) {}
+                        }
+                        mime.enabledPlugin = pluginInfo;
+                    } else if (plugin === null) {
+                        mime.enabledPlugin = null;
+                    }
+                } catch (ignoredEnabledPlugin) {}
+                snapshot[keys[i]] = mime;
+            } else {
+                skipped++;
+            }
+            count++;
+        }
+        report('MIME compatibility snapshot: keys=' + count +
+               ', skipped=' + skipped + ', capped=' + capped +
+               ' (native MIME values only; no fabricated entries)');
+        return snapshot;
+    }
+
+    function nativeMimeEntrySnapshot(mime) {
+        var result = {};
+        var fields = ['type', 'description', 'suffixes'];
+        for (var i = 0; i < fields.length; ++i) {
+            try {
+                var value = mime[fields[i]];
+                if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+                    result[fields[i]] = value;
+                }
+            } catch (ignored) {}
+        }
+        return result;
+    }
+
+    function pluginEntrySnapshot(plugin) {
+        var result = {};
+        var fields = ['name', 'description', 'filename', 'length'];
+        for (var i = 0; i < fields.length; ++i) {
+            try {
+                var value = plugin[fields[i]];
+                if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+                    result[fields[i]] = value;
+                }
+            } catch (ignored) {}
+        }
+        var keys = [];
+        try { keys = Object.keys(plugin); }
+        catch (ignoredKeys) {
+            for (var key in plugin) {
+                try {
+                    if (Object.prototype.hasOwnProperty.call(plugin, key)) { keys.push(key); }
+                } catch (ignoredKey) {}
+                if (keys.length >= 128) { break; }
+            }
+        }
+        for (var j = 0; j < keys.length && j < 128; ++j) {
+            var name = keys[j];
+            if (name === '__proto__' || name === 'constructor' || name === 'prototype' ||
+                Object.prototype.hasOwnProperty.call(result, name)) { continue; }
+            try {
+                var entry = plugin[name];
+                var kind = typeof entry;
+                if (entry === null || kind === 'string' || kind === 'number' || kind === 'boolean') {
+                    result[name] = entry;
+                } else if (kind === 'object' &&
+                           Object.prototype.toString.call(entry) === '[object MimeType]') {
+                    // A MIME entry may refer back to its owner via enabledPlugin.
+                    result[name] = nativeMimeEntrySnapshot(entry);
+                }
+            } catch (ignoredEntry) {}
+        }
+        return result;
+    }
+
+    function pluginDataSnapshot(collection) {
+        var snapshot = {};
+        var count = 0;
+        var skipped = 0;
+        var capped = false;
+        var keys = [];
+        try { keys = Object.keys(collection); }
+        catch (ignoredKeys) {
+            for (var key in collection) {
+                try {
+                    if (Object.prototype.hasOwnProperty.call(collection, key)) { keys.push(key); }
+                } catch (ignoredKey) {}
+                if (keys.length >= 129) { break; }
+            }
+        }
+        for (var i = 0; i < keys.length; ++i) {
+            if (count >= 128) { capped = true; break; }
+            var name = keys[i];
+            if (name === '__proto__' || name === 'constructor' || name === 'prototype') {
+                skipped++;
+                continue;
+            }
+            try {
+                var entry = collection[name];
+                var kind = typeof entry;
+                if (entry === null || kind === 'string' || kind === 'number' || kind === 'boolean') {
+                    snapshot[name] = entry;
+                } else if (kind === 'object' &&
+                           Object.prototype.toString.call(entry) === '[object Plugin]') {
+                    snapshot[name] = pluginEntrySnapshot(entry);
+                } else {
+                    skipped++;
+                }
+            } catch (ignoredEntry) { skipped++; }
+            count++;
+        }
+        report('PLUGIN compatibility snapshot: keys=' + count +
+               ', skipped=' + skipped + ', capped=' + capped +
+               ' (native plugin metadata only; no fabricated entries)');
+        return snapshot;
+    }
+
+    function installJSONTrace() {
+        if (!window.JSON || typeof JSON.stringify !== 'function') {
+            report('JSON tracer unavailable: JSON.stringify is missing');
+            return;
+        }
+        var original = JSON.stringify;
+        var callCount = 0;
+        JSON.stringify = function () {
+            callCount++;
+            var id = callCount;
+            var sampled = (id <= 32 || (id <= 128 && id % 16 === 0) || id % 256 === 0);
+            var started = 0;
+            if (sampled) {
+                started = new Date().getTime();
+                var type = typeof arguments[0];
+                var arrayValue = false;
+                try { arrayValue = Array.isArray(arguments[0]); } catch (ignored) {}
+                var callSite = '(unavailable in this WebKit)';
+                try {
+                    var stack = (new Error()).stack;
+                    if (stack) { callSite = String(stack).replace(/https?:\/\/[^\s)]+/g, function (url) { return url.split('?')[0]; }).replace(/\s+/g, ' ').substring(0, 320); }
+                } catch (ignored2) {}
+                report('JSON.stringify BEGIN #' + id + ' type=' + type +
+                       ' array=' + arrayValue + ' caller=' + callSite);
+                if (id <= 32 && type === 'object') {
+                    report('JSON.stringify SHAPE #' + id + ' ' +
+                           shallowJSONShape(arguments[0], arguments[1]));
+                }
+            }
+            try {
+                var args = arguments;
+                if (probeMode === 4 && args.length > 0 && args[0] && typeof args[0] === 'object') {
+                    var tag = Object.prototype.toString.call(args[0]);
+                    var converted = null;
+                    if (tag === '[object MimeTypeArray]') {
+                        converted = mimeDataSnapshot(args[0]);
+                    } else if (tag === '[object PluginArray]') {
+                        converted = pluginDataSnapshot(args[0]);
+                    } else if (tag === '[object Plugin]') {
+                        converted = pluginEntrySnapshot(args[0]);
+                    } else if (tag === '[object MimeType]') {
+                        converted = nativeMimeEntrySnapshot(args[0]);
+                    }
+                    if (converted !== null) {
+                        args = [converted, arguments[1], arguments[2]];
+                        report('JSON.stringify #' + id + ': native ' + tag + ' converted to a plain snapshot');
+                    }
+                }
+                var value = original.apply(this, args);
+                if (sampled) {
+                    report('JSON.stringify END #' + id + ' duration=' +
+                           (new Date().getTime() - started) + 'ms');
+                }
+                return value;
+            } catch (error) {
+                if (sampled) { report('JSON.stringify THROW #' + id + ' error=' + error); }
+                throw error;
+            }
+        };
+        report('Native collection compatibility installed (MIME and plugin objects handled as plain data; no values logged)');
+    }
+
+    function scheduleStatusChecks() {
+        if (statusChecksStarted) { return; }
+        statusChecksStarted = true;
+        setTimeout(function () { statusSnapshot('After 5 seconds'); inspectWidgetGeometry('5-second layout'); }, 5000);
+        setTimeout(function () { statusSnapshot('After 15 seconds'); inspectWidgetGeometry('15-second layout'); }, 15000);
+        setTimeout(function () { statusSnapshot('After 35 seconds'); inspectWidgetGeometry('35-second layout'); inspectScripts('35-second scripts'); }, 35000);
+    }
+
+
+    window.startProbe = function () {
+        report('Browser UA: ' + navigator.userAgent);
+        report('Document URL: ' + location.href + ', domain: ' + document.domain +
+               ', referrer: ' + (document.referrer || '(none)'));
+        monitorScriptResources();
+        features();
+        scheduleStatusChecks();
+        function startHCaptcha() {
+            report('Requesting hCaptcha JavaScript API (direct loader)');
+            loadScript('https://js.hcaptcha.com/1/api.js?onload=dcHCaptchaLoaded&render=explicit', 'hCaptcha API', function (ok) {
+                if (ok) {
+                    statusSnapshot('Direct script load event (not API readiness)');
+                    inspectScripts('Direct loader scripts');
+                }
+            });
+            setTimeout(function () {
+                if (!widgetDone) { report('No hCaptcha readiness callback after 25 seconds; still waiting'); }
+            }, 25000);
+        }
+        function startES5Loader() {
+            report('Requesting official hCaptcha ES5 loader 2.4.2');
+            loadScript('https://unpkg.com/@hcaptcha/loader@2.4.2/dist/index.es5.js', 'ES5 loader', function (ok) {
+                if (!ok) { report('ES5 loader failed to download; test stopped'); return; }
+                statusSnapshot('ES5 loader load event');
+                inspectScripts('ES5 loader scripts');
+                if (typeof window.hCaptchaLoader !== 'function') {
+                    report('ES5 loader global function missing');
+                    return;
+                }
+                try {
+                    report('Invoking ES5 loader with Sentry disabled');
+                    var promise = window.hCaptchaLoader({ sentry: false, loadAsync: false });
+                    if (!promise || typeof promise.then !== 'function') {
+                        report('ES5 loader did not return a Promise-like value');
+                        return;
+                    }
+                    promise.then(function (api) {
+                        report('ES5 loader promise resolved');
+                        renderWidget(api, 'ES5 loader completed');
+                    }, function (error) {
+                        report('ES5 loader promise rejected: ' + error);
+                        inspectScripts('Scripts at ES5 failure');
+                    });
+                } catch (error) {
+                    report('ES5 loader threw: ' + error);
+                }
+            });
+        }
+        if (withPolyfills) {
+            report('Requesting user-agent-aware Cloudflare polyfills');
+            loadScript('https://cdnjs.cloudflare.com/polyfill/v3/polyfill.min.js?features=default%2Ces2015%2Cfetch', 'Polyfills', function (ok) {
+                features();
+                if (!ok) { report('Polyfills unavailable; continuing for diagnostics'); }
+                if (probeMode === 3) {
+                    report('JavaScript-only control: polyfills loaded; hCaptcha will NOT be requested');
+                    statusSnapshot('Control test after polyfill load');
+                    mimeTestReady = true;
+                    var testArea = document.getElementById('mime-test-area');
+                    if (testArea) { testArea.style.display = 'block'; }
+                    report('Native MIME serialization test enabled (user initiated only)');
+                    return;
+                }
+                if (probeMode === 2) { startES5Loader(); }
+                else {
+                    if (probeMode === 4) { installJSONTrace(); }
+                    startHCaptcha();
+                }
+            });
+        } else {
+            report('Stock WebKit: no polyfill requested');
+            startHCaptcha();
+        }
+    };
+
+    window.onload = function () { setTimeout(window.startProbe, 10); };
+}());
+</script>
+</head>
+<body>
+<strong>hCaptcha compatibility test</strong>
+<p class="small">Official test sitekey confirms widget integration, but never displays a visual challenge. A Discord challenge may behave differently.</p>
+<p class="small">Widget container below (dashed outline is diagnostic only)</p>
+<div id="widget"></div>
+<div id="mime-test-area" style="display:none; padding:8px 0;">
+  <button id="mime-test-button" type="button" onclick="dcTestNativeMimeStringify()" style="font:14px Helvetica,Arial,sans-serif; padding:8px;">Test native MIME stringify</button>
+  <p class="small">JS Only: tests JSON.stringify(navigator.mimeTypes) without hCaptcha. WARNING: this test may freeze the app on iOS 5.</p>
+</div>
+<button type="button" onclick="dcTryManualRender()" style="font:14px Helvetica,Arial,sans-serif; padding:8px;">Try render manually</button>
+<p class="small">Only use this after the SDK reports ready. This does not submit anything to Discord.</p>
+<div id="status">Preparing browser test...</div>
+</body>
+</html>

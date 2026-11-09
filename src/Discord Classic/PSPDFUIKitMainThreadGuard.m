@@ -1,36 +1,15 @@
 #import <objc/runtime.h>
-#import <objc/message.h>
 #import <UIKit/UIKit.h>
 
-#define PROPERTY(propName) NSStringFromSelector(@selector(propName))
+#ifndef PSPDF_ENABLE_UIKIT_MAIN_THREAD_GUARD
+#define PSPDF_ENABLE_UIKIT_MAIN_THREAD_GUARD 0
+#endif
 
-#define PSPDFAssert(expression, ...) \
-do { if(!(expression)) { \
-    NSLog(@"%@", [NSString stringWithFormat: @"Assertion failure: %s in %s on line %s:%d. %@", #expression, __PRETTY_FUNCTION__, __FILE__, __LINE__, [NSString stringWithFormat:@"" __VA_ARGS__]]); \
-abort(); }} while(0)
+#if PSPDF_ENABLE_UIKIT_MAIN_THREAD_GUARD
 
-BOOL PSPDFReplaceMethodWithBlock(Class c, SEL origSEL, SEL newSEL, id block) {
-    PSPDFAssert(c && origSEL && newSEL && block);
-    Method origMethod = class_getInstanceMethod(c, origSEL);
-    const char *encoding = method_getTypeEncoding(origMethod);
-
-    IMP impl = imp_implementationWithBlock(block);
-    if (!class_addMethod(c, newSEL, impl, encoding)) {
-        NSLog(@"Failed to add method: %@ on %@", NSStringFromSelector(newSEL), c);
-        return NO;
-    } else {
-        Method newMethod = class_getInstanceMethod(c, newSEL);
-        PSPDFAssert(strcmp(method_getTypeEncoding(origMethod), method_getTypeEncoding(newMethod)) == 0,
-                    @"Encoding must be the same.");
-
-        if (class_addMethod(c, origSEL, method_getImplementation(newMethod), encoding)) {
-            class_replaceMethod(c, newSEL, method_getImplementation(origMethod), encoding);
-        } else {
-            method_exchangeImplementations(origMethod, newMethod);
-        }
-    }
-    return YES;
-}
+static IMP PSPDFOriginalSetNeedsLayout = NULL;
+static IMP PSPDFOriginalSetNeedsDisplay = NULL;
+static IMP PSPDFOriginalSetNeedsDisplayInRect = NULL;
 
 static void PSPDFLogOffMainUIKitCall(UIView *view, SEL selector) {
     static NSUInteger loggedCallCount = 0;
@@ -43,38 +22,68 @@ static void PSPDFLogOffMainUIKitCall(UIView *view, SEL selector) {
           [NSThread callStackSymbols]);
 }
 
+static void PSPDFCallOriginal(UIView *view, SEL selector, IMP original) {
+    if (!original) return;
+    if ([NSThread isMainThread]) {
+        ((void (*)(id, SEL))original)(view, selector);
+        return;
+    }
+
+    PSPDFLogOffMainUIKitCall(view, selector);
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        ((void (*)(id, SEL))original)(view, selector);
+    });
+}
+
+static void PSPDFCallOriginalWithRect(UIView *view, SEL selector, CGRect rect, IMP original) {
+    if (!original) return;
+    if ([NSThread isMainThread]) {
+        ((void (*)(id, SEL, CGRect))original)(view, selector, rect);
+        return;
+    }
+
+    PSPDFLogOffMainUIKitCall(view, selector);
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        ((void (*)(id, SEL, CGRect))original)(view, selector, rect);
+    });
+}
+
+static void PSPDFSetNeedsLayout(UIView *view, SEL selector) {
+    PSPDFCallOriginal(view, selector, PSPDFOriginalSetNeedsLayout);
+}
+
+static void PSPDFSetNeedsDisplay(UIView *view, SEL selector) {
+    PSPDFCallOriginal(view, selector, PSPDFOriginalSetNeedsDisplay);
+}
+
+static void PSPDFSetNeedsDisplayInRect(UIView *view, SEL selector, CGRect rect) {
+    PSPDFCallOriginalWithRect(view, selector, rect, PSPDFOriginalSetNeedsDisplayInRect);
+}
+
+static void PSPDFInstallGuard(SEL selector, IMP replacement, IMP *original) {
+    Method method = class_getInstanceMethod([UIView class], selector);
+    if (!method) {
+        NSLog(@"[UIKitMainThreadGuard] Missing UIView method: %@", NSStringFromSelector(selector));
+        return;
+    }
+
+    IMP current = method_getImplementation(method);
+    if (current == replacement) return;
+    *original = method_setImplementation(method, replacement);
+}
+
+#endif
+
 __attribute__((constructor)) static void PSPDFUIKitMainThreadGuard(void) {
     setenv("CA_DEBUG_TRANSACTIONS", "1", 1);
+#if PSPDF_ENABLE_UIKIT_MAIN_THREAD_GUARD
     @autoreleasepool {
-        for (NSString *selStr in @[PROPERTY(setNeedsLayout), PROPERTY(setNeedsDisplay), PROPERTY(setNeedsDisplayInRect:)]) {
-            SEL selector = NSSelectorFromString(selStr);
-            SEL newSelector = NSSelectorFromString([NSString stringWithFormat:@"pspdf_%@", selStr]);
-
-            if ([selStr hasSuffix:@":"]) {
-                PSPDFReplaceMethodWithBlock(UIView.class, selector, newSelector, ^(UIView *_self, CGRect rect) {
-                    if ([NSThread isMainThread]) {
-                        ((void (*)(id, SEL, CGRect))objc_msgSend)(_self, newSelector, rect);
-                        return;
-                    }
-
-                    PSPDFLogOffMainUIKitCall(_self, selector);
-                    dispatch_sync(dispatch_get_main_queue(), ^{
-                        ((void (*)(id, SEL, CGRect))objc_msgSend)(_self, newSelector, rect);
-                    });
-                });
-            } else {
-                PSPDFReplaceMethodWithBlock(UIView.class, selector, newSelector, ^(UIView *_self) {
-                    if ([NSThread isMainThread]) {
-                        ((void (*)(id, SEL))objc_msgSend)(_self, newSelector);
-                        return;
-                    }
-
-                    PSPDFLogOffMainUIKitCall(_self, selector);
-                    dispatch_sync(dispatch_get_main_queue(), ^{
-                        ((void (*)(id, SEL))objc_msgSend)(_self, newSelector);
-                    });
-                });
-            }
-        }
+        PSPDFInstallGuard(@selector(setNeedsLayout),
+                          (IMP)PSPDFSetNeedsLayout, &PSPDFOriginalSetNeedsLayout);
+        PSPDFInstallGuard(@selector(setNeedsDisplay),
+                          (IMP)PSPDFSetNeedsDisplay, &PSPDFOriginalSetNeedsDisplay);
+        PSPDFInstallGuard(@selector(setNeedsDisplayInRect:),
+                          (IMP)PSPDFSetNeedsDisplayInRect, &PSPDFOriginalSetNeedsDisplayInRect);
     }
+#endif
 }
