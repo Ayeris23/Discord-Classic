@@ -294,6 +294,7 @@ typedef NS_ENUM(uint64_t, DCGatewayCapabilities) {
 - (DCEmoji *)emojiForSnowflake:(NSString *)snowflake;
 - (void)setEmoji:(DCEmoji *)emoji forSnowflake:(NSString *)snowflake;
 - (void)registerPushToken:(NSString *)token;
+- (DCChannel *)registerCreatedDirectMessageFromResponse:(NSDictionary *)response;
 - (void)requestMemberChunkForUserIds:(NSArray *)userIds inGuild:(NSString *)guildId;
 - (void)applyGuildProfileFromMember:(NSDictionary *)member
                              toUser:(DCUser *)user

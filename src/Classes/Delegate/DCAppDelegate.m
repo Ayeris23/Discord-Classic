@@ -33,6 +33,22 @@
 @property (assign, nonatomic) BOOL shouldReload;
 @end
 
+static volatile int32_t DCConsoleLogEnabledFlag = 0;
+static DTLogBlock DCOriginalDTLogHandler = nil;
+
+BOOL DCConsoleLoggingEnabled(void) {
+    return DCConsoleLogEnabledFlag != 0;
+}
+
+void DCSetConsoleLoggingEnabled(BOOL enabled) {
+    static dispatch_once_t handlerToken;
+    dispatch_once(&handlerToken, ^{
+        DCOriginalDTLogHandler = [DTLogHandler copy];
+    });
+    DCConsoleLogEnabledFlag = enabled ? 1 : 0;
+    DTLogSetLoggerBlock(enabled ? DCOriginalDTLogHandler : nil);
+}
+
 static void DCConfigureMediaAudioSession(void) {
     AVAudioSession *session = [AVAudioSession sharedInstance];
     NSError *error = nil;
@@ -400,6 +416,7 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
 
 - (BOOL)application:(UIApplication *)application
     didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
+    DCSetConsoleLoggingEnabled([[NSUserDefaults standardUserDefaults] boolForKey:@"developerConsoleLogging"]);
     DCConfigureMediaAudioSession();
 
     // App version reporting

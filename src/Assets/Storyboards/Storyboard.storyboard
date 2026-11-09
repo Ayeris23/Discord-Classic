@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<?xml version='1.0' encoding='UTF-8' standalone='no'?>
 <document type="com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB" version="2.0" toolsVersion="5056" systemVersion="13F1911" targetRuntime="iOS.CocoaTouch" variant="6xAndEarlier" propertyAccessControl="none" initialViewController="I1M-Vv-1nm">
     <dependencies>
         <deployment version="1280" defaultVersion="1280" identifier="iOS"/>
@@ -15,10 +15,10 @@
                         <autoresizingMask key="autoresizingMask"/>
                         <color key="tintColor" red="0.15686274509803921" green="0.15686274509803921" blue="0.15686274509803921" alpha="1" colorSpace="deviceRGB"/>
                         <textAttributes key="titleTextAttributes">
-                            <fontDescription key="fontDescription" name="HelveticaNeue-Medium" family="Helvetica Neue" pointSize="20"/>
+                            <fontDescription key="fontDescription" name="HelveticaNeue-Bold" family="Helvetica Neue" pointSize="20"/>
                             <color key="textColor" red="1" green="1" blue="1" alpha="1" colorSpace="calibratedRGB"/>
                             <color key="textShadowColor" red="0.0" green="0.0" blue="0.0" alpha="1" colorSpace="calibratedRGB"/>
-                            <offsetWrapper key="textShadowOffset" horizontal="0.0" vertical="-2"/>
+                            <offsetWrapper key="textShadowOffset" horizontal="0.0" vertical="-1"/>
                         </textAttributes>
                     </navigationBar>
                     <toolbar key="toolbar" opaque="NO" clearsContextBeforeDrawing="NO" contentMode="scaleToFill" id="cEn-U4-rIp">
@@ -518,8 +518,7 @@ Use only as a last resort.</string>
                                                         <color key="titleShadowColor" white="0.5" alpha="1" colorSpace="calibratedWhite"/>
                                                     </state>
                                                     <connections>
-                                                        <segue destination="q4u-5u-6VI" kind="modal" identifier="about to chat" id="9IV-3d-NOt"/>
-                                                    </connections>
+                                                        <action selector="throwToChat:" destination="FDc-Jq-bZ4" eventType="touchUpInside" id="DM-cf716bed6"/></connections>
                                                 </button>
                                             </subviews>
                                             <color key="backgroundColor" red="0.50196078430000002" green="0.51764705879999995" blue="0.56078431370000004" alpha="1" colorSpace="calibratedRGB"/>
@@ -1090,7 +1089,7 @@ Use only as a last resort.</string>
                             <outlet property="delegate" destination="SeX-T3-7zD" id="ErL-Iw-O4m"/>
                         </connections>
                     </tableView>
-                    <navigationItem key="navigationItem" title="Me (&lt;@????>" id="sC4-AV-Rmc">
+                    <navigationItem key="navigationItem" title="Me (&lt;@????&gt;" id="sC4-AV-Rmc">
                         <barButtonItem key="leftBarButtonItem" title="Done" id="89w-wl-uHs">
                             <connections>
                                 <action selector="return:" destination="SeX-T3-7zD" id="XEp-a1-77S"/>
@@ -1126,9 +1125,9 @@ Use only as a last resort.</string>
         <scene sceneID="vU9-op-E4g">
             <objects>
                 <navigationController definesPresentationContext="YES" id="q3S-9a-ACX" sceneMemberID="viewController">
-                    <navigationBar key="navigationBar" contentMode="scaleToFill" id="FN3-rk-ZOT">
+                    <navigationBar key="navigationBar" contentMode="scaleToFill" id="FN3-rk-ZOT" barStyle="black">
                         <autoresizingMask key="autoresizingMask"/>
-                    </navigationBar>
+                    <textAttributes key="titleTextAttributes"><fontDescription key="fontDescription" name="HelveticaNeue-Bold" family="Helvetica Neue" pointSize="20"/><color key="textColor" red="1" green="1" blue="1" alpha="1" colorSpace="calibratedRGB"/><color key="textShadowColor" red="0" green="0" blue="0" alpha="1" colorSpace="calibratedRGB"/><offsetWrapper key="textShadowOffset" horizontal="0" vertical="-1"/></textAttributes></navigationBar>
                     <connections>
                         <segue destination="SeX-T3-7zD" kind="relationship" relationship="rootViewController" id="egV-eo-k4C"/>
                     </connections>
@@ -1808,12 +1807,38 @@ Use only as a last resort.</string>
                                             <color key="backgroundColor" white="0.0" alpha="0.0" colorSpace="calibratedWhite"/>
                                         </view>
                                     </tableViewCell>
+                                <tableViewCell contentMode="scaleToFill" selectionStyle="none" indentationWidth="10" id="DV-419d5ad6d">
+                                        <rect key="frame" x="0.0" y="228.0" width="320" height="45"/>
+                                        <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
+                                        <view key="contentView" opaque="NO" clipsSubviews="YES" multipleTouchEnabled="YES" contentMode="center">
+                                            <rect key="frame" x="10" y="0.0" width="300" height="43"/>
+                                            <autoresizingMask key="autoresizingMask"/>
+                                            <subviews>
+                                                <switch opaque="NO" contentMode="scaleToFill" horizontalHuggingPriority="750" verticalHuggingPriority="750" contentHorizontalAlignment="center" contentVerticalAlignment="center" id="DV-51cdd948c">
+                                                    <rect key="frame" x="209" y="8" width="79" height="27"/>
+                                                    <autoresizingMask key="autoresizingMask" flexibleMinX="YES" flexibleMaxY="YES"/>
+                                                    <color key="onTintColor" red="0.44705882349999998" green="0.53725490200000003" blue="0.85490196080000003" alpha="1" colorSpace="calibratedRGB"/>
+                                                    <connections>
+                                                        <action selector="developerLoggingSwitchChanged:" destination="tMk-9k-xAA" eventType="valueChanged" id="DV-962ae90f3"/>
+                                                    </connections>
+                                                </switch>
+                                                <label opaque="NO" clipsSubviews="YES" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="Developer Mode" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" id="DV-6f08ed692">
+                                                    <rect key="frame" x="10" y="11" width="166" height="21"/>
+                                                    <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
+                                                    <fontDescription key="fontDescription" type="boldSystem" pointSize="17"/>
+                                                    <nil key="highlightedColor"/>
+                                                    <size key="shadowOffset" width="0.0" height="1"/>
+                                                </label>
+                                            </subviews>
+                                            <color key="backgroundColor" white="0.0" alpha="0.0" colorSpace="calibratedWhite"/>
+                                        </view>
+                                    </tableViewCell>
                                 </cells>
                             </tableViewSection>
                             <tableViewSection id="bhn-ha-Es0">
                                 <cells>
                                     <tableViewCell contentMode="scaleToFill" selectionStyle="blue" accessoryType="disclosureIndicator" hidesAccessoryWhenEditing="NO" indentationLevel="1" indentationWidth="0.0" textLabel="nzR-f9-Gjv" style="IBUITableViewCellStyleDefault" id="92j-5K-DLK">
-                                        <rect key="frame" x="0.0" y="332" width="320" height="46"/>
+                                        <rect key="frame" x="0.0" y="377.0" width="320" height="46"/>
                                         <autoresizingMask key="autoresizingMask"/>
                                         <view key="contentView" opaque="NO" clipsSubviews="YES" multipleTouchEnabled="YES" contentMode="center">
                                             <rect key="frame" x="10" y="1" width="280" height="43"/>
@@ -1838,7 +1863,7 @@ Use only as a last resort.</string>
                             <tableViewSection id="1Ct-cX-dan">
                                 <cells>
                                     <tableViewCell contentMode="scaleToFill" selectionStyle="blue" hidesAccessoryWhenEditing="NO" indentationLevel="1" indentationWidth="0.0" id="kDC-y2-BT2">
-                                        <rect key="frame" x="0.0" y="398" width="320" height="46"/>
+                                        <rect key="frame" x="0.0" y="443.0" width="320" height="46"/>
                                         <autoresizingMask key="autoresizingMask"/>
                                         <view key="contentView" opaque="NO" clipsSubviews="YES" multipleTouchEnabled="YES" contentMode="center">
                                             <rect key="frame" x="10" y="1" width="300" height="43"/>
@@ -1865,7 +1890,7 @@ Use only as a last resort.</string>
                         </connections>
                     </tableView>
                     <navigationItem key="navigationItem" title="Settings" id="Dn2-fc-aGQ">
-                        <barButtonItem key="backBarButtonItem" title="Back" id="2rx-Tr-ohc"/>
+                        <barButtonItem key="backBarButtonItem" title="Settings" id="2rx-Tr-ohc"/>
                         <barButtonItem key="rightBarButtonItem" title="Clear Cache" id="tFi-97-oMF"/>
                     </navigationItem>
                     <connections>
@@ -1873,7 +1898,7 @@ Use only as a last resort.</string>
                         <outlet property="dataSaverToggle" destination="NxR-dk-Frf" id="2Z0-2l-vOg"/>
                         <outlet property="experimentalToggle" destination="cSd-eM-hWp" id="tsx-PF-9dH"/>
                         <outlet property="tokenInputField" destination="fQO-8f-L95" id="0xi-Kt-KnV"/>
-                    </connections>
+                    <outlet property="developerLoggingToggle" destination="DV-51cdd948c" id="DV-624b9856d"/></connections>
                 </tableViewController>
                 <placeholder placeholderIdentifier="IBFirstResponder" id="hqV-rz-Nq4" userLabel="First Responder" sceneMemberID="firstResponder"/>
             </objects>
@@ -2323,12 +2348,62 @@ Use only as a last resort.</string>
                                             <color key="backgroundColor" white="0.0" alpha="0.0" colorSpace="calibratedWhite"/>
                                         </view>
                                     </tableViewCell>
-                                </cells>
+                                <tableViewCell userInteractionEnabled="YES" contentMode="scaleToFill" selectionStyle="blue" hidesAccessoryWhenEditing="NO" indentationLevel="1" indentationWidth="0.0" textLabel="CR-1eddf146e" detailTextLabel="CR-bb646bc98" style="IBUITableViewCellStyleSubtitle" id="CR-1ae69b63b">
+                                        <rect key="frame" x="0.0" y="855.0" width="320" height="44"/>
+                                        <autoresizingMask key="autoresizingMask"/>
+                                        <view key="contentView" opaque="NO" clipsSubviews="YES" multipleTouchEnabled="YES" contentMode="center">
+                                            <rect key="frame" x="10" y="0.0" width="300" height="43"/>
+                                            <autoresizingMask key="autoresizingMask"/>
+                                            <subviews>
+                                                <label opaque="NO" clipsSubviews="YES" multipleTouchEnabled="YES" contentMode="left" text="DTFoundation" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" id="CR-1eddf146e">
+                                                    <rect key="frame" x="10" y="2" width="170" height="22"/>
+                                                    <autoresizingMask key="autoresizingMask"/>
+                                                    <fontDescription key="fontDescription" type="boldSystem" pointSize="18"/>
+                                                    <color key="textColor" cocoaTouchSystemColor="darkTextColor"/>
+                                                    <color key="highlightedColor" red="1" green="1" blue="1" alpha="1" colorSpace="calibratedRGB"/>
+                                                </label>
+                                                <label opaque="NO" clipsSubviews="YES" multipleTouchEnabled="YES" contentMode="left" text="Cocoanetics" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" id="CR-bb646bc98">
+                                                    <rect key="frame" x="10" y="24" width="160" height="17"/>
+                                                    <autoresizingMask key="autoresizingMask"/>
+                                                    <fontDescription key="fontDescription" type="system" pointSize="14"/>
+                                                    <color key="textColor" red="0.50196078430000002" green="0.50196078430000002" blue="0.50196078430000002" alpha="1" colorSpace="calibratedRGB"/>
+                                                    <color key="highlightedColor" red="1" green="1" blue="1" alpha="1" colorSpace="calibratedRGB"/>
+                                                </label>
+                                            </subviews>
+                                            <color key="backgroundColor" white="0.0" alpha="0.0" colorSpace="calibratedWhite"/>
+                                        </view>
+                                    </tableViewCell>
+                                    <tableViewCell userInteractionEnabled="YES" contentMode="scaleToFill" selectionStyle="blue" hidesAccessoryWhenEditing="NO" indentationLevel="1" indentationWidth="0.0" textLabel="CR-7ddc50be0" detailTextLabel="CR-e64f31e38" style="IBUITableViewCellStyleSubtitle" id="CR-7e17b98e9">
+                                        <rect key="frame" x="0.0" y="899.0" width="320" height="44"/>
+                                        <autoresizingMask key="autoresizingMask"/>
+                                        <view key="contentView" opaque="NO" clipsSubviews="YES" multipleTouchEnabled="YES" contentMode="center">
+                                            <rect key="frame" x="10" y="0.0" width="300" height="43"/>
+                                            <autoresizingMask key="autoresizingMask"/>
+                                            <subviews>
+                                                <label opaque="NO" clipsSubviews="YES" multipleTouchEnabled="YES" contentMode="left" text="DTCoreText" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" id="CR-7ddc50be0">
+                                                    <rect key="frame" x="10" y="2" width="170" height="22"/>
+                                                    <autoresizingMask key="autoresizingMask"/>
+                                                    <fontDescription key="fontDescription" type="boldSystem" pointSize="18"/>
+                                                    <color key="textColor" cocoaTouchSystemColor="darkTextColor"/>
+                                                    <color key="highlightedColor" red="1" green="1" blue="1" alpha="1" colorSpace="calibratedRGB"/>
+                                                </label>
+                                                <label opaque="NO" clipsSubviews="YES" multipleTouchEnabled="YES" contentMode="left" text="Cocoanetics" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" id="CR-e64f31e38">
+                                                    <rect key="frame" x="10" y="24" width="160" height="17"/>
+                                                    <autoresizingMask key="autoresizingMask"/>
+                                                    <fontDescription key="fontDescription" type="system" pointSize="14"/>
+                                                    <color key="textColor" red="0.50196078430000002" green="0.50196078430000002" blue="0.50196078430000002" alpha="1" colorSpace="calibratedRGB"/>
+                                                    <color key="highlightedColor" red="1" green="1" blue="1" alpha="1" colorSpace="calibratedRGB"/>
+                                                </label>
+                                            </subviews>
+                                            <color key="backgroundColor" white="0.0" alpha="0.0" colorSpace="calibratedWhite"/>
+                                        </view>
+                                    </tableViewCell>
+                                    </cells>
                             </tableViewSection>
                             <tableViewSection headerTitle="Former Contributors" id="qVj-1j-KMJ">
                                 <cells>
                                     <tableViewCell userInteractionEnabled="NO" contentMode="scaleToFill" selectionStyle="blue" hidesAccessoryWhenEditing="NO" indentationLevel="1" indentationWidth="0.0" textLabel="uV1-sX-Dl2" detailTextLabel="SiW-Ui-Ki9" style="IBUITableViewCellStyleSubtitle" id="zfL-ez-i2c">
-                                        <rect key="frame" x="0.0" y="902" width="320" height="45"/>
+                                        <rect key="frame" x="0.0" y="990.0" width="320" height="45"/>
                                         <autoresizingMask key="autoresizingMask"/>
                                         <view key="contentView" opaque="NO" clipsSubviews="YES" multipleTouchEnabled="YES" contentMode="center">
                                             <rect key="frame" x="10" y="1" width="300" height="43"/>
@@ -2353,7 +2428,7 @@ Use only as a last resort.</string>
                                         </view>
                                     </tableViewCell>
                                     <tableViewCell userInteractionEnabled="NO" contentMode="scaleToFill" selectionStyle="blue" hidesAccessoryWhenEditing="NO" indentationLevel="1" indentationWidth="0.0" textLabel="upI-l8-9tA" detailTextLabel="Pme-9w-QSg" style="IBUITableViewCellStyleSubtitle" id="Byh-of-NgS">
-                                        <rect key="frame" x="0.0" y="947" width="320" height="45"/>
+                                        <rect key="frame" x="0.0" y="1035.0" width="320" height="45"/>
                                         <autoresizingMask key="autoresizingMask"/>
                                         <view key="contentView" opaque="NO" clipsSubviews="YES" multipleTouchEnabled="YES" contentMode="center">
                                             <rect key="frame" x="10" y="0.0" width="300" height="43"/>
@@ -2386,7 +2461,7 @@ Use only as a last resort.</string>
                         </connections>
                     </tableView>
                     <navigationItem key="navigationItem" title="About" id="HZq-If-WXe">
-                        <barButtonItem key="backBarButtonItem" title="Back" id="863-ol-28f"/>
+                        <barButtonItem key="backBarButtonItem" title="About" id="863-ol-28f"/>
                     </navigationItem>
                     <connections>
                         <outlet property="versionLabel" destination="N6B-AD-91p" id="6Uu-nm-1Ds"/>

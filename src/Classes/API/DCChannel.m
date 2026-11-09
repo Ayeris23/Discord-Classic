@@ -400,7 +400,10 @@ static dispatch_queue_t channel_send_queue;
         [urlRequest setValue:@"no-store" forHTTPHeaderField:@"Cache-Control"];
         [urlRequest setHTTPMethod:@"PATCH"];
 
+        // Match normal sends: encode Unicode as JSON-safe Java escapes.
         NSMutableString *mutableContent = [content mutableCopy];
+        CFStringTransform((__bridge CFMutableStringRef)mutableContent,
+                          NULL, CFSTR("Any-Hex/Java"), NO);
 
         NSDictionary *dictionary = @{@"content" : mutableContent};
         NSError *writeError = nil;
@@ -411,9 +414,10 @@ static dispatch_queue_t channel_send_queue;
             DBGLOG(@"Error serializing message to JSON: %@", writeError);
             return;
         }
-        NSString *messageString = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
-        [urlRequest setHTTPBody:[NSData dataWithBytes:[messageString UTF8String]
-                                               length:[messageString length]]];
+        NSString *messageString = [[[NSString alloc] initWithData:jsonData
+                                                         encoding:NSUTF8StringEncoding]
+            stringByReplacingOccurrencesOfString:@"\\\\u" withString:@"\\u"];
+        [urlRequest setHTTPBody:[messageString dataUsingEncoding:NSUTF8StringEncoding]];
 
         NSError *error                  = nil;
         NSHTTPURLResponse *responseCode = nil;

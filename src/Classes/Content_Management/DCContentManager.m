@@ -88,18 +88,16 @@
         [rounded drawInRect:CGRectMake(padding, padding, avatarSize, avatarSize)];
     }
 
-    if (includeDecoration
-        && decoration
-        && [decoration isKindOfClass:[UIImage class]]
-        && decoration.size.width > 0) {
-        [decoration drawInRect:CGRectMake(0, 0, canvasSize, canvasSize)];
-    }
-
     UIImage *chrome = [UIImage imageNamed:chromeName];
     if (chrome) {
         CGFloat chromeX = (canvasSize - chromeWidth) / 2.0;
         CGFloat chromeY = (canvasSize - chromeHeight) / 2.0;
         [chrome drawInRect:CGRectMake(chromeX, chromeY, chromeWidth, chromeHeight)];
+    }
+
+    if (includeDecoration && [decoration isKindOfClass:[UIImage class]] &&
+        decoration.size.width > 0) {
+        [decoration drawInRect:CGRectMake(0, 0, canvasSize, canvasSize)];
     }
 
     UIImage *result = UIGraphicsGetImageFromCurrentImageContext();

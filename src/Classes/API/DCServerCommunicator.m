@@ -45,6 +45,10 @@ static NSString *DCGuildMemberResolutionKey(NSString *guildID, NSString *userID)
     return [NSString stringWithFormat:@"%@:%@", guildID, userID];
 }
 
+static BOOL DCEqualOptionalStrings(NSString *left, NSString *right) {
+    return left == right || [left isEqualToString:right];
+}
+
 static void DCClearResolvedGuildKeys(NSMutableSet *keys, NSString *prefix) {
     if (!keys || !prefix.length) return;
     NSArray *snapshot = [keys allObjects];
@@ -651,7 +655,7 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
 }
 
 + (NSMutableURLRequest *)requestWithPath:(NSString *)path token:(NSString *)token {
-    NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:@"https://discordapp.com/api/v9%@", path]];
+    NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:@"https://discord.com/api/v9%@", path]];
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url
                                                        cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
                                                    timeoutInterval:15];
@@ -3665,6 +3669,18 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
      * the graph together with its matching Gateway sequence. */
 }
 
+- (DCChannel *)registerCreatedDirectMessageFromResponse:(NSDictionary *)response {
+    NSAssert([NSThread isMainThread], @"Direct messages must be registered on the main thread");
+    NSString *channelID = [response objectForKey:@"id"];
+    id type = [response objectForKey:@"type"];
+    if (![channelID isKindOfClass:[NSString class]] || !channelID.length ||
+        ![type respondsToSelector:@selector(integerValue)] || [type integerValue] != DCChannelTypeDM) {
+        return nil;
+    }
+    [self handleChannelCreateWithData:response];
+    return [self.channels objectForKey:channelID];
+}
+
 - (void)handleChannelCreateWithData:(NSDictionary *)d {
     NSString *channelID = [d objectForKey:@"id"];
     if (![channelID isKindOfClass:[NSString class]] || channelID.length == 0)
@@ -3794,7 +3810,8 @@ typedef struct {
 
 - (id)handleGuildMemberItemWithItem:(NSDictionary *)item
                              guild:(DCGuild *)guild
-                              perf:(DCMemberListItemPerf *)perf {
+                              perf:(DCMemberListItemPerf *)perf
+                      updatedUsers:(NSMutableDictionary *)updatedUsers {
     CFAbsoluteTime itemStarted = CFAbsoluteTimeGetCurrent();
     id result = nil;
     if ([item objectForKey:@"group"]) {
@@ -3850,6 +3867,10 @@ typedef struct {
         NSDictionary *rawUser = [rawUserValue isKindOfClass:[NSDictionary class]]
             ? rawUserValue : nil;
         NSString *userID = [rawUser objectForKey:@"id"];
+        if (![userID isKindOfClass:[NSString class]] || !userID.length) {
+            id memberUserID = [memberItem objectForKey:@"user_id"];
+            userID = [memberUserID isKindOfClass:[NSString class]] ? memberUserID : nil;
+        }
         CFAbsoluteTime lookupStarted = CFAbsoluteTimeGetCurrent();
         DCUser *user = [self userForSnowflake:userID];
         CFTimeInterval lookupElapsed = CFAbsoluteTimeGetCurrent() - lookupStarted;
@@ -3857,13 +3878,29 @@ typedef struct {
             perf->members++;
             perf->userLookup += lookupElapsed;
         }
-        if (!user) {
-            CFAbsoluteTime creationStarted = CFAbsoluteTimeGetCurrent();
-            // The converter already publishes newly converted users when cache:YES.
+        if (rawUser && [[rawUser objectForKey:@"id"] isKindOfClass:[NSString class]] &&
+            (!user || [rawUser objectForKey:@"username"] != nil ||
+             [rawUser objectForKey:@"global_name"] != nil ||
+             [rawUser objectForKey:@"avatar"] != nil ||
+             [rawUser objectForKey:@"avatar_decoration_data"] != nil ||
+             [rawUser objectForKey:@"discriminator"] != nil)) {
+            NSString *oldUsername = user.username;
+            NSString *oldGlobalName = user.globalName;
+            NSString *oldAvatarID = user.avatarID;
+            NSString *oldDecorationID = user.avatarDecorationID;
+            BOOL hadUser = user != nil;
+            CFAbsoluteTime conversionStarted = CFAbsoluteTimeGetCurrent();
             user = [DCTools convertJsonUser:rawUser cache:YES];
-            if (perf) {
+            if (perf && !hadUser) {
                 perf->createdUsers += (user != nil);
-                perf->userCreation += CFAbsoluteTimeGetCurrent() - creationStarted;
+                perf->userCreation += CFAbsoluteTimeGetCurrent() - conversionStarted;
+            }
+            if (hadUser && user && userID.length &&
+                (!DCEqualOptionalStrings(oldUsername, user.username) ||
+                 !DCEqualOptionalStrings(oldGlobalName, user.globalName) ||
+                 !DCEqualOptionalStrings(oldAvatarID, user.avatarID) ||
+                 !DCEqualOptionalStrings(oldDecorationID, user.avatarDecorationID))) {
+                [updatedUsers setObject:user forKey:userID];
             }
         }
         if (guild && user) {
@@ -3878,7 +3915,10 @@ typedef struct {
         id presenceValue = [memberItem objectForKey:@"presence"];
         NSDictionary *presence = [presenceValue isKindOfClass:[NSDictionary class]]
             ? presenceValue : nil;
-        user.status = [DCUser statusFromString:[presence objectForKey:@"status"]];
+        NSString *presenceStatus = [presence objectForKey:@"status"];
+        if ([presenceStatus isKindOfClass:[NSString class]]) {
+            user.status = [DCUser statusFromString:presenceStatus];
+        }
         if (perf) perf->presence += CFAbsoluteTimeGetCurrent() - presenceStarted;
         result = user;
     } else if (perf) {
@@ -3918,6 +3958,7 @@ typedef struct {
     CFTimeInterval memberListLegacyElapsed = 0;
     NSUInteger syncedItems = 0;
     DCMemberListItemPerf itemPerf = {0};
+    NSMutableDictionary *updatedUsers = [NSMutableDictionary dictionary];
     NSString *listID = [d objectForKey:@"id"];
     NSArray *ops = [d objectForKey:@"ops"];
     if (![ops isKindOfClass:[NSArray class]]) ops = [NSArray array];
@@ -4030,7 +4071,10 @@ typedef struct {
 
                 NSUInteger absoluteIndex = first;
                 for (NSDictionary *item in items) {
-                    id member = [self handleGuildMemberItemWithItem:item guild:guild perf:&itemPerf];
+                    id member = [self handleGuildMemberItemWithItem:item
+                                                              guild:guild
+                                                               perf:&itemPerf
+                                                       updatedUsers:updatedUsers];
                     if (member) {
                         [guild.memberListItems setObject:member forKey:@(absoluteIndex)];
                     }
@@ -4048,7 +4092,10 @@ typedef struct {
                 continue;
             } else if ([operation isEqualToString:UPDATE]) {
                 NSUInteger index = [[op objectForKey:@"index"] unsignedIntegerValue];
-                id member = [self handleGuildMemberItemWithItem:[op objectForKey:@"item"] guild:guild perf:&itemPerf];
+                id member = [self handleGuildMemberItemWithItem:[op objectForKey:@"item"]
+                                                          guild:guild
+                                                           perf:&itemPerf
+                                                   updatedUsers:updatedUsers];
                 if (member) {
                     [guild.memberListItems setObject:member forKey:@(index)];
                     [guild.memberListStaleIndexes removeIndex:index];
@@ -4057,7 +4104,10 @@ typedef struct {
                 NSUInteger index = [[op objectForKey:@"index"] unsignedIntegerValue];
                 DCShiftMemberListItems(guild.memberListItems, index, 1);
                 [guild.memberListStaleIndexes shiftIndexesStartingAtIndex:index by:1];
-                id member = [self handleGuildMemberItemWithItem:[op objectForKey:@"item"] guild:guild perf:&itemPerf];
+                id member = [self handleGuildMemberItemWithItem:[op objectForKey:@"item"]
+                                                          guild:guild
+                                                           perf:&itemPerf
+                                                   updatedUsers:updatedUsers];
                 if (member) {
                     [guild.memberListItems setObject:member forKey:@(index)];
                     [guild.memberListStaleIndexes removeIndex:index];
@@ -4113,15 +4163,24 @@ typedef struct {
                itemPerf.fallbackLookup);
     }
 
-    if (self.selectedChannel != nil &&
-        [self.selectedChannel.parentGuild.snowflake isEqualToString:guild.snowflake]) {
+    BOOL isSelectedGuild = self.selectedChannel != nil &&
+        [self.selectedChannel.parentGuild.snowflake isEqualToString:guild.snowflake];
+    if (isSelectedGuild || updatedUsers.count) {
+        NSArray *changedUsers = [updatedUsers allValues];
         dispatch_async(dispatch_get_main_queue(), ^{
-            [NSNotificationCenter.defaultCenter postNotificationName:@"GuildMemberListUpdated"
-                                                              object:guild
-                                                            userInfo:@{
-                                                                @"material_sync" : @(containsMaterialSync),
-                                                                @"invalidated" : @(containsInvalidation)
-                                                            }];
+            if (isSelectedGuild) {
+                [NSNotificationCenter.defaultCenter
+                    postNotificationName:@"GuildMemberListUpdated"
+                                  object:guild
+                                userInfo:@{
+                                    @"material_sync" : @(containsMaterialSync),
+                                    @"invalidated" : @(containsInvalidation)
+                                }];
+            }
+            for (DCUser *changedUser in changedUsers) {
+                [NSNotificationCenter.defaultCenter
+                    postNotificationName:@"RELOAD USER DATA" object:changedUser];
+            }
         });
     }
 }
@@ -4347,6 +4406,12 @@ typedef struct {
         DCUser *user = [userDict isKindOfClass:[NSDictionary class]]
             ? [DCTools convertJsonUser:userDict cache:YES]
             : nil;
+        if (!user) {
+            NSString *userID = [d objectForKey:@"user_id"];
+            if ([userID isKindOfClass:[NSString class]]) {
+                user = [self userForSnowflake:userID];
+            }
+        }
         NSString *guildId = [d objectForKey:@"guild_id"];
         if (user && guildId) {
             // Member updates carry guild-scoped identity fields independently.

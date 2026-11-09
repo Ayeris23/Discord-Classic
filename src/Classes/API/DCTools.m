@@ -780,16 +780,18 @@ static NSString *DCPrettyTimestampForDate(NSDate *date) {
             return;
         }
 
+        NSString *requestedAvatarID = [user.avatarID copy];
         SDWebImageManager *manager = [SDWebImageManager sharedManager];
         NSURL *avatarURL = [NSURL URLWithString:[NSString stringWithFormat:
             @"https://cdn.discordapp.com/avatars/%@/%@.png?size=80",
-            user.snowflake, user.avatarID]];
+            user.snowflake, requestedAvatarID]];
 
         [manager downloadImageWithURL:avatarURL
                               options:SDWebImageRetryFailed
                              progress:nil
                             completed:^(UIImage *retrievedImage, NSError *error, SDImageCacheType cacheType, BOOL finished, NSURL *imageURL) {
                                 @autoreleasepool {
+                                    if (![user.avatarID isEqualToString:requestedAvatarID]) return;
                                     if (!retrievedImage || !finished) {
                                         int selector = 0;
                                         if (user.discriminator == 0) {
@@ -831,14 +833,16 @@ static NSString *DCPrettyTimestampForDate(NSDate *date) {
             return;
         }
 
+        NSString *requestedDecorationID = [user.avatarDecorationID copy];
         NSURL *avatarDecorationURL = [NSURL URLWithString:[NSString stringWithFormat:
             @"https://cdn.discordapp.com/avatar-decoration-presets/%@.png?size=96&passthrough=false",
-            user.avatarDecorationID]];
+            requestedDecorationID]];
 
         [manager downloadImageWithURL:avatarDecorationURL
                               options:SDWebImageRetryFailed
                              progress:nil
                             completed:^(UIImage *retrievedImage, NSError *error, SDImageCacheType cacheType, BOOL finished, NSURL *imageURL) {
+                                if (![user.avatarDecorationID isEqualToString:requestedDecorationID]) return;
                                 if (!retrievedImage || !finished) {
                                     NSLog(@"Failed to download avatar decoration: %@", error);
                                     return;
@@ -983,6 +987,16 @@ static NSString *DCPrettyTimestampForDate(NSDate *date) {
     dispatch_group_notify(group,
         dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         @autoreleasepool {
+            NSString *currentCacheKey = nil;
+            @synchronized(user) {
+                currentCacheKey = DCGuildAvatarCacheKey(user, guild);
+            }
+            if (![currentCacheKey isEqualToString:cacheKey]) {
+                @synchronized(requestKeys) {
+                    [requestKeys removeObject:cacheKey];
+                }
+                return;
+            }
             UIImage *avatar = rawAvatar;
             if (!avatar) {
                 NSInteger selector = 0;

@@ -73,6 +73,8 @@
              forBarMetrics:UIBarMetricsDefault];
     self.navigationItem.title = [NSString
         stringWithFormat:@"Me (%@)", DCServerCommunicator.sharedInstance.currentUserInfo.globalName];
+    self.navigationItem.backBarButtonItem =
+        [DCInterfaceStyle navigationBackButtonItemWithTitle:self.navigationItem.title];
     [self.doneButton setBackgroundImage:[DCInterfaceStyle primaryBarButtonBackgroundImage]
                                forState:UIControlStateNormal
                              barMetrics:UIBarMetricsDefault];

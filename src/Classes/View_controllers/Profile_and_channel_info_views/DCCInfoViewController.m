@@ -72,6 +72,10 @@ static const NSUInteger DCMemberListMaximumRefreshRetries = 2;
                                                name:@"RELOAD USER DATA"
                                              object:nil];
     [NSNotificationCenter.defaultCenter addObserver:self
+                                           selector:@selector(handleReloadUser:)
+                                               name:@"USER_PRESENCE_UPDATED"
+                                             object:nil];
+    [NSNotificationCenter.defaultCenter addObserver:self
                                            selector:@selector(memberListChannelEntered:)
                                                name:@"GuildMemberListChannelEntered"
                                              object:nil];

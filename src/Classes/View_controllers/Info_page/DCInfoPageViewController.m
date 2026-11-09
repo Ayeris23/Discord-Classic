@@ -16,12 +16,20 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.creditLinks = [NSArray
-        arrayWithObjects:@"https://twitter.com/torutheredfox",
-                         @"https://bag-xml.com/me/",
-                         @"https://twitter.com/trev3d",
-                         @"https://github.com/ndcube", @"https://discord.com",
-                         @"https://example.com", @"https://example.com", nil];
+    self.creditLinks = [NSArray arrayWithObjects:
+        [NSArray array],
+        [NSArray arrayWithObjects:@"https://bag-xml.com/me/", @"https://github.com/ndcube",
+            [NSNull null], [NSNull null], nil],
+        [NSArray arrayWithObjects:@"https://github.com/apploft/APLSlideMenu",
+            @"https://github.com/nicklockwood", [NSNull null], @"https://github.com/instructure",
+            @"https://www.webmproject.org", @"https://diy.org",
+            @"https://github.com/SDWebImage/SDWebImage", [NSNull null],
+            @"https://bag-xml.com/me/", @"https://github.com/mayoff",
+            [NSNull null], @"https://discord.com",
+            @"https://github.com/Cocoanetics/DTFoundation",
+            @"https://github.com/Cocoanetics/DTCoreText", nil],
+        [NSArray arrayWithObjects:@"https://twitter.com/trev3d",
+            @"https://twitter.com/torutheredfox", nil], nil];
     
     NSString *version = [[NSUserDefaults standardUserDefaults] stringForKey:@"version"];
     self.versionLabel.text = [NSString stringWithFormat:@"%@", version];
@@ -33,11 +41,14 @@
 
 - (void)tableView:(UITableView *)tableView
     didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
-    [UIApplication.sharedApplication
-        openURL:[NSURL
-                    URLWithString:self.creditLinks
-                                      [indexPath.row + indexPath.section * 3]]];
     [tableView deselectRowAtIndexPath:indexPath animated:NO];
+    if (indexPath.section >= self.creditLinks.count) return;
+    NSArray *sectionLinks = [self.creditLinks objectAtIndex:indexPath.section];
+    if (indexPath.row >= sectionLinks.count) return;
+    id urlString = [sectionLinks objectAtIndex:indexPath.row];
+    if ([urlString isKindOfClass:[NSString class]]) {
+        [[UIApplication sharedApplication] openURL:[NSURL URLWithString:urlString]];
+    }
 }
 
 @end

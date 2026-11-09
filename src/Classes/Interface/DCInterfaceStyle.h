@@ -31,6 +31,7 @@
 + (UIImage *)downButtonPressedBackgroundImage;
 + (UIImage *)navigationBackButtonBackgroundImage;
 + (UIImage *)navigationBackButtonPressedBackgroundImage;
++ (UIBarButtonItem *)navigationBackButtonItemWithTitle:(NSString *)title;
 
 + (UIImage *)guildBannerPlaceholderImage;
 + (UIImage *)notificationBackgroundImage;

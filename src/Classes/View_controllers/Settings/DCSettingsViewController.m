@@ -12,6 +12,17 @@
 #import "DCCacheManager.h"
 #import "DCContentPurgeManager.h"
 #import "WSWebSocket.h"
+#import "DCInterfaceStyle.h"
+
+extern void DCSetConsoleLoggingEnabled(BOOL enabled);
+
+static void DCThemeBarButton(UIBarButtonItem *button) {
+    if (!button) return;
+    [button setBackgroundImage:[DCInterfaceStyle barButtonBackgroundImage]
+                    forState:UIControlStateNormal barMetrics:UIBarMetricsDefault];
+    [button setBackgroundImage:[DCInterfaceStyle barButtonPressedBackgroundImage]
+                    forState:UIControlStateHighlighted barMetrics:UIBarMetricsDefault];
+}
 
 @implementation DCSettingsViewController
 
@@ -20,6 +31,11 @@
     [super viewDidLoad];
     self.experimentalToggle.on = [[NSUserDefaults standardUserDefaults] boolForKey:@"experimentalMode"];
     self.dataSaverToggle.on    = [[NSUserDefaults standardUserDefaults] boolForKey:@"dataSaver"];
+    self.developerLoggingToggle.on = [[NSUserDefaults standardUserDefaults] boolForKey:@"developerConsoleLogging"];
+    DCThemeBarButton(self.clearCacheButton);
+    DCThemeBarButton(self.navigationItem.rightBarButtonItem);
+    self.navigationItem.backBarButtonItem =
+        [DCInterfaceStyle navigationBackButtonItemWithTitle:self.navigationItem.title];
     self.clearCacheButton.target = self;
     self.clearCacheButton.action = @selector(didTapClearCache:);
 
@@ -142,6 +158,12 @@
     cancelButtonTitle:@"No"
     otherButtonTitles:@"Yes", nil];
     [alert show];
+}
+
+- (IBAction)developerLoggingSwitchChanged:(UISwitch *)sender {
+    [[NSUserDefaults standardUserDefaults] setBool:sender.on forKey:@"developerConsoleLogging"];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+    DCSetConsoleLoggingEnabled(sender.on);
 }
 
 - (IBAction)dataSaverSwitchChanged:(UISwitch *)sender {

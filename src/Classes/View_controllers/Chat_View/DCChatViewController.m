@@ -3004,12 +3004,22 @@ static dispatch_queue_t chat_presentation_queue;
                 return;
             }
 
+            NSUInteger oldCount = self.messages.count;
+            NSInteger oldRowCount = [self.chatTableView numberOfRowsInSection:0];
+            BOOL hadUnreadSeparator = [self unreadSeparatorRow] != NSNotFound;
+
             NSMutableArray *indexPaths = NSMutableArray.new;
             NSUInteger insertCount = toInsert.count;
             for (NSUInteger i = 0; i < insertCount; i++) {
                 [indexPaths addObject:[NSIndexPath indexPathForRow:i inSection:0]];
                 [self.messages addObject:toInsert[i]];
             }
+
+            BOOL hasUnreadSeparator = [self unreadSeparatorRow] != NSNotFound;
+            BOOL requiresReload =
+                oldRowCount != (NSInteger)oldCount + (hadUnreadSeparator ? 1 : 0) ||
+                hadUnreadSeparator != hasUnreadSeparator;
+
             /*
              * Suppress scroll-position saving and pagination while UIKit performs the
              * intermediate offset changes caused by inserting rows at row zero.
@@ -3018,11 +3028,15 @@ static dispatch_queue_t chat_presentation_queue;
 
             [UIView setAnimationsEnabled:NO];
 
-            [self.chatTableView beginUpdates];
-            [self.chatTableView
-                insertRowsAtIndexPaths:indexPaths
-                      withRowAnimation:UITableViewRowAnimationNone];
-            [self.chatTableView endUpdates];
+            if (requiresReload) {
+                [self.chatTableView reloadData];
+            } else {
+                [self.chatTableView beginUpdates];
+                [self.chatTableView
+                    insertRowsAtIndexPaths:indexPaths
+                          withRowAnimation:UITableViewRowAnimationNone];
+                [self.chatTableView endUpdates];
+            }
 
             [UIView setAnimationsEnabled:YES];
 
@@ -3030,7 +3044,7 @@ static dispatch_queue_t chat_presentation_queue;
              * The message that was previously newest is now after the inserted block.
              * Reload it because its grouping relationship may have changed.
              */
-            if (insertCount < self.messages.count) {
+            if (!requiresReload && insertCount < self.messages.count) {
                 NSIndexPath *previousNewestPath =
                     [NSIndexPath indexPathForRow:insertCount
                                      inSection:0];
@@ -3059,7 +3073,9 @@ static dispatch_queue_t chat_presentation_queue;
                  */
                 CGFloat insertedHeight = 0.0f;
 
-                for (NSUInteger row = 0; row < insertCount; row++) {
+                NSInteger addedRows =
+                    [self.chatTableView numberOfRowsInSection:0] - oldRowCount;
+                for (NSInteger row = 0; row < addedRows; row++) {
                     NSIndexPath *path =
                         [NSIndexPath indexPathForRow:row
                                          inSection:0];
@@ -3137,6 +3153,7 @@ static dispatch_queue_t chat_presentation_queue;
     if (changedWindow) [self invalidatePendingMessageLoads];
 
     BOOL readStateReady = DCServerCommunicator.sharedInstance.readyReadStateAvailable;
+    self.unreadEntryStateVerified = readStateReady;
     BOOL firstSessionEntry = readStateReady &&
         ![store hasOpenedChannelThisSession:channel.snowflake];
     NSLog(@"[ChatUnread] Enter %@ ready=%d first=%d previous=%@ cached=%lu savedOffset=%d",
@@ -3166,7 +3183,6 @@ static dispatch_queue_t chat_presentation_queue;
             DCCompareChatSnowflakes(currentReadID,
                                     self.unreadBoundaryReadID) != NSOrderedDescending;
     }
-    self.unreadEntryStateVerified = readStateReady;
     if (firstSessionEntry) {
         [store markChannelOpenedThisSession:channel.snowflake];
         if (!enteringChannel) {
@@ -7223,7 +7239,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                 [self resizeInputField];
             } else {
                 self.editingMessage               = self.selectedMessage;
-                self.inputField.text              = self.selectedMessage.rawContent;
+                self.inputField.text              = [self.selectedMessage.rawContent emojizedString];
                 self.inputFieldPlaceholder.hidden = YES;
                 [self updateSendButtonEnabledState];
                 [self resizeInputField];
@@ -8339,90 +8355,90 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 }
 
 - (void)resizeInputField {
-    static const CGFloat kMaxLines_iPhone  = 5.0f;
-    static const CGFloat kMaxLines_iPad    = 10.0f;
+    static const CGFloat kMaxLines_iPhone   = 5.0f;
+    static const CGFloat kMaxLines_iPad     = 10.0f;
     static const CGFloat kSingleLineHeight = 34.0f;
 
-    CGFloat lineHeight     = self.inputField.font.lineHeight;
-    CGFloat maxLines       = (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad)
-                                 ? kMaxLines_iPad : kMaxLines_iPhone;
+    CGFloat lineHeight = self.inputField.font.lineHeight;
+    CGFloat maxLines = (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad)
+        ? kMaxLines_iPad : kMaxLines_iPhone;
     CGFloat maxInputHeight = kSingleLineHeight + ((maxLines - 1) * lineHeight);
-
     CGFloat desiredHeight = ceilf([self.inputField sizeThatFits:
         CGSizeMake(self.inputField.frame.size.width, MAXFLOAT)].height);
 
-    BOOL needsScroll = (desiredHeight > maxInputHeight);
-    self.inputField.scrollEnabled = needsScroll;
+    BOOL singleLine = desiredHeight <= kSingleLineHeight;
+    BOOL needsScroll = !singleLine && desiredHeight > maxInputHeight;
+    if (self.inputField.scrollEnabled != needsScroll) {
+        self.inputField.scrollEnabled = needsScroll;
+    }
 
-    CGFloat newInputHeight   = MAX(MIN(desiredHeight, maxInputHeight), _baseInputHeight);
+    CGFloat newInputHeight = singleLine ? _baseInputHeight
+        : MAX(MIN(desiredHeight, maxInputHeight), _baseInputHeight);
     CGFloat newToolbarHeight = _baseToolbarHeight + (newInputHeight - _baseInputHeight);
-    CGFloat growth           = newToolbarHeight - _baseToolbarHeight;
+    CGFloat growth = newToolbarHeight - _baseToolbarHeight;
 
-    // Reset to single line
-    if (desiredHeight <= kSingleLineHeight) {
-        self.inputField.scrollEnabled = NO;
-
-        CGRect bgFrame      = self.messageFieldBG.frame;
-        bgFrame.size.height = _baseMsgFieldBGHeight;
+    CGRect bgFrame = self.messageFieldBG.frame;
+    bgFrame.size.height = _baseMsgFieldBGHeight + growth;
+    if (!CGRectEqualToRect(self.messageFieldBG.frame, bgFrame)) {
         self.messageFieldBG.frame = bgFrame;
+    }
 
-        CGRect inputFrame      = self.inputField.frame;
-        inputFrame.size.height = _baseInputHeight;
-        inputFrame.origin.y    = _baseInputOriginY;
-        self.inputField.frame  = inputFrame;
+    CGRect inputFrame = self.inputField.frame;
+    inputFrame.size.height = newInputHeight;
+    inputFrame.origin.y = singleLine ? _baseInputOriginY
+        : (bgFrame.origin.y + bgFrame.size.height / 2.0f - newInputHeight / 2.0f);
+    if (!CGRectEqualToRect(self.inputField.frame, inputFrame)) {
+        self.inputField.frame = inputFrame;
+    }
 
-        CGRect toolbarFrame      = self.toolbar.frame;
-        toolbarFrame.size.height = _baseToolbarHeight;
-        toolbarFrame.origin.y    = self.view.bounds.size.height
-                                   - self.keyboardHeight - _baseToolbarHeight;
+    CGRect toolbarFrame = self.toolbar.frame;
+    toolbarFrame.size.height = newToolbarHeight;
+    toolbarFrame.origin.y = self.view.bounds.size.height
+        - self.keyboardHeight - newToolbarHeight;
+    if (!CGRectEqualToRect(self.toolbar.frame, toolbarFrame)) {
         self.toolbar.frame = toolbarFrame;
         [self updateJumpToPresentButtonFrame];
+    }
 
-        CGFloat typingOffset = (self.typingUsers.count > 0) ? 20.0f : 0.0f;
-        [self.chatTableView setHeight:self.view.bounds.size.height
-                                      - self.keyboardHeight
-                                      - _baseToolbarHeight
-                                      - typingOffset];
+    CGFloat typingOffset = self.typingUsers.count > 0 ? 20.0f : 0.0f;
+    CGFloat tableHeight = self.view.bounds.size.height - self.keyboardHeight
+        - newToolbarHeight - typingOffset;
+    if (fabs(self.chatTableView.frame.size.height - tableHeight) > 0.5f) {
+        [self.chatTableView setHeight:tableHeight];
         [self layoutEmptyChatLoadingIndicator];
-        if (self.typingUsers.count > 0) {
-            [self.typingIndicatorView setY:self.view.bounds.size.height
-                                           - self.keyboardHeight
-                                           - _baseToolbarHeight - 20.0f];
-        }
-        return;
     }
 
-    CGRect bgFrame      = self.messageFieldBG.frame;
-    bgFrame.size.height = _baseMsgFieldBGHeight + growth;
-    self.messageFieldBG.frame = bgFrame;
-
-    CGRect inputFrame      = self.inputField.frame;
-    inputFrame.size.height = newInputHeight;
-    CGFloat bgMidY         = bgFrame.origin.y + bgFrame.size.height / 2.0f;
-    inputFrame.origin.y    = bgMidY - newInputHeight / 2.0f;
-    self.inputField.frame  = inputFrame;
-
-    if (needsScroll) {
-        [self.inputField scrollRangeToVisible:NSMakeRange(self.inputField.text.length, 0)];
-    }
-
-    CGRect toolbarFrame      = self.toolbar.frame;
-    toolbarFrame.size.height = newToolbarHeight;
-    toolbarFrame.origin.y    = self.view.bounds.size.height
-                               - self.keyboardHeight - newToolbarHeight;
-    self.toolbar.frame = toolbarFrame;
-    [self updateJumpToPresentButtonFrame];
-
-    CGFloat typingOffset = (self.typingUsers.count > 0) ? 20.0f : 0.0f;
-    [self.chatTableView setHeight:self.view.bounds.size.height
-                                  - self.keyboardHeight
-                                  - newToolbarHeight
-                                  - typingOffset];
-    [self layoutEmptyChatLoadingIndicator];
     if (self.typingUsers.count > 0) {
-        [self.typingIndicatorView setY:self.view.bounds.size.height
-                                       - self.keyboardHeight
-                                       - newToolbarHeight - 20.0f];
+        CGFloat indicatorY = self.view.bounds.size.height - self.keyboardHeight
+            - newToolbarHeight - 20.0f;
+        if (fabs(self.typingIndicatorView.frame.origin.y - indicatorY) > 0.5f) {
+            [self.typingIndicatorView setY:indicatorY];
+        }
+    }
+
+    if (needsScroll && [self.inputField isFirstResponder]) {
+        NSRange selection = self.inputField.selectedRange;
+        if (selection.location != NSNotFound &&
+            NSMaxRange(selection) == self.inputField.text.length) {
+            UIEdgeInsets insets = self.inputField.contentInset;
+            CGFloat visibleHeight = self.inputField.bounds.size.height;
+            CGFloat currentY = self.inputField.contentOffset.y;
+            CGFloat bottomY = MAX(-insets.top,
+                self.inputField.contentSize.height - visibleHeight + insets.bottom);
+
+            if (bottomY - currentY > 2.0f) {
+                UITextRange *selectedText = self.inputField.selectedTextRange;
+                if (selectedText) {
+                    CGRect caret = [self.inputField caretRectForPosition:selectedText.end];
+                    CGFloat visibleBottom = currentY + visibleHeight - insets.bottom;
+                    if (CGRectGetMaxY(caret) > visibleBottom + 1.0f) {
+                        [self.inputField setContentOffset:
+                            CGPointMake(self.inputField.contentOffset.x, bottomY)
+                                               animated:NO];
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -8453,8 +8469,15 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     [self layoutEmptyChatLoadingIndicator];
     [UIView commitAnimations];
 
-    if (self.viewingPresentTime) {
-        [self.chatTableView setContentOffset:CGPointZero animated:NO];
+    // Do not restart the live-edge scroll if the table is already there.
+    if (self.currentWindow && !self.currentWindow.hasMoreAfter &&
+        fabs(self.chatTableView.contentOffset.y + self.chatTableView.contentInset.top) <= 10.0f) {
+        CGFloat liveEdgeY = -self.chatTableView.contentInset.top;
+        if (fabs(self.chatTableView.contentOffset.y - liveEdgeY) > 0.5f) {
+            [self.chatTableView setContentOffset:
+                CGPointMake(self.chatTableView.contentOffset.x, liveEdgeY)
+                                         animated:NO];
+        }
     }
 }
 
@@ -9593,9 +9616,12 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                       object:nil
                     userInfo:@{@"channelId": channel.snowflake}];
     
-    // Swap chat in place
+    // Swap chat in place. An offscreen chat loads the target on viewWillAppear:.
     self.navigationItem.title = channel.name;
-    [self activateSelectedChannel];
+    if (!self.navigationController ||
+        self.navigationController.topViewController == self) {
+        [self activateSelectedChannel];
+    }
 }
 
 - (void)navigateToGuild:(DCGuild *)guild {

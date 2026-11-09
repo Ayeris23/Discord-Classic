@@ -159,6 +159,7 @@ static NSString *DCFormattedAttachmentByteCount(unsigned long long byteCount) {
 @property (nonatomic, retain) ALAssetsGroup *assetGroup;
 @property (nonatomic, retain) NSMutableArray *assets;
 @property (nonatomic, assign) CGFloat lastLayoutWidth;
+@property (nonatomic, assign) BOOL needsInitialBottomScroll;
 - (id)initWithAssetGroup:(ALAssetsGroup *)assetGroup;
 @end
 
@@ -746,6 +747,7 @@ moveRowAtIndexPath:(NSIndexPath *)sourceIndexPath
     _assetGroup = assetGroup;
     _assets = [NSMutableArray array];
     _lastLayoutWidth = 0.0f;
+    _needsInitialBottomScroll = YES;
     return self;
 }
 
@@ -762,6 +764,11 @@ moveRowAtIndexPath:(NSIndexPath *)sourceIndexPath
     [super viewWillAppear:animated];
     [self.pickerController installNavigationItemsForViewController:self];
     [self.tableView reloadData];
+}
+
+- (void)viewDidAppear:(BOOL)animated {
+    [super viewDidAppear:animated];
+    [self scrollToInitialBottomIfReady];
 }
 
 - (NSUInteger)columnCount {
@@ -792,6 +799,20 @@ moveRowAtIndexPath:(NSIndexPath *)sourceIndexPath
         self.lastLayoutWidth = width;
         [self.tableView reloadData];
     }
+    [self scrollToInitialBottomIfReady];
+}
+
+- (void)scrollToInitialBottomIfReady {
+    if (!self.needsInitialBottomScroll || self.assets.count == 0 ||
+        self.tableView.bounds.size.height <= 0 || self.tableView.bounds.size.width <= 0 ||
+        !self.tableView.window) return;
+
+    [self.tableView layoutIfNeeded];
+    UIEdgeInsets inset = self.tableView.contentInset;
+    CGFloat bottom = self.tableView.contentSize.height + inset.bottom - self.tableView.bounds.size.height;
+    CGFloat offset = MAX(-inset.top, bottom);
+    [self.tableView setContentOffset:CGPointMake(0.0f, offset) animated:NO];
+    self.needsInitialBottomScroll = NO;
 }
 
 - (void)loadAssets {
@@ -817,13 +838,10 @@ moveRowAtIndexPath:(NSIndexPath *)sourceIndexPath
         strongSelf.tableView.backgroundView = nil;
         [strongSelf.tableView reloadData];
 
-        NSInteger rowCount = [strongSelf.tableView numberOfRowsInSection:0];
-        if (rowCount > 0) {
-            NSIndexPath *lastRow = [NSIndexPath indexPathForRow:rowCount - 1 inSection:0];
-            [strongSelf.tableView scrollToRowAtIndexPath:lastRow
-                                         atScrollPosition:UITableViewScrollPositionBottom
-                                                 animated:NO];
-        }
+        strongSelf.needsInitialBottomScroll = YES;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [strongSelf scrollToInitialBottomIfReady];
+        });
     }];
 }
 

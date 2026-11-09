@@ -88,6 +88,20 @@
     return [image resizableImageWithCapInsets:UIEdgeInsetsMake(0, 14, 0, 6)];
 }
 
++ (UIBarButtonItem *)navigationBackButtonItemWithTitle:(NSString *)title {
+    UIBarButtonItem *item = [[UIBarButtonItem alloc] initWithTitle:title
+                                                            style:UIBarButtonItemStyleBordered
+                                                           target:nil
+                                                           action:nil];
+    [item setBackButtonBackgroundImage:[self navigationBackButtonBackgroundImage]
+                               forState:UIControlStateNormal
+                             barMetrics:UIBarMetricsDefault];
+    [item setBackButtonBackgroundImage:[self navigationBackButtonPressedBackgroundImage]
+                               forState:UIControlStateHighlighted
+                             barMetrics:UIBarMetricsDefault];
+    return item;
+}
+
 + (UIImage *)guildBannerPlaceholderImage {
     return [DCInterfaceAssetCatalog imageNamed:@"No-Header"];
 }

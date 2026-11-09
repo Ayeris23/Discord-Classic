@@ -721,10 +721,22 @@
 }
 
 - (void)navigateToChannelWithId:(NSString *)channelId {
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self navigateToChannelWithId:channelId];
+        });
+        return;
+    }
+
     for (DCGuild *guild in DCServerCommunicator.sharedInstance.guilds) {
         for (DCChannel *channel in guild.channels) {
             if (![channel.snowflake isEqualToString:channelId]) {
                 continue;
+            }
+            if (!self.experimentalMode && self.navigationController &&
+                self.navigationController.topViewController != self &&
+                !self.splitViewController) {
+                [self.navigationController popToViewController:self animated:NO];
             }
             [self markColdChatRestoreHandled];
             if (self.selectedChannel &&

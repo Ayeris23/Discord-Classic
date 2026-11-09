@@ -34,6 +34,7 @@
 
 - (void)getMessages:(int)numberOfMessages beforeMessage:(DCMessage *)message;
 - (void)activateSelectedChannel;
+- (void)navigateToChannel:(DCChannel *)channel;
 
 @property (weak, nonatomic) IBOutlet UIView *toolbar;
 @property (weak, nonatomic) IBOutlet UIImageView *toolbarBG;

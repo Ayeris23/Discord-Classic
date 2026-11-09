@@ -341,6 +341,7 @@ static BOOL DCImageViewerActive = NO;
 @property (assign, nonatomic) NSUInteger downloadPixelLimit;
 @property (assign, nonatomic) BOOL resolvingFullResolutionURL;
 @property (assign, nonatomic) BOOL decodeDeferredForMemoryPressure;
+@property (assign, nonatomic) BOOL doubleTapZoomInProgress;
 @property (assign, nonatomic) CFAbsoluteTime lastSignatureRefreshAttemptTime;
 @property (assign, nonatomic) BOOL chatMediaPurged;
 @property (strong, nonatomic) UIWindow *overlayPresentationWindow;
@@ -1039,8 +1040,20 @@ static BOOL DCImageViewerActive = NO;
 - (void)handleDoubleTap:(UITapGestureRecognizer *)recognizer {
     self.decodeDeferredForMemoryPressure = NO;
     if (self.scrollView.zoomScale > self.scrollView.minimumZoomScale) {
-        [self.scrollView setZoomScale:self.scrollView.minimumZoomScale animated:YES];
+        BOOL interruptedZoom = self.doubleTapZoomInProgress;
+        self.doubleTapZoomInProgress = NO;
+        [self.scrollView setZoomScale:self.scrollView.minimumZoomScale animated:!interruptedZoom];
+        if (interruptedZoom) {
+            self.imageView.transform = CGAffineTransformIdentity;
+            self.imageView.frame = self.scrollView.bounds;
+            self.imageView.autoresizingMask = UIViewAutoresizingFlexibleWidth |
+                                              UIViewAutoresizingFlexibleHeight;
+            self.scrollView.contentSize = self.scrollView.bounds.size;
+            self.scrollView.contentOffset = CGPointZero;
+            [self dc_requestDecodeForZoomScale:self.scrollView.minimumZoomScale force:NO];
+        }
     } else {
+        self.doubleTapZoomInProgress = YES;
         CGPoint tapPoint = [recognizer locationInView:self.imageView];
         CGFloat newScale = self.scrollView.maximumZoomScale;
         [self dc_requestDecodeForZoomScale:newScale force:NO];
@@ -1114,6 +1127,7 @@ static BOOL DCImageViewerActive = NO;
 - (void)scrollViewDidEndZooming:(UIScrollView *)scrollView
                        withView:(UIView *)view
                         atScale:(CGFloat)scale {
+    self.doubleTapZoomInProgress = NO;
     if (scale <= scrollView.minimumZoomScale + 0.01f) {
         [scrollView setZoomScale:scrollView.minimumZoomScale animated:NO];
         self.imageView.transform = CGAffineTransformIdentity;
