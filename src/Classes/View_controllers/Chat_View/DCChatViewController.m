@@ -179,6 +179,7 @@
 - (NSInteger)unreadSeparatorRow;
 - (void)setUnreadBoundaryForChannel:(DCChannel *)channel;
 - (void)scrollToUnreadBoundary;
+- (BOOL)isNewestMessageRowVisible;
 - (void)loadWindowAroundUnreadBoundaryForChannel:(DCChannel *)channel;
 - (void)clearUnreadIndicatorAndMarkChannelReadAfterSending;
 - (void)configureForwardSourceTagForCell:(DCChatTableCell *)cell
@@ -1719,6 +1720,9 @@ static dispatch_queue_t chat_presentation_queue;
     self.unreadInitialPositionComplete = YES;
     self.unreadNeedsFirstEntryPosition = NO;
     [self updatePresentTimeFromTablePosition];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self acknowledgeNewestMessageIfFollowingLiveTail];
+    });
 }
 
 - (void)loadWindowAroundUnreadBoundaryForChannel:(DCChannel *)channel {
@@ -2571,13 +2575,31 @@ static dispatch_queue_t chat_presentation_queue;
     [self refreshSelectedChannelChrome];
 }
 
+- (BOOL)isNewestMessageRowVisible {
+    if (!self.chatTableView || !self.currentWindow ||
+        !self.currentWindow.atPresentTime || self.currentWindow.hasMoreAfter ||
+        !self.unreadInitialPositionComplete || self.unreadNeedsFirstEntryPosition ||
+        self.restoringWindowPosition || !self.messages.count) {
+        return NO;
+    }
+
+    NSArray *visibleRows = [self.chatTableView indexPathsForVisibleRows];
+    for (NSIndexPath *indexPath in visibleRows) {
+        if (indexPath.section == 0 && indexPath.row == 0) return YES;
+    }
+    return NO;
+}
+
 - (void)acknowledgeNewestMessageIfFollowingLiveTail {
     if (!DCServerCommunicator.sharedInstance.readyReadStateAvailable ||
         !self.unreadEntryStateVerified ||
-        (self.unreadBoundaryReadID.length && !self.unreadInitialPositionComplete) ||
-        self.unreadRequiresLiveEdgeGesture) {
+        (self.unreadBoundaryReadID.length && !self.unreadInitialPositionComplete)) {
         return;
     }
+
+    BOOL newestRowVisible = [self isNewestMessageRowVisible];
+    if (self.unreadRequiresLiveEdgeGesture && !newestRowVisible) return;
+
     DCChannel *channel = DCServerCommunicator.sharedInstance.selectedChannel;
     DCChannelWindow *window = self.currentWindow;
     DCMessage *newestMessage = window.messages.lastObject;
@@ -2586,7 +2608,7 @@ static dispatch_queue_t chat_presentation_queue;
         !self.view.window || self.restoringWindowPosition ||
         ![window.channelSnowflake isEqualToString:channel.snowflake] ||
         !window.atPresentTime || window.hasMoreAfter ||
-        self.chatTableView.contentOffset.y > 10.0f ||
+        (self.chatTableView.contentOffset.y > 10.0f && !newestRowVisible) ||
         newestMessage.snowflake.length == 0) {
         return;
     }
@@ -2599,6 +2621,7 @@ static dispatch_queue_t chat_presentation_queue;
         return;
     }
 
+    if (newestRowVisible) self.unreadRequiresLiveEdgeGesture = NO;
     channel.lastMessageId = newestMessage.snowflake;
     // Keep this controller's local boundary intact so the marker can remain
     // visible for the rest of the current visit. On the next channel entry,
@@ -7523,6 +7546,10 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
         scrollView.tracking || self.forwardMomentumDisplayLink != nil;
     if (self.viewingPresentTime) {
         if (manualScroll) self.unreadRequiresLiveEdgeGesture = NO;
+        [self acknowledgeNewestMessageIfFollowingLiveTail];
+    } else if (self.unreadRequiresLiveEdgeGesture ||
+               DCServerCommunicator.sharedInstance.selectedChannel.unread ||
+               DCServerCommunicator.sharedInstance.selectedChannel.mentionCount > 0) {
         [self acknowledgeNewestMessageIfFollowingLiveTail];
     }
     [self updateJumpToPresentButtonVisibility];

@@ -1592,15 +1592,8 @@
                 cell.mentionBadge.mentionCount = guildAtRowIndex.mentionCount;
                 if (guildAtRowIndex.mentionCount > 0) {
                     cell.unreadMessages.hidden = NO;
-                    CGSize badgeSize = [cell.mentionBadge sizeThatFits:CGSizeZero];
-                    // Badge positioning follows the centered 40pt icon content.
-                    CGRect avatarFrame = CGRectInset(cell.guildAvatar.frame, 4.0f, 4.0f);
-                    cell.mentionBadge.frame = CGRectMake(
-                        avatarFrame.origin.x + avatarFrame.size.width - badgeSize.width + 8,
-                        avatarFrame.origin.y + avatarFrame.size.height - badgeSize.height + 8,
-                        badgeSize.width, badgeSize.height
-                    );
                 }
+                [cell setNeedsLayout];
 
                 // The 48pt tile is precomposited when the guild icon changes.
                 cell.guildAvatar.image = guildAtRowIndex.compositedIcon
@@ -1627,16 +1620,7 @@
                 cell.unreadMessages.hidden = !folderUnread;
                 
                 cell.mentionBadge.mentionCount = folderMentionCount;
-                if (folderMentionCount > 0) {
-                    CGSize badgeSize = [cell.mentionBadge sizeThatFits:CGSizeZero];
-                    // Badge positioning follows the centered 40pt icon content.
-                    CGRect avatarFrame = CGRectInset(cell.guildAvatar.frame, 4.0f, 4.0f);
-                    cell.mentionBadge.frame = CGRectMake(
-                        avatarFrame.origin.x + avatarFrame.size.width - badgeSize.width + 8,
-                        avatarFrame.origin.y + avatarFrame.size.height - badgeSize.height + 8,
-                        badgeSize.width, badgeSize.height
-                    );
-                }
+                [cell setNeedsLayout];
                 
                 NSString *folderCacheKey = [self compositeCacheKeyForFolder:folderAtRowIndex];
                 if (folderAtRowIndex.icon != nil &&
@@ -1754,29 +1738,9 @@
                 NSCAssert((NSNull *)channelAtRowIndex != [NSNull null], @"Channel at row index is NSNull");
 
                 cell.mentionBadge.mentionCount = channelAtRowIndex.mentionCount;
-                if (channelAtRowIndex.mentionCount > 0) {
-                    cell.unreadMessages.hidden = NO;
-                    CGSize badgeSize = [cell.mentionBadge sizeThatFits:CGSizeZero];
-                    cell.mentionBadge.frame = CGRectMake(
-                        cell.contentView.bounds.size.width - badgeSize.width - 10,
-                        (cell.contentView.bounds.size.height - badgeSize.height) / 2 - 1,
-                        badgeSize.width, badgeSize.height
-                    );
-                    cell.nameLabel.frame = CGRectMake(
-                        cell.nameLabel.frame.origin.x,
-                        cell.nameLabel.frame.origin.y,
-                        cell.mentionBadge.frame.origin.x - cell.nameLabel.frame.origin.x - 8,
-                        cell.nameLabel.frame.size.height
-                    );
-                } else {
-                    cell.unreadMessages.hidden = !channelAtRowIndex.unread;
-                    cell.nameLabel.frame = CGRectMake(
-                        cell.nameLabel.frame.origin.x,
-                        cell.nameLabel.frame.origin.y,
-                        cell.contentView.bounds.size.width - cell.nameLabel.frame.origin.x - 10,
-                        cell.nameLabel.frame.size.height
-                    );
-                }
+                cell.unreadMessages.hidden = (channelAtRowIndex.mentionCount == 0 &&
+                                              !channelAtRowIndex.unread);
+                [cell setNeedsLayout];
                 DCUser *buddy = [self directMessageBuddyForChannel:channelAtRowIndex];
                 if (buddy) {
                     NSString *displayName = [buddy displayName];
@@ -1848,29 +1812,9 @@
                     reuseIdentifier:@"channel"];
             }
             cell.mentionBadge.mentionCount = channelAtRowIndex.mentionCount;
-            if (channelAtRowIndex.mentionCount > 0) {
-                cell.messageIndicator.hidden = NO;
-                CGSize badgeSize = [cell.mentionBadge sizeThatFits:CGSizeZero];
-                cell.mentionBadge.frame = CGRectMake(
-                    cell.contentView.bounds.size.width - badgeSize.width - 10,
-                    (cell.contentView.bounds.size.height - badgeSize.height) / 2 - 1,
-                    badgeSize.width, badgeSize.height
-                );
-                cell.channelName.frame = CGRectMake(
-                    cell.channelName.frame.origin.x,
-                    cell.channelName.frame.origin.y,
-                    cell.mentionBadge.frame.origin.x - cell.channelName.frame.origin.x - 8,
-                    cell.channelName.frame.size.height
-                );
-            } else {
-                cell.messageIndicator.hidden = !(channelAtRowIndex.unread && !channelAtRowIndex.muted);
-                cell.channelName.frame = CGRectMake(
-                    cell.channelName.frame.origin.x,
-                    cell.channelName.frame.origin.y,
-                    cell.contentView.bounds.size.width - cell.channelName.frame.origin.x - 10,
-                    cell.channelName.frame.size.height
-                );
-            }
+            cell.messageIndicator.hidden = (channelAtRowIndex.mentionCount == 0 &&
+                                            !(channelAtRowIndex.unread && !channelAtRowIndex.muted));
+            [cell setNeedsLayout];
             cell.channelName.text = channelAtRowIndex.name;
             UIColor *readChannelColor = [UIColor colorWithRed:128.0 / 255.0
                                                         green:132.0 / 255.0

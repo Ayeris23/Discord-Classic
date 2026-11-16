@@ -39,4 +39,16 @@
     [super setSelected:selected animated:animated];
 }
 
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    if (self.mentionBadge.hidden) return;
+
+    CGSize badgeSize = [self.mentionBadge sizeThatFits:CGSizeZero];
+    CGRect avatarFrame = CGRectInset(self.guildAvatar.frame, 4.0f, 4.0f);
+    self.mentionBadge.frame = CGRectMake(
+        CGRectGetMaxX(avatarFrame) - badgeSize.width + 8.0f,
+        CGRectGetMaxY(avatarFrame) - badgeSize.height + 8.0f,
+        badgeSize.width, badgeSize.height);
+}
+
 @end
