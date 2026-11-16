@@ -14,9 +14,6 @@ NSString *const DCLoginErrorTwoFactorTicketKey = @"DCLoginErrorTwoFactorTicketKe
 NSString *const DCLoginErrorServerMessageKey   = @"DCLoginErrorServerMessageKey";
 NSString *const DCLoginErrorFingerprintKey = @"DCLoginErrorFingerprintKey";
 NSString *const DCLoginErrorInstanceIDKey = @"DCLoginErrorInstanceIDKey";
-NSString *const DCLoginErrorCaptchaSitekeyKey = @"DCLoginErrorCaptchaSitekeyKey";
-NSString *const DCLoginErrorCaptchaRqdataKey = @"DCLoginErrorCaptchaRqdataKey";
-NSString *const DCLoginErrorCaptchaServiceKey = @"DCLoginErrorCaptchaServiceKey";
 
 @implementation DCLoginManager
 
@@ -132,24 +129,11 @@ NSString *const DCLoginErrorCaptchaServiceKey = @"DCLoginErrorCaptchaServiceKey"
             }
             
 
-            // Preserve the challenge fields for the standalone compatibility probe.
+            // Captcha
             if (json[@"captcha_key"]) {
-                NSMutableDictionary *info = [NSMutableDictionary dictionaryWithObjectsAndKeys:
-                                             @"Login requires a CAPTCHA.", NSLocalizedDescriptionKey, nil];
-                NSDictionary *fields = @{
-                    @"captcha_sitekey": DCLoginErrorCaptchaSitekeyKey,
-                    @"captcha_rqdata": DCLoginErrorCaptchaRqdataKey,
-                    @"captcha_service": DCLoginErrorCaptchaServiceKey
-                };
-                for (NSString *field in fields) {
-                    id value = json[field];
-                    if ([value isKindOfClass:[NSString class]]) {
-                        info[fields[field]] = value;
-                    }
-                }
-                completion(nil, [NSError errorWithDomain:@"DCLoginErrorDomain"
-                                                   code:DCLoginErrorCodeCaptcha
-                                               userInfo:info]);
+                completion(nil, [self errorWithCode:DCLoginErrorCodeCaptcha
+                                            message:@"Login requires a captcha which cannot be completed on this device."
+                                        discordCode:0]);
                 return;
             }
 

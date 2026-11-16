@@ -13,7 +13,6 @@
 #import "DCTokenLoginPage.h"
 #import "APLSlideMenuViewController.h"
 #import "DCTwoFactorViewController.h"
-#import "DCCaptchaCompatibilityViewController.h"
 
 @interface DCIntroductionPage ()
 
@@ -61,15 +60,6 @@
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.navigationItem.hidesBackButton     = YES;
-    UIBarButtonItem *captchaTest = [[UIBarButtonItem alloc] initWithTitle:@"CAPTCHA Test"
-                                                                      style:UIBarButtonItemStyleBordered
-                                                                     target:self
-                                                                     action:@selector(openCaptchaTest)];
-    [captchaTest setBackgroundImage:[DCInterfaceStyle barButtonBackgroundImage]
-                          forState:UIControlStateNormal barMetrics:UIBarMetricsDefault];
-    [captchaTest setBackgroundImage:[DCInterfaceStyle barButtonPressedBackgroundImage]
-                          forState:UIControlStateHighlighted barMetrics:UIBarMetricsDefault];
-    self.navigationItem.leftBarButtonItem = captchaTest;
     self.slideMenuController.gestureSupport = NO;
     self.emailField.delegate                = self;
     self.passwordField.delegate             = self;
@@ -188,9 +178,11 @@
         }
 
         if (error.code == DCLoginErrorCodeCaptcha) {
-            [self showCaptchaProbeWithError:error];
-            return;
-        }
+                    [self showAlertWithTitle:@"Are you a robot?"
+                                     message:@"Complete the captcha on a modern device, "
+                                              "using the same network, then try logging in again."];
+                    return;
+                }
                 NSInteger discordCode = [error.userInfo[@"discord_code"] integerValue];
                 if (discordCode == 50035) {
                     [self showAlertWithTitle:@"Login Failed"
@@ -237,22 +229,6 @@
     self.navigationController.viewControllers = stack;
 }
 
-
-#pragma mark - CAPTCHA compatibility diagnostics
-
-- (void)openCaptchaTest {
-    [self showCaptchaProbeWithError:nil];
-}
-
-- (void)showCaptchaProbeWithError:(NSError *)error {
-    [self.emailField resignFirstResponder];
-    [self.passwordField resignFirstResponder];
-    DCCaptchaCompatibilityViewController *probe = [[DCCaptchaCompatibilityViewController alloc] init];
-    probe.captchaSitekey = error.userInfo[DCLoginErrorCaptchaSitekeyKey];
-    probe.captchaRQData = error.userInfo[DCLoginErrorCaptchaRqdataKey];
-    probe.captchaService = error.userInfo[DCLoginErrorCaptchaServiceKey];
-    [self.navigationController pushViewController:probe animated:YES];
-}
 
 #pragma mark - Helpers
 
