@@ -15,6 +15,7 @@
 #import <ImageIO/ImageIO.h>
 #import <QuartzCore/QuartzCore.h>
 #include <math.h>
+#include <string.h>
 
 static const NSUInteger DCImageViewerMegabyte = 1024U * 1024U;
 
@@ -96,6 +97,9 @@ typedef void (^DCImageViewerDownloadCompletion)(NSString *path, NSError *error);
 - (void)connection:(NSURLConnection *)connection didReceiveResponse:(NSURLResponse *)response {
     if ([response isKindOfClass:[NSHTTPURLResponse class]]) {
         NSInteger status = [(NSHTTPURLResponse *)response statusCode];
+        NSLog(@"[ImageViewer] HTTP %ld type=%@ expectedBytes=%lld",
+              (long)status, response.MIMEType ?: @"unknown",
+              response.expectedContentLength);
         if (status >= 400) {
             NSError *error = [NSError errorWithDomain:@"DCImageViewer"
                                                  code:status
@@ -154,10 +158,14 @@ static BOOL DCImageViewerDiscordMediaHost(NSString *host) {
            [lower hasSuffix:@"discord.com"];
 }
 
-/* Remove chat-thumbnail sizing while preserving Discord's opaque signed query
- * fields. Native JPEG/PNG attachments keep their original proxy format; WebP
- * remains transcoded because ImageIO on the target OS cannot decode it. */
-static NSURL *DCImageViewerFullResolutionURL(NSURL *sourceURL) {
+static BOOL DCImageViewerMediaProxyURL(NSURL *url) {
+    NSString *host = url.host.lowercaseString;
+    return [host isEqualToString:@"media.discordapp.net"] ||
+           ([host hasPrefix:@"images-ext-"] && [host hasSuffix:@".discordapp.net"]);
+}
+
+/* Remove thumbnail sizing while preserving signed query fields. */
+static NSURL *DCImageViewerFullResolutionURL(NSURL *sourceURL, BOOL forcePNG) {
     if (!sourceURL || !DCImageViewerDiscordMediaHost(sourceURL.host)) return sourceURL;
 
     NSString *absolute = sourceURL.absoluteString;
@@ -171,7 +179,7 @@ static NSURL *DCImageViewerFullResolutionURL(NSURL *sourceURL) {
 
     NSString *extension = sourceURL.pathExtension.lowercaseString;
     NSSet *nativeExtensions = [NSSet setWithObjects:@"jpg", @"jpeg", @"png", @"gif", @"bmp", @"tif", @"tiff", nil];
-    BOOL needsPNGTranscode = ![nativeExtensions containsObject:extension];
+    BOOL needsPNGTranscode = forcePNG || ![nativeExtensions containsObject:extension];
     NSMutableArray *parts = [NSMutableArray array];
     BOOL hasFormat = NO;
 
@@ -186,7 +194,7 @@ static NSURL *DCImageViewerFullResolutionURL(NSURL *sourceURL) {
             continue;
         }
         if ([lowerKey isEqualToString:@"format"]) {
-            if (needsPNGTranscode) {
+            if (needsPNGTranscode && !hasFormat) {
                 [parts addObject:@"format=png"];
                 hasFormat = YES;
             }
@@ -199,6 +207,25 @@ static NSURL *DCImageViewerFullResolutionURL(NSURL *sourceURL) {
     if (parts.count == 0) return [NSURL URLWithString:base];
     return [NSURL URLWithString:[NSString stringWithFormat:@"%@?%@", base,
                                  [parts componentsJoinedByString:@"&"]]];
+}
+
+static NSString *DCImageViewerFileSignatureAtPath(NSString *path) {
+    NSFileHandle *file = [NSFileHandle fileHandleForReadingAtPath:path];
+    if (!file) return @"unreadable";
+    NSData *header = [file readDataOfLength:16];
+    [file closeFile];
+    const unsigned char *bytes = header.bytes;
+    NSUInteger length = header.length;
+    if (length == 0) return @"empty";
+    if (length >= 8 && memcmp(bytes, "\x89PNG\r\n\x1a\n", 8) == 0) return @"PNG";
+    if (length >= 3 && bytes[0] == 0xff && bytes[1] == 0xd8 && bytes[2] == 0xff) return @"JPEG";
+    if (length >= 6 && (memcmp(bytes, "GIF87a", 6) == 0 || memcmp(bytes, "GIF89a", 6) == 0)) return @"GIF";
+    if (length >= 12 && memcmp(bytes, "RIFF", 4) == 0 && memcmp(bytes + 8, "WEBP", 4) == 0) return @"WebP";
+    if (length >= 12 && memcmp(bytes + 4, "ftyp", 4) == 0) {
+        if (memcmp(bytes + 8, "avif", 4) == 0 || memcmp(bytes + 8, "avis", 4) == 0) return @"AVIF";
+        return @"ISO-BMFF";
+    }
+    return @"unknown";
 }
 
 static CGSize DCImageViewerPixelSizeAtPath(NSString *path) {
@@ -339,6 +366,8 @@ static BOOL DCImageViewerActive = NO;
 @property (assign, nonatomic) NSUInteger decodeGeneration;
 @property (assign, nonatomic) NSUInteger fullResolutionDownloadAttempts;
 @property (assign, nonatomic) NSUInteger downloadPixelLimit;
+@property (assign, nonatomic) BOOL forcePNGSource;
+@property (assign, nonatomic) BOOL unsupportedSourceData;
 @property (assign, nonatomic) BOOL resolvingFullResolutionURL;
 @property (assign, nonatomic) BOOL decodeDeferredForMemoryPressure;
 @property (assign, nonatomic) BOOL doubleTapZoomInProgress;
@@ -755,7 +784,7 @@ static BOOL DCImageViewerActive = NO;
 
 - (void)dc_beginFullResolutionLoad {
     if (!self.fullResURL || self.downloadOperation || self.resolvingFullResolutionURL ||
-        self.fullResolutionPath.length) return;
+        self.fullResolutionPath.length || self.unsupportedSourceData) return;
 
     self.resolvingFullResolutionURL = YES;
     [self.loadingSpinner startAnimating];
@@ -777,7 +806,7 @@ static BOOL DCImageViewerActive = NO;
             return;
         }
 
-        NSURL *requestURL = DCImageViewerFullResolutionURL(resolvedURL);
+        NSURL *requestURL = DCImageViewerFullResolutionURL(resolvedURL, strongSelf.forcePNGSource);
         requestURL = [[DCChatMediaManager sharedManager] currentMediaURLForURL:requestURL];
         NSUInteger requestedPixelLimit = strongSelf.downloadPixelLimit;
         if (requestedPixelLimit > 0) {
@@ -839,9 +868,24 @@ static BOOL DCImageViewerActive = NO;
 
             CGSize downloadedPixelSize = DCImageViewerPixelSizeAtPath(path);
             if (downloadedPixelSize.width <= 0 || downloadedPixelSize.height <= 0) {
+                NSDictionary *attributes = [[NSFileManager defaultManager]
+                    attributesOfItemAtPath:path error:nil];
+                NSLog(@"[ImageViewer] unsupported image data signature=%@ bytes=%@",
+                      DCImageViewerFileSignatureAtPath(path),
+                      [attributes objectForKey:NSFileSize] ?: @0);
                 [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+
+                BOOL alreadyPNG = [[requestURL.query componentsSeparatedByString:@"&"]
+                    containsObject:@"format=png"];
+                if (!downloadSelf.forcePNGSource && !alreadyPNG && DCImageViewerMediaProxyURL(requestURL)) {
+                    downloadSelf.forcePNGSource = YES;
+                    NSLog(@"[ImageViewer] retrying with PNG media proxy");
+                    [downloadSelf dc_beginFullResolutionLoad];
+                    return;
+                }
+
+                downloadSelf.unsupportedSourceData = YES;
                 [downloadSelf.loadingSpinner stopAnimating];
-                NSLog(@"[ImageViewer] unsupported image data %@", requestURL);
                 return;
             }
 
