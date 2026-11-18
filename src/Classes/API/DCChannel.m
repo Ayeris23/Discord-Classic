@@ -159,8 +159,23 @@ totalBytesExpectedToWrite:(NSInteger)totalBytesExpectedToWrite {
 
 @end
 
+NSString * const DCChannelMentionCountDidChangeNotification = @"DCChannelMentionCountDidChange";
+
 @implementation DCChannel
 @synthesize users;
+
+- (void)setMentionCount:(NSInteger)mentionCount {
+    NSInteger normalized = MAX(0, mentionCount);
+    if (_mentionCount == normalized) return;
+    _mentionCount = normalized;
+
+    if (self.snowflake.length == 0) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [NSNotificationCenter.defaultCenter
+            postNotificationName:DCChannelMentionCountDidChangeNotification
+                          object:self];
+    });
+}
 
 static dispatch_queue_t channel_event_queue;
 - (dispatch_queue_t)get_channel_event_queue {

@@ -15,6 +15,8 @@
 #import "DCGuild.h"
 #import "DCMessage.h"
 
+extern NSString * const DCChannelMentionCountDidChangeNotification;
+
 typedef void (^DCAttachmentUploadProgressBlock)(CGFloat progress);
 typedef void (^DCAttachmentUploadCompletionBlock)(NSString *messageSnowflake, NSError *error);
 

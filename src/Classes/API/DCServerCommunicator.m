@@ -3153,11 +3153,16 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
     DCGuild *guild = [self guildWithSnowflake:guildID];
     if (!guild) return; // idempotent replay/delete
 
+    NSMutableSet *removedChannelIDs = [NSMutableSet set];
+    for (DCChannel *channel in guild.channels) {
+        if (channel.snowflake.length) [removedChannelIDs addObject:channel.snowflake];
+    }
     NSArray *allChannelIDs = [[self.channels allKeys] copy];
     for (NSString *channelID in allChannelIDs) {
         DCChannel *channel = [self.channels objectForKey:channelID];
         if (channel.parentGuild == guild ||
             [channel.parentGuild.snowflake isEqualToString:guildID]) {
+            [removedChannelIDs addObject:channelID];
             [[DCMessageStore sharedInstance] removeWindowForChannel:channelID];
             [self.channels removeObjectForKey:channelID];
         }
@@ -3196,7 +3201,12 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
     [self checkpointGuildState];
     DBGLOG(@"[GUILD_DELETE] Removed guild %@", guildID);
 
+    NSArray *removedIDs = [removedChannelIDs allObjects];
     dispatch_async(dispatch_get_main_queue(), ^{
+        [NSNotificationCenter.defaultCenter
+            postNotificationName:@"DCBadgeChannelsRemoved"
+                          object:self
+                        userInfo:@{ @"channelIds" : removedIDs }];
         [NSNotificationCenter.defaultCenter postNotificationName:@"RELOAD GUILD LIST"
                                                           object:guild];
         [NSNotificationCenter.defaultCenter postNotificationName:@"RELOAD CHANNEL LIST"
@@ -3784,6 +3794,10 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
     DBGLOG(@"[CHANNEL_DELETE] Removed channel %@", channelID);
     [self checkpointChannelStructure];
     dispatch_async(dispatch_get_main_queue(), ^{
+        [NSNotificationCenter.defaultCenter
+            postNotificationName:@"DCBadgeChannelsRemoved"
+                          object:self
+                        userInfo:@{ @"channelIds" : @[channelID] }];
         [NSNotificationCenter.defaultCenter
             postNotificationName:@"RELOAD CHANNEL LIST" object:channel];
     });

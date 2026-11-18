@@ -31,6 +31,8 @@
 
 @interface DCAppDelegate ()
 @property (assign, nonatomic) BOOL shouldReload;
+@property (strong, nonatomic) NSMutableDictionary *badgeMentionsByChannel;
+@property (assign, nonatomic) NSInteger totalBadgeMentions;
 @end
 
 static volatile int32_t DCConsoleLogEnabledFlag = 0;
@@ -434,8 +436,12 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
                                                  name:@"READY"
                                                object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self
-                                             selector:@selector(updateAppBadge)
-                                                 name:@"MESSAGE ACK"
+                                             selector:@selector(mentionCountDidChange:)
+                                                 name:DCChannelMentionCountDidChangeNotification
+                                               object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(removeBadgeChannels:)
+                                                 name:@"DCBadgeChannelsRemoved"
                                                object:nil];
 
     self.window.backgroundColor = [UIColor clearColor];
@@ -801,14 +807,62 @@ didFailToRegisterForRemoteNotificationsWithError:(NSError *)error {
 }
 
 - (void)updateAppBadge {
+    // Establish a baseline at launch or READY; live changes use per-channel deltas.
+    NSMutableDictionary *counts = [NSMutableDictionary dictionary];
     NSInteger total = 0;
     for (DCGuild *guild in DCServerCommunicator.sharedInstance.guilds) {
-        total += guild.mentionCount;
+        for (DCChannel *channel in guild.channels) {
+            if (channel.snowflake.length == 0 || channel.mentionCount <= 0) continue;
+            NSInteger previous = [[counts objectForKey:channel.snowflake] integerValue];
+            [counts setObject:@(channel.mentionCount) forKey:channel.snowflake];
+            total += channel.mentionCount - previous;
+        }
     }
+    self.badgeMentionsByChannel = counts;
+    self.totalBadgeMentions = total;
     [UIApplication sharedApplication].applicationIconBadgeNumber = total;
 }
 
+- (void)mentionCountDidChange:(NSNotification *)notification {
+    if (!self.badgeMentionsByChannel) return;
+
+    DCChannel *channel = notification.object;
+    NSString *channelID = channel.snowflake;
+    if (!channelID.length ||
+        [DCServerCommunicator.sharedInstance.channels objectForKey:channelID] != channel) {
+        return;
+    }
+
+    NSInteger previous = [[self.badgeMentionsByChannel objectForKey:channelID] integerValue];
+    NSInteger current = MAX(0, channel.mentionCount);
+    if (current == previous) return;
+
+    if (current > 0) {
+        [self.badgeMentionsByChannel setObject:@(current) forKey:channelID];
+    } else {
+        [self.badgeMentionsByChannel removeObjectForKey:channelID];
+    }
+    self.totalBadgeMentions = MAX(0, self.totalBadgeMentions + current - previous);
+    [UIApplication sharedApplication].applicationIconBadgeNumber = self.totalBadgeMentions;
+}
+
+- (void)removeBadgeChannels:(NSNotification *)notification {
+    if (!self.badgeMentionsByChannel) return;
+    NSArray *channelIDs = [notification.userInfo objectForKey:@"channelIds"];
+    NSInteger removed = 0;
+    for (NSString *channelID in channelIDs) {
+        removed += [[self.badgeMentionsByChannel objectForKey:channelID] integerValue];
+        [self.badgeMentionsByChannel removeObjectForKey:channelID];
+    }
+    if (removed == 0) return;
+    self.totalBadgeMentions = MAX(0, self.totalBadgeMentions - removed);
+    [UIApplication sharedApplication].applicationIconBadgeNumber = self.totalBadgeMentions;
+}
+
 - (void)handleLogOut {
+    self.badgeMentionsByChannel = nil;
+    self.totalBadgeMentions = 0;
+    [UIApplication sharedApplication].applicationIconBadgeNumber = 0;
     [[DCMessageStore sharedInstance] removeAllWindows];
     [[DCCacheManager sharedInstance] invalidateFolderCompositeCache];
     [[DCCacheManager sharedInstance] clearLastActiveChatChannel];
