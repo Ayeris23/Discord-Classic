@@ -17,27 +17,35 @@
 @interface DCChannelListViewController ()
 @property int selectedChannelIndex;
 @property DCChannel *selectedChannel;
+@property (strong, nonatomic) NSMutableSet *pendingAckChannelIDs;
+@property (assign, nonatomic) BOOL pendingFullChannelReload;
+@property (assign, nonatomic) BOOL ackRefreshScheduled;
 @end
 
 @implementation DCChannelListViewController
+
+- (void)dealloc {
+    [NSNotificationCenter.defaultCenter removeObserver:self];
+}
 
 - (void)viewDidLoad {
     [super viewDidLoad];
 
     [NSNotificationCenter.defaultCenter addObserver:self
-                                           selector:@selector(handleMessageAck)
+                                           selector:@selector(handleMessageAck:)
                                                name:@"MESSAGE ACK"
                                              object:nil];
     [NSNotificationCenter.defaultCenter addObserver:self
-                                           selector:@selector(handleMessageAck)
+                                           selector:@selector(handleMessageAck:)
                                                name:@"RELOAD CHANNEL LIST"
                                              object:nil];
 }
 
 
 - (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
     [self.navigationItem setTitle:self.selectedGuild.name];
-    //[self.tableView reloadData];
+    [self.tableView reloadData];
     [DCServerCommunicator.sharedInstance setSelectedChannel:nil];
 
     // nono we wouldnt want rebels getting BASIC FEATURES!111111 :devious:
@@ -51,10 +59,60 @@
 }
 
 
-- (void)handleMessageAck {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [self.tableView reloadData];
+- (void)handleMessageAck:(NSNotification *)notification {
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self handleMessageAck:notification];
+        });
+        return;
+    }
+    if (!self.isViewLoaded || !self.view.window) return;
+
+    NSString *channelID = notification.userInfo[@"channelId"];
+    if (![channelID isKindOfClass:[NSString class]] || !channelID.length) {
+        self.pendingFullChannelReload = YES;
+    } else {
+        if (!self.pendingAckChannelIDs) self.pendingAckChannelIDs = [NSMutableSet set];
+        [self.pendingAckChannelIDs addObject:channelID];
+    }
+
+    if (self.ackRefreshScheduled) return;
+    self.ackRefreshScheduled = YES;
+    __weak DCChannelListViewController *weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.075 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        [weakSelf flushMessageAckUpdates];
     });
+}
+
+- (void)flushMessageAckUpdates {
+    self.ackRefreshScheduled = NO;
+    BOOL fullReload = self.pendingFullChannelReload;
+    self.pendingFullChannelReload = NO;
+    NSSet *channelIDs = [self.pendingAckChannelIDs copy];
+    [self.pendingAckChannelIDs removeAllObjects];
+    if (!self.isViewLoaded || !self.view.window) return;
+
+    if (fullReload || [self.tableView numberOfRowsInSection:0] !=
+        (NSInteger)self.selectedGuild.channels.count) {
+        [self.tableView reloadData];
+        return;
+    }
+
+    NSSet *visible = [NSSet setWithArray:[self.tableView indexPathsForVisibleRows] ?: @[]];
+    NSMutableArray *rows = [NSMutableArray array];
+    NSUInteger index = 0;
+    for (DCChannel *channel in self.selectedGuild.channels) {
+        NSIndexPath *path = [NSIndexPath indexPathForRow:index inSection:0];
+        if (channel.snowflake.length && [channelIDs containsObject:channel.snowflake] &&
+            [visible containsObject:path]) {
+            [rows addObject:path];
+        }
+        index++;
+    }
+    if (rows.count)
+        [self.tableView reloadRowsAtIndexPaths:rows
+                              withRowAnimation:UITableViewRowAnimationNone];
 }
 
 

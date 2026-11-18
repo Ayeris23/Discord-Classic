@@ -12,7 +12,16 @@
 #import "DCServerCommunicator.h"
 #import "DCTools.h"
 
+@interface DCGuildListViewController ()
+@property (strong, nonatomic) NSMutableSet *pendingAckGuilds;
+@property (assign, nonatomic) BOOL ackRefreshScheduled;
+@end
+
 @implementation DCGuildListViewController
+
+- (void)dealloc {
+    [NSNotificationCenter.defaultCenter removeObserver:self];
+}
 
 - (void)viewDidLoad {
     [super viewDidLoad];
@@ -28,7 +37,7 @@
                                              object:nil];
 
     [NSNotificationCenter.defaultCenter addObserver:self
-                                           selector:@selector(handleReady)
+                                           selector:@selector(handleMessageAck:)
                                                name:@"MESSAGE ACK"
                                              object:nil];
 
@@ -43,6 +52,60 @@
                                              object:nil];
 }
 
+
+- (void)handleMessageAck:(NSNotification *)notification {
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self handleMessageAck:notification];
+        });
+        return;
+    }
+    if (!self.isViewLoaded || !self.view.window) return;
+
+    NSString *channelID = notification.userInfo[@"channelId"];
+    DCChannel *channel = [DCServerCommunicator.sharedInstance.channels objectForKey:channelID];
+    if (!channel.parentGuild) return;
+    if (!self.pendingAckGuilds) self.pendingAckGuilds = [NSMutableSet set];
+    [self.pendingAckGuilds addObject:channel.parentGuild];
+
+    if (self.ackRefreshScheduled) return;
+    self.ackRefreshScheduled = YES;
+    __weak DCGuildListViewController *weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.075 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        [weakSelf flushMessageAckUpdates];
+    });
+}
+
+- (void)flushMessageAckUpdates {
+    self.ackRefreshScheduled = NO;
+    NSSet *guilds = [self.pendingAckGuilds copy];
+    [self.pendingAckGuilds removeAllObjects];
+    if (!self.isViewLoaded || !self.view.window) return;
+
+    NSArray *allGuilds = DCServerCommunicator.sharedInstance.guilds;
+    if ([self.tableView numberOfRowsInSection:0] != (NSInteger)allGuilds.count) {
+        [self.tableView reloadData];
+        return;
+    }
+    NSSet *visible = [NSSet setWithArray:[self.tableView indexPathsForVisibleRows] ?: @[]];
+    NSMutableArray *rows = [NSMutableArray array];
+    NSUInteger index = 0;
+    for (DCGuild *guild in allGuilds) {
+        NSIndexPath *path = [NSIndexPath indexPathForRow:index inSection:0];
+        if ([guilds containsObject:guild] && [visible containsObject:path])
+            [rows addObject:path];
+        index++;
+    }
+    if (rows.count)
+        [self.tableView reloadRowsAtIndexPaths:rows
+                              withRowAnimation:UITableViewRowAnimationNone];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    [self.tableView reloadData];
+}
 
 - (void)handleReady {
     // Refresh tableView data on READY notification

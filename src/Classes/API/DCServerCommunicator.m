@@ -2092,16 +2092,26 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
         if (self.selectedChannel != nil && [channelIdOfMessage isEqualToString:self.selectedChannel.snowflake]) {
             DCChannel *channel = [self.channels objectForKey:channelIdOfMessage];
             if (!channel) channel = self.selectedChannel;
+            BOOL previouslyUnread = channel.unread;
+            NSInteger previousMentions = channel.mentionCount;
             [channel setLastMessageId:messageId];
             [channel checkIfRead];
+            BOOL needsMenuRefresh = (previouslyUnread != channel.unread ||
+                                     previousMentions != channel.mentionCount ||
+                                     channel.type == 1 || channel.type == 3);
             dispatch_async(dispatch_get_main_queue(), ^{
                 [NSNotificationCenter.defaultCenter postNotificationName:@"MESSAGE CREATE" object:self userInfo:d];
-                [NSNotificationCenter.defaultCenter postNotificationName:@"MESSAGE ACK"
-                                                                  object:self
-                                                                userInfo:@{@"channelId": channelIdOfMessage}];
+                if (needsMenuRefresh && channelIdOfMessage.length) {
+                    [NSNotificationCenter.defaultCenter postNotificationName:@"MESSAGE ACK"
+                                                                      object:self
+                                                                    userInfo:@{@"channelId": channelIdOfMessage}];
+                }
             });
         } else {
             DCChannel *channelOfMessage = [self.channels objectForKey:channelIdOfMessage];
+            if (!channelOfMessage) return;
+            BOOL previouslyUnread = channelOfMessage.unread;
+            NSInteger previousMentions = channelOfMessage.mentionCount;
             channelOfMessage.lastMessageId = messageId;
             
             // Messages authored by the current user remain read.
@@ -2134,11 +2144,16 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
                 channelOfMessage.lastReadMessageId = messageId;
             }
             
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [NSNotificationCenter.defaultCenter postNotificationName:@"MESSAGE ACK" 
-                                                                  object:self 
-                                                                userInfo:@{@"channelId": channelIdOfMessage}];
-            });
+            BOOL needsMenuRefresh = (previouslyUnread != channelOfMessage.unread ||
+                                     previousMentions != channelOfMessage.mentionCount ||
+                                     channelOfMessage.type == 1 || channelOfMessage.type == 3);
+            if (needsMenuRefresh && channelIdOfMessage.length) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [NSNotificationCenter.defaultCenter postNotificationName:@"MESSAGE ACK"
+                                                                      object:self
+                                                                    userInfo:@{@"channelId": channelIdOfMessage}];
+                });
+            }
         }
     }
 }
