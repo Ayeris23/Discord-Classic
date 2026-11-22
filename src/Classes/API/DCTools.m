@@ -2085,7 +2085,8 @@ static void DCFillMissingUserFieldsFromJSON(DCUser *user, NSDictionary *jsonUser
 
         perfMediaEnd = CFAbsoluteTimeGetCurrent();
 
-        // Parse in-text mentions into readable @<username>
+        DCGuild *mentionGuild = newMessage.isForwarded
+            ? newMessage.forwardSourceGuild : contextChannel.parentGuild;
         NSArray *mentions     = [jsonMessage objectForKey:@"mentions"];
         NSArray *mentionRoles = [jsonMessage objectForKey:@"mention_roles"];
 
@@ -2095,12 +2096,26 @@ static void DCFillMissingUserFieldsFromJSON(DCUser *user, NSDictionary *jsonUser
 
         if (mentions.count || mentionRoles.count) {
             for (NSDictionary *mention in mentions) {
+                if (![mention isKindOfClass:[NSDictionary class]]) continue;
                 if ([[mention objectForKey:@"id"] isEqualToString:
                                                       DCServerCommunicator.sharedInstance.snowflake]) {
                     newMessage.pingingUser = true;
                 }
-                if (![DCServerCommunicator.sharedInstance userForSnowflake:[mention objectForKey:@"id"]]) {
-                    (void)[DCTools convertJsonUser:mention cache:true];
+                DCUser *mentionedUser = [DCServerCommunicator.sharedInstance
+                    userForSnowflake:[mention objectForKey:@"id"]];
+                if (mentionedUser) {
+                    DCFillMissingUserFieldsFromJSON(mentionedUser, mention);
+                } else {
+                    mentionedUser = [DCTools convertJsonUser:mention cache:YES];
+                }
+                NSDictionary *member = [mention objectForKey:@"member"];
+                if (mentionedUser && mentionGuild.snowflake.length &&
+                    [member isKindOfClass:[NSDictionary class]]) {
+                    [DCServerCommunicator.sharedInstance
+                        applyGuildProfileFromMember:member
+                                              toUser:mentionedUser
+                                             guildID:mentionGuild.snowflake
+                                       authoritative:NO];
                 }
             }
             // role ping check
@@ -2148,7 +2163,8 @@ static void DCFillMissingUserFieldsFromJSON(DCUser *user, NSDictionary *jsonUser
         newMessage.attributedContent = nil;
         if ([newMessage.content length] > 0) {
             NSAttributedString *attributedText = [[DCMarkdownParser sharedParser]
-                attributedStringFromMarkdown:newMessage.content];
+                attributedStringFromMarkdown:newMessage.content
+                                      inGuild:mentionGuild];
             if (attributedText) {
                 newMessage.attributedContent = attributedText;
                 newMessage.content = attributedText.string;

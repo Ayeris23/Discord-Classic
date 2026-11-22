@@ -108,7 +108,8 @@ static const CGFloat DCImageMessageOverlayBottomPadding = 6.0f;
     NSAttributedString *content = self.message.attributedContent;
     if (!content && self.message.content.length) {
         content = [[DCMarkdownParser sharedParser]
-            attributedStringFromMarkdown:self.message.content];
+            attributedStringFromMarkdown:self.message.content
+                                  inGuild:DCServerCommunicator.sharedInstance.selectedChannel.parentGuild];
     }
     if (content.length) return content;
 

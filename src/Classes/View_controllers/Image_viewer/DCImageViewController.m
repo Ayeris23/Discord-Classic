@@ -7,6 +7,7 @@
 //
 
 #import "DCImageViewController.h"
+#import "DCActionSheetPresenter.h"
 #import "DCImageMessageOverlayView.h"
 #import "DCTools.h"
 #import "DCChatMediaManager.h"
@@ -1346,11 +1347,13 @@ static BOOL DCImageViewerActive = NO;
    destructiveButtonTitle:nil
         otherButtonTitles:@"Save to Camera Roll", @"Copy Image", @"Print", @"Email", @"Message", nil];
         if ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad) {
-            UIView *shareView = [self.share valueForKey:@"view"];
-            if (shareView) {
-                [sheet showFromRect:shareView.bounds inView:shareView animated:YES];
+            if (self.share) {
+                [sheet showFromBarButtonItem:self.share animated:YES];
             } else {
-                [sheet showInView:self.view];
+                [DCActionSheetPresenter showActionSheet:sheet
+                                              fromView:nil
+                                                inView:self.view
+                                              animated:YES];
             }
         } else {
             [sheet showInView:self.view];

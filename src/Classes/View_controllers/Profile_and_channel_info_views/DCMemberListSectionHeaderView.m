@@ -26,6 +26,7 @@ static const CGFloat DCMemberListHeaderHeight = 22.0f;
     if (!self) return nil;
 
     self.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    _titleInset = 10.0f;
     self.backgroundColor = [UIColor colorWithPatternImage:
                             [DCInterfaceStyle notificationBackgroundImage]];
 
@@ -45,6 +46,22 @@ static const CGFloat DCMemberListHeaderHeight = 22.0f;
     self.titleLabel = label;
 
     return self;
+}
+
+- (void)setTitleInset:(CGFloat)titleInset {
+    _titleInset = titleInset;
+    CGRect frame = self.titleLabel.frame;
+    frame.origin.x = titleInset;
+    frame.size.width = MAX(0.0f, self.bounds.size.width - titleInset - 10.0f);
+    self.titleLabel.frame = frame;
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    CGRect frame = self.titleLabel.frame;
+    frame.origin.x = self.titleInset;
+    frame.size.width = MAX(0.0f, self.bounds.size.width - self.titleInset - 10.0f);
+    if (!CGRectEqualToRect(self.titleLabel.frame, frame)) self.titleLabel.frame = frame;
 }
 
 - (void)setTitle:(NSString *)title {

@@ -7,6 +7,7 @@
 //
 
 #import "DCInterfaceStyle.h"
+#import "DCActionSheetPresenter.h"
 #import "DCMenuViewController.h"
 #import "DCConnectionPopup.h"
 #include "DCTools.h"
@@ -24,12 +25,21 @@
 #import "DCContentManager.h"
 #import "DCCacheManager.h"
 #import "DCIPadSplitViewController.h"
+#import "DCChannelCategoryHeaderView.h"
+#import "DCUnreadEdgeIndicatorView.h"
+#import <math.h>
 
 @interface DCMenuViewController ()
 @property NSMutableArray *displayGuilds;
 @property (strong, nonatomic) NSArray *displayChannels;
+@property (strong, nonatomic) NSArray *displayChannelSections;
+@property (strong, nonatomic) NSMutableSet *collapsedChannelCategoryKeys;
+@property (assign, nonatomic) BOOL channelCategoryAnimationInProgress;
+@property (assign, nonatomic) BOOL channelTableReloadPending;
+@property (assign, nonatomic) BOOL channelTableRestorePending;
 @property (strong, nonatomic) DCGuild *displayChannelsGuild;
 @property DCChannel *optionChannel;
+@property (strong, nonatomic) DCGuild *optionGuild;
 @property (assign, nonatomic) BOOL shouldAttemptColdChatRestore;
 @property (assign, nonatomic) BOOL coldChatRestoreAlreadyHandled;
 @property (strong, nonatomic) NSMutableSet *folderIconHydrationRequests;
@@ -39,7 +49,25 @@
 @property (strong, nonatomic) NSMutableSet *pendingMessageAckChannelIDs;
 @property (assign, nonatomic) BOOL pendingMessageAckFullReload;
 @property (assign, nonatomic) BOOL messageAckRefreshScheduled;
+@property (strong, nonatomic) NSMutableIndexSet *mentionedGuildRows;
+@property (strong, nonatomic) DCUnreadEdgeIndicatorView *topUnreadIndicator;
+@property (strong, nonatomic) DCUnreadEdgeIndicatorView *bottomUnreadIndicator;
+@property (strong, nonatomic) DCUnreadEdgeIndicatorView *topChannelUnreadIndicator;
+@property (strong, nonatomic) DCUnreadEdgeIndicatorView *bottomChannelUnreadIndicator;
+@property (strong, nonatomic) DCUnreadEdgeOverlayView *channelUnreadOverlay;
+@property (strong, nonatomic) NSArray *mentionedChannelIndexPaths;
+@property (strong, nonatomic) DCChannel *pendingChannelMentionReveal;
+@property (assign, nonatomic) CGFloat pendingChannelMentionRevealOffset;
+@property (assign, nonatomic) BOOL channelMentionRevealScrollInProgress;
+@property (strong, nonatomic) id pendingMentionRevealItem;
+@property (assign, nonatomic) BOOL mentionRevealScrollInProgress;
+@property (assign, nonatomic) CGFloat pendingMentionRevealOffset;
 @end
+
+static const NSInteger DCGuildMentionRevealHighlightTag = 9480;
+static const NSInteger DCChannelMentionRevealHighlightTag = 9481;
+static const CGFloat DCGuildUnreadEdgeClearance = 35.0f;
+static const CGFloat DCGuildMentionBadgeCenterFromBottom = 11.0f;
 
 @implementation DCMenuViewController
 
@@ -158,17 +186,221 @@
     return YES;
 }
 
+- (NSString *)categoryKeyForChannel:(DCChannel *)category {
+    if (!category.snowflake.length || !self.selectedGuild.snowflake.length) return nil;
+    return [NSString stringWithFormat:@"%@:%@", self.selectedGuild.snowflake,
+                                      category.snowflake];
+}
+
+- (BOOL)isChannelCategoryCollapsed:(DCChannel *)category {
+    NSString *key = [self categoryKeyForChannel:category];
+    return key.length && [self.collapsedChannelCategoryKeys containsObject:key];
+}
+
+- (BOOL)channelRemainsVisibleWhenCollapsed:(DCChannel *)channel {
+    return channel.mentionCount > 0 || (channel.unread && !channel.muted);
+}
+
+- (NSArray *)sectionsForChannels:(NSArray *)channels {
+    if ([self isDirectMessagesGuild:self.selectedGuild]) {
+        return [NSArray arrayWithObject:
+            [NSDictionary dictionaryWithObjectsAndKeys:channels, @"rows",
+             [NSNull null], @"category", nil]];
+    }
+
+    NSMutableArray *sections = [NSMutableArray array];
+    NSMutableArray *uncategorized = [NSMutableArray array];
+    NSMutableDictionary *rowsByCategory = [NSMutableDictionary dictionary];
+    NSMutableArray *categories = [NSMutableArray array];
+
+    for (DCChannel *channel in channels) {
+        if (channel.type != DCChannelTypeGuildCategory) continue;
+        if (!channel.snowflake.length) continue;
+        [categories addObject:channel];
+        [rowsByCategory setObject:[NSMutableArray array] forKey:channel.snowflake];
+    }
+
+    for (DCChannel *channel in channels) {
+        if (channel.type == DCChannelTypeGuildCategory) continue;
+        NSMutableArray *parentRows = [channel.parentID isKindOfClass:[NSString class]]
+            ? [rowsByCategory objectForKey:channel.parentID] : nil;
+        if (parentRows) [parentRows addObject:channel];
+        else [uncategorized addObject:channel];
+    }
+
+    [sections addObject:[NSDictionary dictionaryWithObjectsAndKeys:
+                         [NSArray arrayWithArray:uncategorized], @"rows",
+                         [NSNull null], @"category", nil]];
+    for (DCChannel *category in categories) {
+        NSArray *allRows = [rowsByCategory objectForKey:category.snowflake];
+        NSMutableArray *visibleRows = [NSMutableArray arrayWithCapacity:allRows.count];
+        BOOL collapsed = [self isChannelCategoryCollapsed:category];
+        for (DCChannel *channel in allRows) {
+            if (!collapsed || [self channelRemainsVisibleWhenCollapsed:channel])
+                [visibleRows addObject:channel];
+        }
+        [sections addObject:[NSDictionary dictionaryWithObjectsAndKeys:
+                             [NSArray arrayWithArray:visibleRows], @"rows",
+                             category, @"category", nil]];
+    }
+    return sections;
+}
+
+- (NSArray *)channelsInDisplayedSection:(NSInteger)section {
+    if (section < 0 || (NSUInteger)section >= self.displayChannelSections.count)
+        return [NSArray array];
+    return [[self.displayChannelSections objectAtIndex:section] objectForKey:@"rows"];
+}
+
+- (DCChannel *)categoryInDisplayedSection:(NSInteger)section {
+    if (section < 0 || (NSUInteger)section >= self.displayChannelSections.count)
+        return nil;
+    id category = [[self.displayChannelSections objectAtIndex:section] objectForKey:@"category"];
+    return [category isKindOfClass:[DCChannel class]] ? category : nil;
+}
+
+- (BOOL)displayedChannelSectionsMatch:(NSArray *)sections {
+    if (self.displayChannelSections.count != sections.count) return NO;
+    for (NSUInteger section = 0; section < sections.count; section++) {
+        NSDictionary *oldSection = [self.displayChannelSections objectAtIndex:section];
+        NSDictionary *newSection = [sections objectAtIndex:section];
+        if ([oldSection objectForKey:@"category"] != [newSection objectForKey:@"category"])
+            return NO;
+        NSArray *oldRows = [oldSection objectForKey:@"rows"];
+        NSArray *newRows = [newSection objectForKey:@"rows"];
+        if (oldRows.count != newRows.count) return NO;
+        for (NSUInteger i = 0; i < oldRows.count; i++) {
+            if ([oldRows objectAtIndex:i] != [newRows objectAtIndex:i]) return NO;
+        }
+    }
+    return YES;
+}
+
 - (void)reloadChannelTable {
     assertMainThread();
+    if (self.channelCategoryAnimationInProgress) {
+        self.channelTableReloadPending = YES;
+        return;
+    }
     self.displayChannelsGuild = self.selectedGuild;
     self.displayChannels = [self orderedChannelsForGuild:self.selectedGuild];
+    self.displayChannelSections = [self sectionsForChannels:self.displayChannels];
+    self.pendingChannelMentionReveal = nil;
+    self.channelMentionRevealScrollInProgress = NO;
     [self.channelTableView reloadData];
+    [self rebuildMentionedChannelIndexPaths];
 }
 
 - (DCChannel *)displayedChannelAtIndexPath:(NSIndexPath *)indexPath {
-    if (!indexPath || indexPath.section != 0 || indexPath.row < 0 ||
-        (NSUInteger)indexPath.row >= self.displayChannels.count) return nil;
-    return [self.displayChannels objectAtIndex:(NSUInteger)indexPath.row];
+    if (!indexPath || indexPath.row < 0) return nil;
+    NSArray *rows = [self channelsInDisplayedSection:indexPath.section];
+    return (NSUInteger)indexPath.row < rows.count ? [rows objectAtIndex:indexPath.row] : nil;
+}
+
+- (NSIndexPath *)indexPathForDisplayedChannelID:(NSString *)channelID {
+    if (!channelID.length) return nil;
+    for (NSUInteger section = 0; section < self.displayChannelSections.count; section++) {
+        NSArray *rows = [self channelsInDisplayedSection:section];
+        for (NSUInteger row = 0; row < rows.count; row++) {
+            DCChannel *channel = [rows objectAtIndex:row];
+            if ([channel.snowflake isEqualToString:channelID])
+                return [NSIndexPath indexPathForRow:row inSection:section];
+        }
+    }
+    return nil;
+}
+
+- (void)finishChannelCategoryAnimation {
+    assertMainThread();
+    self.channelCategoryAnimationInProgress = NO;
+
+    if (self.channelTableReloadPending) {
+        BOOL restoreScroll = self.channelTableRestorePending;
+        self.channelTableReloadPending = NO;
+        self.channelTableRestorePending = NO;
+        if (restoreScroll) [self reloadChannelTableForSelectedGuildRestoringScroll];
+        else [self reloadChannelTable];
+    } else {
+        [self rebuildMentionedChannelIndexPaths];
+    }
+
+    if (self.messageAckRefreshScheduled) [self flushMessageAckUpdates];
+}
+
+- (void)didTapChannelCategoryHeader:(UITapGestureRecognizer *)recognizer {
+    if (recognizer.state != UIGestureRecognizerStateEnded ||
+        self.channelCategoryAnimationInProgress) return;
+    DCChannelCategoryHeaderView *header = (DCChannelCategoryHeaderView *)recognizer.view;
+    if (![header isKindOfClass:[DCChannelCategoryHeaderView class]]) return;
+    DCChannel *category = [self categoryInDisplayedSection:header.section];
+    if (!category || ![category.snowflake isEqualToString:header.categoryID]) return;
+
+    NSString *key = [self categoryKeyForChannel:category];
+    if (!key.length) return;
+    NSArray *oldRows = [self channelsInDisplayedSection:header.section];
+    if ([self.channelTableView numberOfSections] != (NSInteger)self.displayChannelSections.count ||
+        [self.channelTableView numberOfRowsInSection:header.section] != (NSInteger)oldRows.count) {
+        [self reloadChannelTable];
+        return;
+    }
+    if (!self.collapsedChannelCategoryKeys)
+        self.collapsedChannelCategoryKeys = [NSMutableSet set];
+    BOOL collapsing = ![self.collapsedChannelCategoryKeys containsObject:key];
+    if (collapsing) [self.collapsedChannelCategoryKeys addObject:key];
+    else [self.collapsedChannelCategoryKeys removeObject:key];
+
+    NSArray *updatedSections = [self sectionsForChannels:self.displayChannels];
+    if (updatedSections.count != self.displayChannelSections.count) {
+        [self reloadChannelTable];
+        return;
+    }
+    NSArray *newRows = [[updatedSections objectAtIndex:header.section] objectForKey:@"rows"];
+    NSMutableArray *deletedPaths = [NSMutableArray array];
+    NSMutableArray *insertedPaths = [NSMutableArray array];
+    for (NSUInteger row = 0; row < oldRows.count; row++) {
+        if ([newRows containsObject:[oldRows objectAtIndex:row]]) continue;
+        [deletedPaths addObject:[NSIndexPath indexPathForRow:row inSection:header.section]];
+    }
+    for (NSUInteger row = 0; row < newRows.count; row++) {
+        if ([oldRows containsObject:[newRows objectAtIndex:row]]) continue;
+        [insertedPaths addObject:[NSIndexPath indexPathForRow:row inSection:header.section]];
+    }
+
+    self.pendingChannelMentionReveal = nil;
+    self.channelMentionRevealScrollInProgress = NO;
+    header.collapsed = collapsing;
+    if (!deletedPaths.count && !insertedPaths.count) {
+        self.displayChannelSections = updatedSections;
+        [self rebuildMentionedChannelIndexPaths];
+        return;
+    }
+
+    self.channelCategoryAnimationInProgress = YES;
+    [CATransaction begin];
+    [CATransaction setCompletionBlock:^{
+        [self finishChannelCategoryAnimation];
+    }];
+    [self.channelTableView beginUpdates];
+    self.displayChannelSections = updatedSections;
+    if (deletedPaths.count) {
+        [self.channelTableView deleteRowsAtIndexPaths:deletedPaths
+                                    withRowAnimation:UITableViewRowAnimationTop];
+    }
+    if (insertedPaths.count) {
+        [self.channelTableView insertRowsAtIndexPaths:insertedPaths
+                                    withRowAnimation:UITableViewRowAnimationTop];
+    }
+    [self.channelTableView endUpdates];
+    [CATransaction commit];
+}
+
+- (BOOL)channelIDsIncludeDisplayedCategory:(NSSet *)channelIDs {
+    for (NSDictionary *section in self.displayChannelSections) {
+        id category = [section objectForKey:@"category"];
+        if ([category isKindOfClass:[DCChannel class]] &&
+            [channelIDs containsObject:((DCChannel *)category).snowflake]) return YES;
+    }
+    return NO;
 }
 
 - (void)saveChannelListStateForGuild:(DCGuild *)guild {
@@ -195,12 +427,11 @@
     NSArray *visibleRows = [self.channelTableView indexPathsForVisibleRows];
     NSIndexPath *topIndexPath = nil;
     for (NSIndexPath *indexPath in visibleRows) {
-        if (!topIndexPath || indexPath.row < topIndexPath.row) {
+        if (!topIndexPath || [indexPath compare:topIndexPath] == NSOrderedAscending)
             topIndexPath = indexPath;
-        }
     }
 
-    if (topIndexPath && (NSUInteger)topIndexPath.row < self.displayChannels.count) {
+    if (topIndexPath) {
         DCChannel *channel = [self displayedChannelAtIndexPath:topIndexPath];
         if (channel.snowflake.length > 0) {
             CGRect rowRect = [self.channelTableView rectForRowAtIndexPath:topIndexPath];
@@ -238,17 +469,8 @@
         } else {
             NSString *channelID = [state objectForKey:@"channelID"];
             NSNumber *relativeOffset = [state objectForKey:@"relativeOffset"];
-            NSUInteger channelIndex = NSNotFound;
-
-            if (channelID.length > 0) {
-                channelIndex = [self.displayChannels indexOfObjectPassingTest:^BOOL(DCChannel *channel, NSUInteger idx, BOOL *stop) {
-                    return channel.snowflake.length > 0 &&
-                           [channel.snowflake isEqualToString:channelID];
-                }];
-            }
-
-            if (channelIndex != NSNotFound) {
-                NSIndexPath *indexPath = [NSIndexPath indexPathForRow:channelIndex inSection:0];
+            NSIndexPath *indexPath = [self indexPathForDisplayedChannelID:channelID];
+            if (indexPath) {
                 CGRect rowRect = [self.channelTableView rectForRowAtIndexPath:indexPath];
                 targetOffsetY = rowRect.origin.y + [relativeOffset floatValue];
             } else {
@@ -274,6 +496,11 @@
 }
 
 - (void)reloadChannelTableForSelectedGuildRestoringScroll {
+    if (self.channelCategoryAnimationInProgress) {
+        self.channelTableReloadPending = YES;
+        self.channelTableRestorePending = YES;
+        return;
+    }
     [self reloadChannelTable];
     [self restoreChannelListStateForGuild:self.selectedGuild];
 }
@@ -453,6 +680,562 @@
     communicator.guildsIsSorted = YES;
 }
 
+- (BOOL)displayedGuildItemHasMentions:(id)item {
+    if ([item isKindOfClass:[DCGuild class]])
+        return ((DCGuild *)item).mentionCount > 0;
+    if (![item isKindOfClass:[DCGuildFolder class]]) return NO;
+
+    DCGuildFolder *folder = (DCGuildFolder *)item;
+    if (folder.opened) return NO;
+    for (DCGuild *guild in DCServerCommunicator.sharedInstance.guilds) {
+        if (guild.snowflake.length &&
+            [folder.guildIds containsObject:guild.snowflake] &&
+            guild.mentionCount > 0) return YES;
+    }
+    return NO;
+}
+
+- (NSInteger)mentionCountForFolder:(DCGuildFolder *)folder {
+    NSInteger total = 0;
+    for (DCGuild *guild in DCServerCommunicator.sharedInstance.guilds) {
+        if (guild.snowflake.length && [folder.guildIds containsObject:guild.snowflake])
+            total += guild.mentionCount;
+    }
+    return total;
+}
+
+- (void)refreshMentionedGuildRow:(NSUInteger)row {
+    if (row >= self.displayGuilds.count) return;
+    if (!self.mentionedGuildRows) self.mentionedGuildRows = [NSMutableIndexSet indexSet];
+    if ([self displayedGuildItemHasMentions:[self.displayGuilds objectAtIndex:row]])
+        [self.mentionedGuildRows addIndex:row];
+    else
+        [self.mentionedGuildRows removeIndex:row];
+}
+
+- (void)rebuildMentionedGuildRows {
+    if (!self.mentionedGuildRows) self.mentionedGuildRows = [NSMutableIndexSet indexSet];
+    [self.mentionedGuildRows removeAllIndexes];
+    for (NSUInteger row = 0; row < self.displayGuilds.count; row++)
+        [self refreshMentionedGuildRow:row];
+    [self updateUnreadEdgeIndicators];
+}
+
+- (void)rebuildMentionedChannelIndexPaths {
+    NSMutableArray *paths = [NSMutableArray array];
+    for (NSUInteger section = 0; section < self.displayChannelSections.count; section++) {
+        NSArray *rows = [self channelsInDisplayedSection:section];
+        for (NSUInteger row = 0; row < rows.count; row++) {
+            DCChannel *channel = [rows objectAtIndex:row];
+            if (channel.mentionCount > 0)
+                [paths addObject:[NSIndexPath indexPathForRow:row inSection:section]];
+        }
+    }
+    self.mentionedChannelIndexPaths = paths;
+    [self updateChannelUnreadEdgeIndicators];
+}
+
+- (void)refreshMentionedChannelIndexPathsForIDs:(NSSet *)channelIDs {
+    if (!channelIDs.count) return;
+    NSMutableSet *paths = [NSMutableSet setWithArray:self.mentionedChannelIndexPaths ?: @[]];
+    for (NSString *channelID in channelIDs) {
+        NSIndexPath *path = [self indexPathForDisplayedChannelID:channelID];
+        if (!path) continue;
+        DCChannel *channel = [self displayedChannelAtIndexPath:path];
+        if (channel.mentionCount > 0) [paths addObject:path];
+        else [paths removeObject:path];
+    }
+    self.mentionedChannelIndexPaths = [[paths allObjects] sortedArrayUsingSelector:@selector(compare:)];
+    [self updateChannelUnreadEdgeIndicators];
+}
+
+- (CGFloat)channelPinnedHeaderClearanceAtOffset:(CGFloat)offsetY {
+    UITableView *table = self.channelTableView;
+    if (!table || [self isDirectMessagesGuild:self.selectedGuild]) return 0.0f;
+    if ([table numberOfSections] != (NSInteger)self.displayChannelSections.count)
+        return 0.0f;
+
+    CGFloat visibleTop = offsetY + table.contentInset.top;
+    for (NSInteger section = 0; section < (NSInteger)self.displayChannelSections.count; section++) {
+        CGRect rect = [table rectForSection:section];
+        if (CGRectGetMaxY(rect) <= visibleTop) continue;
+        if (CGRectGetMinY(rect) > visibleTop) break;
+        if ([self categoryInDisplayedSection:section])
+            return [DCChannelCategoryHeaderView headerHeight];
+        break;
+    }
+    return 0.0f;
+}
+
+- (void)layoutChannelUnreadEdgeIndicators {
+    UITableView *table = self.channelTableView;
+    UIView *container = table.superview;
+    if (!container) return;
+
+    if (!self.channelUnreadOverlay) {
+        DCUnreadEdgeOverlayView *overlay = [[DCUnreadEdgeOverlayView alloc] initWithFrame:CGRectZero];
+        overlay.backgroundColor = [UIColor clearColor];
+        overlay.clipsToBounds = YES;
+        self.channelUnreadOverlay = overlay;
+    }
+    if (self.channelUnreadOverlay.superview != container) {
+        [container insertSubview:self.channelUnreadOverlay aboveSubview:table];
+        if (self.guildTotalView.superview == container)
+            [container bringSubviewToFront:self.guildTotalView];
+        if (self.totalView.superview == container)
+            [container bringSubviewToFront:self.totalView];
+    }
+
+    CGFloat topClearance = [self channelPinnedHeaderClearanceAtOffset:table.contentOffset.y];
+    CGRect frame = table.frame;
+    CGRect overlayFrame = CGRectMake(frame.origin.x, frame.origin.y + topClearance,
+        frame.size.width, MAX(0.0f, frame.size.height - topClearance));
+    if (!CGRectEqualToRect(self.channelUnreadOverlay.frame, overlayFrame))
+        self.channelUnreadOverlay.frame = overlayFrame;
+
+    if (!self.topChannelUnreadIndicator) {
+        self.topChannelUnreadIndicator = [[DCUnreadEdgeIndicatorView alloc]
+            initWithEdge:DCUnreadEdgeTop title:@"New Mentions" horizontalTextInset:15.0f];
+        self.topChannelUnreadIndicator.gradientPeakOpacity = 0.45f;
+        [self.topChannelUnreadIndicator addTarget:self action:@selector(tapTopChannelUnreadIndicator:)];
+    }
+    if (!self.bottomChannelUnreadIndicator) {
+        self.bottomChannelUnreadIndicator = [[DCUnreadEdgeIndicatorView alloc]
+            initWithEdge:DCUnreadEdgeBottom title:@"New Mentions" horizontalTextInset:15.0f];
+        self.bottomChannelUnreadIndicator.gradientPeakOpacity = 0.45f;
+        [self.bottomChannelUnreadIndicator addTarget:self action:@selector(tapBottomChannelUnreadIndicator:)];
+    }
+    if (self.topChannelUnreadIndicator.superview != self.channelUnreadOverlay)
+        [self.channelUnreadOverlay addSubview:self.topChannelUnreadIndicator];
+    if (self.bottomChannelUnreadIndicator.superview != self.channelUnreadOverlay)
+        [self.channelUnreadOverlay addSubview:self.bottomChannelUnreadIndicator];
+
+    CGFloat overflow = [DCUnreadEdgeIndicatorView animationOverflow];
+    CGFloat height = DCGuildUnreadEdgeClearance + 2.0f * overflow;
+    CGFloat width = self.channelUnreadOverlay.bounds.size.width;
+    CGFloat listHeight = self.channelUnreadOverlay.bounds.size.height;
+    CGRect topFrame = CGRectMake(0.0f, -overflow, width, height);
+    CGRect bottomFrame = CGRectMake(0.0f,
+        listHeight - DCGuildUnreadEdgeClearance - overflow, width, height);
+    if (!CGRectEqualToRect(self.topChannelUnreadIndicator.frame, topFrame))
+        self.topChannelUnreadIndicator.frame = topFrame;
+    if (!CGRectEqualToRect(self.bottomChannelUnreadIndicator.frame, bottomFrame))
+        self.bottomChannelUnreadIndicator.frame = bottomFrame;
+
+    if (!self.mentionedChannelIndexPaths.count ||
+        [table numberOfSections] != (NSInteger)self.displayChannelSections.count) {
+        [self.topChannelUnreadIndicator setGradientOcclusionRanges:nil];
+        [self.bottomChannelUnreadIndicator setGradientOcclusionRanges:nil];
+        return;
+    }
+
+    NSMutableArray *topOcclusions = [NSMutableArray array];
+    NSMutableArray *bottomOcclusions = [NSMutableArray array];
+    CGFloat visibleTop = table.contentOffset.y + table.contentInset.top;
+    CGFloat visibleBottom = table.contentOffset.y + table.bounds.size.height -
+                            table.contentInset.bottom;
+    CGFloat stripBottom = MAX(0.0f, listHeight - DCGuildUnreadEdgeClearance);
+    NSInteger first = 0;
+    NSInteger end = (NSInteger)self.displayChannelSections.count;
+    while (first < end) {
+        NSInteger mid = first + (end - first) / 2;
+        if (CGRectGetMaxY([table rectForSection:mid]) <= visibleTop)
+            first = mid + 1;
+        else
+            end = mid;
+    }
+    for (NSInteger section = first;
+         section < (NSInteger)self.displayChannelSections.count; section++) {
+        CGRect sectionRect = [table rectForSection:section];
+        if (CGRectGetMinY(sectionRect) >= visibleBottom) break;
+        if (![self categoryInDisplayedSection:section]) continue;
+
+        CGRect headerRect = [table rectForHeaderInSection:section];
+        CGFloat headerHeight = CGRectGetHeight(headerRect);
+        if (headerHeight <= 0.0f) continue;
+        CGFloat headerY = MIN(MAX(CGRectGetMinY(headerRect), visibleTop),
+                              CGRectGetMaxY(sectionRect) - headerHeight);
+        CGFloat overlayY = headerY - table.contentOffset.y - topClearance;
+        CGFloat topStart = MAX(0.0f, overlayY);
+        CGFloat topEnd = MIN(DCGuildUnreadEdgeClearance, overlayY + headerHeight);
+        if (topEnd > topStart)
+            [topOcclusions addObject:[NSValue valueWithCGRect:
+                CGRectMake(0.0f, topStart, 1.0f, topEnd - topStart)]];
+
+        CGFloat bottomStart = MAX(stripBottom, overlayY);
+        CGFloat bottomEnd = MIN(listHeight, overlayY + headerHeight);
+        if (bottomEnd > bottomStart)
+            [bottomOcclusions addObject:[NSValue valueWithCGRect:
+                CGRectMake(0.0f, bottomStart - stripBottom,
+                           1.0f, bottomEnd - bottomStart)]];
+    }
+    [self.topChannelUnreadIndicator setGradientOcclusionRanges:topOcclusions];
+    [self.bottomChannelUnreadIndicator setGradientOcclusionRanges:bottomOcclusions];
+}
+
+- (NSIndexPath *)nearestChannelMentionAtEdge:(DCUnreadEdge)edge {
+    UITableView *table = self.channelTableView;
+    if (!table || !self.mentionedChannelIndexPaths.count || !self.displayChannelSections.count ||
+        [table numberOfSections] != (NSInteger)self.displayChannelSections.count) return nil;
+
+    CGFloat minimum = -table.contentInset.top;
+    CGFloat maximum = MAX(minimum, table.contentSize.height +
+                          table.contentInset.bottom - table.bounds.size.height);
+    if ((edge == DCUnreadEdgeTop && table.contentOffset.y <= minimum + 0.5f) ||
+        (edge == DCUnreadEdgeBottom && table.contentOffset.y >= maximum - 0.5f)) return nil;
+
+    CGFloat top = table.contentOffset.y + table.contentInset.top;
+    CGFloat bottom = table.contentOffset.y + table.bounds.size.height - table.contentInset.bottom;
+    CGFloat topClearance = DCGuildUnreadEdgeClearance +
+        [self channelPinnedHeaderClearanceAtOffset:table.contentOffset.y];
+    NSIndexPath *nearest = nil;
+    for (NSIndexPath *path in self.mentionedChannelIndexPaths) {
+        if (path.section >= self.displayChannelSections.count ||
+            path.row >= (NSInteger)[self channelsInDisplayedSection:path.section].count) continue;
+        CGRect rect = [table rectForRowAtIndexPath:path];
+        CGFloat badgeY = CGRectGetMidY(rect);
+        if (edge == DCUnreadEdgeTop) {
+            if (badgeY < top + topClearance - 0.5f) nearest = path;
+            else break;
+        } else if (badgeY > bottom - DCGuildUnreadEdgeClearance + 0.5f) {
+            nearest = path;
+            break;
+        }
+    }
+    return nearest;
+}
+
+- (void)updateChannelUnreadEdgeIndicators {
+    if (self.channelCategoryAnimationInProgress ||
+        !self.isViewLoaded || !self.view.window || !self.channelTableView) return;
+    [self layoutChannelUnreadEdgeIndicators];
+    [self.topChannelUnreadIndicator setActive:
+        [self nearestChannelMentionAtEdge:DCUnreadEdgeTop] != nil animated:YES];
+    [self.bottomChannelUnreadIndicator setActive:
+        [self nearestChannelMentionAtEdge:DCUnreadEdgeBottom] != nil animated:YES];
+}
+
+- (void)finishPendingChannelMentionReveal {
+    DCChannel *channel = self.pendingChannelMentionReveal;
+    if (!channel || self.channelMentionRevealScrollInProgress) return;
+    NSIndexPath *path = [self indexPathForDisplayedChannelID:channel.snowflake];
+    if (!path || [self displayedChannelAtIndexPath:path] != channel) {
+        self.pendingChannelMentionReveal = nil;
+        return;
+    }
+    UITableView *table = self.channelTableView;
+    CGRect rect = [table rectForRowAtIndexPath:path];
+    CGFloat top = table.contentOffset.y + table.contentInset.top;
+    CGFloat bottom = table.contentOffset.y + table.bounds.size.height - table.contentInset.bottom;
+    if (CGRectGetMaxY(rect) <= top || CGRectGetMinY(rect) >= bottom) return;
+
+    UITableViewCell *cell = [table cellForRowAtIndexPath:path];
+    if (!cell) return;
+    self.pendingChannelMentionReveal = nil;
+    [[cell viewWithTag:DCChannelMentionRevealHighlightTag] removeFromSuperview];
+    UIView *highlight = [[UIView alloc] initWithFrame:cell.bounds];
+    highlight.tag = DCChannelMentionRevealHighlightTag;
+    highlight.userInteractionEnabled = NO;
+    highlight.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    highlight.backgroundColor = [UIColor colorWithWhite:1.0f alpha:0.13f];
+    [cell addSubview:highlight];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        if (!highlight.superview) return;
+        [UIView animateWithDuration:0.45f animations:^{ highlight.alpha = 0.0f; }
+                         completion:^(BOOL finished) { [highlight removeFromSuperview]; }];
+    });
+}
+
+- (void)revealChannelMentionAtEdge:(DCUnreadEdge)edge {
+    if (self.channelMentionRevealScrollInProgress) return;
+    UITableView *table = self.channelTableView;
+    [table layoutIfNeeded];
+    NSIndexPath *path = [self nearestChannelMentionAtEdge:edge];
+    if (!path) return;
+    DCChannel *channel = [self displayedChannelAtIndexPath:path];
+    if (!channel) return;
+
+    CGRect rect = [table rectForRowAtIndexPath:path];
+    UIEdgeInsets insets = table.contentInset;
+    if (table.bounds.size.height - insets.top - insets.bottom <=
+        DCGuildUnreadEdgeClearance * 2.0f) return;
+    CGFloat destination;
+    if (edge == DCUnreadEdgeTop) {
+        destination = CGRectGetMinY(rect) - insets.top - DCGuildUnreadEdgeClearance;
+        CGFloat headerClearance = [self channelPinnedHeaderClearanceAtOffset:destination];
+        destination -= headerClearance;
+    } else {
+        destination = CGRectGetMaxY(rect) - table.bounds.size.height + insets.bottom +
+            DCGuildUnreadEdgeClearance;
+    }
+    destination = [self clampedChannelListOffsetY:destination];
+    self.pendingChannelMentionReveal = channel;
+    if (fabsf(destination - table.contentOffset.y) <= 0.5f) {
+        [self finishPendingChannelMentionReveal];
+        return;
+    }
+
+    self.pendingChannelMentionRevealOffset = destination;
+    self.channelMentionRevealScrollInProgress = YES;
+    [table setContentOffset:CGPointMake(table.contentOffset.x, destination) animated:YES];
+    __weak DCMenuViewController *weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.65 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        if (!weakSelf.channelMentionRevealScrollInProgress ||
+            weakSelf.pendingChannelMentionReveal != channel) return;
+        weakSelf.channelMentionRevealScrollInProgress = NO;
+        [weakSelf updateChannelUnreadEdgeIndicators];
+        if (fabsf(table.contentOffset.y - weakSelf.pendingChannelMentionRevealOffset) <= 1.0f)
+            [weakSelf finishPendingChannelMentionReveal];
+        else
+            weakSelf.pendingChannelMentionReveal = nil;
+    });
+}
+
+- (void)tapTopChannelUnreadIndicator:(id)sender {
+    [self revealChannelMentionAtEdge:DCUnreadEdgeTop];
+}
+
+- (void)tapBottomChannelUnreadIndicator:(id)sender {
+    [self revealChannelMentionAtEdge:DCUnreadEdgeBottom];
+}
+
+- (void)layoutUnreadEdgeIndicators {
+    UITableView *table = self.guildTableView;
+    UIView *container = table.superview;
+    if (!container) return;
+
+    if (!self.topUnreadIndicator) {
+        self.topUnreadIndicator = [[DCUnreadEdgeIndicatorView alloc]
+            initWithEdge:DCUnreadEdgeTop];
+        [self.topUnreadIndicator addTarget:self action:@selector(tapTopUnreadIndicator:)];
+    }
+    if (!self.bottomUnreadIndicator) {
+        self.bottomUnreadIndicator = [[DCUnreadEdgeIndicatorView alloc]
+            initWithEdge:DCUnreadEdgeBottom];
+        [self.bottomUnreadIndicator addTarget:self action:@selector(tapBottomUnreadIndicator:)];
+    }
+    if (self.topUnreadIndicator.superview != container) {
+        [container addSubview:self.topUnreadIndicator];
+        [container bringSubviewToFront:self.topUnreadIndicator];
+    }
+    if (self.bottomUnreadIndicator.superview != container) {
+        [container addSubview:self.bottomUnreadIndicator];
+        [container bringSubviewToFront:self.bottomUnreadIndicator];
+    }
+
+    CGRect frame = table.frame;
+    CGFloat overflow = [DCUnreadEdgeIndicatorView animationOverflow];
+    CGFloat indicatorHeight = 35.0f + overflow * 2.0f;
+    CGRect topFrame = CGRectMake(frame.origin.x, frame.origin.y - overflow,
+                                 frame.size.width, indicatorHeight);
+    CGRect bottomFrame = CGRectMake(frame.origin.x,
+        CGRectGetMaxY(frame) - 35.0f - overflow, frame.size.width, indicatorHeight);
+    if (!CGRectEqualToRect(self.topUnreadIndicator.frame, topFrame))
+        self.topUnreadIndicator.frame = topFrame;
+    if (!CGRectEqualToRect(self.bottomUnreadIndicator.frame, bottomFrame))
+        self.bottomUnreadIndicator.frame = bottomFrame;
+    [self layoutChannelUnreadEdgeIndicators];
+}
+
+- (CGFloat)unreadListVisibleTop {
+    UITableView *table = self.guildTableView;
+    return table.contentOffset.y + table.contentInset.top;
+}
+
+- (CGFloat)unreadListVisibleBottom {
+    UITableView *table = self.guildTableView;
+    return table.contentOffset.y + table.bounds.size.height - table.contentInset.bottom;
+}
+
+- (NSUInteger)nearestOffscreenMentionRowAtEdge:(DCUnreadEdge)edge {
+    UITableView *table = self.guildTableView;
+    if (!table || self.mentionedGuildRows.count == 0 ||
+        self.displayGuilds.count != (NSUInteger)[table numberOfRowsInSection:0])
+        return NSNotFound;
+
+    CGFloat minOffset = -table.contentInset.top;
+    CGFloat maxOffset = MAX(minOffset, table.contentSize.height +
+                                      table.contentInset.bottom - table.bounds.size.height);
+    if ((edge == DCUnreadEdgeTop && table.contentOffset.y <= minOffset + 0.5f) ||
+        (edge == DCUnreadEdgeBottom && table.contentOffset.y >= maxOffset - 0.5f))
+        return NSNotFound;
+
+    NSUInteger firstVisible = NSNotFound;
+    NSUInteger lastVisible = NSNotFound;
+    for (NSIndexPath *path in [table indexPathsForVisibleRows]) {
+        if (path.section != 0) continue;
+        NSUInteger row = (NSUInteger)path.row;
+        if (firstVisible == NSNotFound || row < firstVisible) firstVisible = row;
+        if (lastVisible == NSNotFound || row > lastVisible) lastVisible = row;
+    }
+    if (firstVisible == NSNotFound) return NSNotFound;
+
+    if (edge == DCUnreadEdgeTop) {
+        if ([self.mentionedGuildRows containsIndex:firstVisible]) {
+            CGRect rect = [table rectForRowAtIndexPath:
+                [NSIndexPath indexPathForRow:firstVisible inSection:0]];
+            CGFloat badgeY = CGRectGetMaxY(rect) - DCGuildMentionBadgeCenterFromBottom;
+            if (badgeY < [self unreadListVisibleTop] + DCGuildUnreadEdgeClearance - 0.5f)
+                return firstVisible;
+        }
+        return [self.mentionedGuildRows indexLessThanIndex:firstVisible];
+    }
+
+    if ([self.mentionedGuildRows containsIndex:lastVisible]) {
+        CGRect rect = [table rectForRowAtIndexPath:
+            [NSIndexPath indexPathForRow:lastVisible inSection:0]];
+        CGFloat badgeY = CGRectGetMaxY(rect) - DCGuildMentionBadgeCenterFromBottom;
+        if (badgeY > [self unreadListVisibleBottom] - DCGuildUnreadEdgeClearance + 0.5f)
+            return lastVisible;
+    }
+    return [self.mentionedGuildRows indexGreaterThanIndex:lastVisible];
+}
+
+- (void)updateUnreadEdgeIndicators {
+    if (!self.isViewLoaded || !self.view.window || !self.guildTableView ||
+        self.guildFolderAnimationInProgress) return;
+    [self layoutUnreadEdgeIndicators];
+
+    [self.topUnreadIndicator setActive:
+        [self nearestOffscreenMentionRowAtEdge:DCUnreadEdgeTop] != NSNotFound
+                                     animated:YES];
+    [self.bottomUnreadIndicator setActive:
+        [self nearestOffscreenMentionRowAtEdge:DCUnreadEdgeBottom] != NSNotFound
+                                        animated:YES];
+}
+
+- (void)finishPendingMentionRevealIfVisible {
+    id item = self.pendingMentionRevealItem;
+    if (!item) return;
+    NSUInteger row = [self.displayGuilds indexOfObjectIdenticalTo:item];
+    if (row == NSNotFound || row >= (NSUInteger)[self.guildTableView numberOfRowsInSection:0]) {
+        self.pendingMentionRevealItem = nil;
+        return;
+    }
+
+    NSIndexPath *path = [NSIndexPath indexPathForRow:row inSection:0];
+    CGRect cellRect = [self.guildTableView rectForRowAtIndexPath:path];
+    if (CGRectGetMaxY(cellRect) <= [self unreadListVisibleTop] ||
+        CGRectGetMinY(cellRect) >= [self unreadListVisibleBottom]) return;
+
+    UITableViewCell *cell = [self.guildTableView cellForRowAtIndexPath:path];
+    if (!cell) return;
+    self.pendingMentionRevealItem = nil;
+
+    [[cell viewWithTag:DCGuildMentionRevealHighlightTag] removeFromSuperview];
+    UIView *highlight = [[UIView alloc] initWithFrame:cell.bounds];
+    highlight.tag = DCGuildMentionRevealHighlightTag;
+    highlight.userInteractionEnabled = NO;
+    highlight.autoresizingMask = UIViewAutoresizingFlexibleWidth |
+                                  UIViewAutoresizingFlexibleHeight;
+    highlight.backgroundColor = [UIColor colorWithWhite:1.0f alpha:0.13f];
+    [cell addSubview:highlight];
+
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        if (!highlight.superview) return;
+        [UIView animateWithDuration:0.45f animations:^{
+            highlight.alpha = 0.0f;
+        } completion:^(BOOL finished) {
+            [highlight removeFromSuperview];
+        }];
+    });
+}
+
+- (void)revealUnreadMentionAtEdge:(DCUnreadEdge)edge {
+    if (self.guildFolderAnimationInProgress || self.mentionRevealScrollInProgress) return;
+    UITableView *table = self.guildTableView;
+    [table layoutIfNeeded];
+    NSUInteger row = [self nearestOffscreenMentionRowAtEdge:edge];
+    if (row == NSNotFound) return;
+
+    CGRect cellRect = [table rectForRowAtIndexPath:
+        [NSIndexPath indexPathForRow:row inSection:0]];
+    UIEdgeInsets insets = table.contentInset;
+    CGFloat visibleHeight = table.bounds.size.height - insets.top - insets.bottom;
+    if (visibleHeight <= DCGuildUnreadEdgeClearance * 2.0f) return;
+
+    CGFloat destination;
+    if (edge == DCUnreadEdgeTop) {
+        destination = CGRectGetMinY(cellRect) - insets.top - DCGuildUnreadEdgeClearance;
+    } else {
+        destination = CGRectGetMaxY(cellRect) - table.bounds.size.height +
+                      insets.bottom + DCGuildUnreadEdgeClearance;
+    }
+    CGFloat minimum = -insets.top;
+    CGFloat maximum = MAX(minimum, table.contentSize.height + insets.bottom -
+                                   table.bounds.size.height);
+    destination = MIN(MAX(destination, minimum), maximum);
+
+    id target = [self.displayGuilds objectAtIndex:row];
+    self.pendingMentionRevealItem = target;
+    if (fabsf(destination - table.contentOffset.y) <= 0.5f) {
+        [self finishPendingMentionRevealIfVisible];
+        return;
+    }
+
+    self.pendingMentionRevealOffset = destination;
+    self.mentionRevealScrollInProgress = YES;
+    [table setContentOffset:CGPointMake(table.contentOffset.x, destination)
+                   animated:YES];
+    // iOS 5 may omit the completion callback at a clamped destination.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.65 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        if (!self.mentionRevealScrollInProgress ||
+            self.pendingMentionRevealItem != target) return;
+        self.mentionRevealScrollInProgress = NO;
+        [self updateUnreadEdgeIndicators];
+        if (fabsf(table.contentOffset.y - self.pendingMentionRevealOffset) <= 1.0f)
+            [self finishPendingMentionRevealIfVisible];
+        else
+            self.pendingMentionRevealItem = nil;
+    });
+}
+
+- (void)tapTopUnreadIndicator:(id)sender {
+    [self revealUnreadMentionAtEdge:DCUnreadEdgeTop];
+}
+
+- (void)tapBottomUnreadIndicator:(id)sender {
+    [self revealUnreadMentionAtEdge:DCUnreadEdgeBottom];
+}
+
+- (void)scrollViewDidScroll:(UIScrollView *)scrollView {
+    if (scrollView == self.guildTableView) [self updateUnreadEdgeIndicators];
+    else if (scrollView == self.channelTableView) [self updateChannelUnreadEdgeIndicators];
+}
+
+- (void)scrollViewWillBeginDragging:(UIScrollView *)scrollView {
+    if (scrollView == self.guildTableView) {
+        self.pendingMentionRevealItem = nil;
+        self.mentionRevealScrollInProgress = NO;
+    } else if (scrollView == self.channelTableView) {
+        self.pendingChannelMentionReveal = nil;
+        self.channelMentionRevealScrollInProgress = NO;
+    }
+}
+
+- (void)scrollViewDidEndScrollingAnimation:(UIScrollView *)scrollView {
+    if (scrollView == self.channelTableView) {
+        self.channelMentionRevealScrollInProgress = NO;
+        [self updateChannelUnreadEdgeIndicators];
+        [self finishPendingChannelMentionReveal];
+    } else if (scrollView == self.guildTableView) {
+        self.mentionRevealScrollInProgress = NO;
+        [self updateUnreadEdgeIndicators];
+        [self finishPendingMentionRevealIfVisible];
+    }
+}
+
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    [self layoutUnreadEdgeIndicators];
+    [self updateUnreadEdgeIndicators];
+    [self updateChannelUnreadEdgeIndicators];
+}
+
 - (void)reloadGuildTableFromCanonicalState {
     assertMainThread();
     if (self.guildFolderAnimationInProgress) {
@@ -460,8 +1243,13 @@
         return;
     }
 
+    self.pendingMentionRevealItem = nil;
+    self.mentionRevealScrollInProgress = NO;
     [self rebuildDisplayGuildsIfNeeded];
     [self.guildTableView reloadData];
+    [self rebuildMentionedGuildRows];
+    [self performSelector:@selector(updateUnreadEdgeIndicators)
+               withObject:nil afterDelay:0.0f];
 }
 
 - (void)finishGuildFolderAnimation {
@@ -472,6 +1260,8 @@
         !DCServerCommunicator.sharedInstance.guildsIsSorted) {
         self.guildTableReloadPending = NO;
         [self reloadGuildTableFromCanonicalState];
+    } else {
+        [self rebuildMentionedGuildRows];
     }
 }
 
@@ -625,14 +1415,35 @@
                 action:@selector(handleLongPress:)];
     longPress.minimumPressDuration          = 0.5; // seconds
     [self.channelTableView addGestureRecognizer:longPress];
+
+    if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
+        UILongPressGestureRecognizer *guildPress = [[UILongPressGestureRecognizer alloc]
+            initWithTarget:self action:@selector(handleGuildLongPress:)];
+        guildPress.minimumPressDuration = 0.5;
+        [self.guildTableView addGestureRecognizer:guildPress];
+    }
 }
 
 - (void)viewDidUnload {
     [NSNotificationCenter.defaultCenter removeObserver:self];
     // nil IBOutlets
+    [self.topUnreadIndicator removeFromSuperview];
+    [self.bottomUnreadIndicator removeFromSuperview];
+    [self.channelUnreadOverlay removeFromSuperview];
+    self.channelUnreadOverlay = nil;
+    [self.topChannelUnreadIndicator removeFromSuperview];
+    [self.bottomChannelUnreadIndicator removeFromSuperview];
+    self.topChannelUnreadIndicator = nil;
+    self.bottomChannelUnreadIndicator = nil;
+    self.mentionedChannelIndexPaths = nil;
+    self.pendingChannelMentionReveal = nil;
+    self.topUnreadIndicator = nil;
+    self.bottomUnreadIndicator = nil;
+    self.pendingMentionRevealItem = nil;
     self.guildTableView = nil;
     self.channelTableView = nil;
     self.displayChannels = nil;
+    self.displayChannelSections = nil;
     self.displayChannelsGuild = nil;
     self.refreshControl = nil;
     // ... nil any other IBOutlets
@@ -697,7 +1508,15 @@
                                                                           nil];
 
         actionSheet.tag = 2;
-        [actionSheet showInView:self.view.superview ? self.view.superview : self.view];
+        UIView *pressedCell = [self.channelTableView cellForRowAtIndexPath:indexPath];
+        if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
+            [DCActionSheetPresenter showActionSheet:actionSheet
+                                          fromView:pressedCell
+                                            inView:self.view
+                                          animated:YES];
+        } else {
+            [actionSheet showInView:self.view.superview ? self.view.superview : self.view];
+        }
     }
 }
 
@@ -1070,9 +1889,10 @@
     }
 
     // Reload only when at least one affected row is present.
-    if (indexPaths.count == 0) {
-        return;
-    }
+    for (NSIndexPath *indexPath in indexPaths)
+        [self refreshMentionedGuildRow:(NSUInteger)indexPath.row];
+    [self updateUnreadEdgeIndicators];
+    if (indexPaths.count == 0) return;
 
     [self.guildTableView reloadRowsAtIndexPaths:indexPaths
                                withRowAnimation:UITableViewRowAnimationNone];
@@ -1199,24 +2019,27 @@
 }
 
 - (void)flushMessageAckUpdates {
+    if (self.channelCategoryAnimationInProgress) return;
     self.messageAckRefreshScheduled = NO;
     BOOL reloadAllChannels = self.pendingMessageAckFullReload;
     self.pendingMessageAckFullReload = NO;
     NSSet *channelIDs = [self.pendingMessageAckChannelIDs copy];
     [self.pendingMessageAckChannelIDs removeAllObjects];
     if (!self.isViewLoaded || !self.view.window) return;
+    if (reloadAllChannels) [self rebuildMentionedGuildRows];
 
     DCServerCommunicator *communicator = DCServerCommunicator.sharedInstance;
     NSMutableSet *affectedGuilds = [NSMutableSet set];
     NSMutableSet *affectedGuildIDs = [NSMutableSet set];
     NSMutableArray *channelRows = [NSMutableArray array];
 
-    NSUInteger row = 0;
-    for (DCChannel *channel in self.displayChannels) {
-        if (channel.snowflake.length && [channelIDs containsObject:channel.snowflake]) {
-            [channelRows addObject:[NSIndexPath indexPathForRow:row inSection:0]];
+    for (NSUInteger section = 0; section < self.displayChannelSections.count; section++) {
+        NSArray *rows = [self channelsInDisplayedSection:section];
+        for (NSUInteger row = 0; row < rows.count; row++) {
+            DCChannel *channel = [rows objectAtIndex:row];
+            if (channel.snowflake.length && [channelIDs containsObject:channel.snowflake])
+                [channelRows addObject:[NSIndexPath indexPathForRow:row inSection:section]];
         }
-        row++;
     }
 
     for (NSString *channelID in channelIDs) {
@@ -1256,13 +2079,17 @@
                         }
                     }
                     NSIndexPath *indexPath = [NSIndexPath indexPathForRow:guildRow inSection:0];
-                    if (affected && [visibleGuildRows containsObject:indexPath])
-                        [guildRows addObject:indexPath];
+                    if (affected) {
+                        [self refreshMentionedGuildRow:guildRow];
+                        if ([visibleGuildRows containsObject:indexPath])
+                            [guildRows addObject:indexPath];
+                    }
                     guildRow++;
                 }
                 if (guildRows.count)
                     [self.guildTableView reloadRowsAtIndexPaths:guildRows
                                                withRowAnimation:UITableViewRowAnimationNone];
+                [self updateUnreadEdgeIndicators];
             }
         }
     }
@@ -1290,6 +2117,23 @@
         return;
     }
 
+    BOOL changedCategoryRows = NO;
+    if (self.collapsedChannelCategoryKeys.count > 0 &&
+        ![self isDirectMessagesGuild:self.selectedGuild]) {
+        for (NSUInteger section = 0; section < self.displayChannelSections.count; section++) {
+            if ([self isChannelCategoryCollapsed:[self categoryInDisplayedSection:section]]) {
+                changedCategoryRows = ![self displayedChannelSectionsMatch:
+                    [self sectionsForChannels:self.displayChannels]];
+                break;
+            }
+        }
+    }
+    if (changedCategoryRows || [self channelIDsIncludeDisplayedCategory:channelIDs]) {
+        [self reloadChannelTable];
+        return;
+    }
+
+    [self refreshMentionedChannelIndexPathsForIDs:channelIDs];
     if (channelRows.count) {
         NSSet *visibleChannelRows = [NSSet setWithArray:
             [self.channelTableView indexPathsForVisibleRows] ?: @[]];
@@ -1316,6 +2160,8 @@
 
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
+    [self updateUnreadEdgeIndicators];
+    [self updateChannelUnreadEdgeIndicators];
     if (!self.experimentalMode) {
         [[DCConnectionPopup sharedPopup] setHostView:self.view];
     }
@@ -1332,17 +2178,53 @@
 }
 
 // misc end
+- (void)showGuildOptionsForGuild:(DCGuild *)guild source:(id)source {
+    self.optionGuild = guild;
+    UIActionSheet *sheet = [[UIActionSheet alloc]
+        initWithTitle:guild.name
+             delegate:self
+    cancelButtonTitle:@"Okay"
+   destructiveButtonTitle:nil
+        otherButtonTitles:guild ? @"Copy Guild ID" : nil, nil];
+    sheet.tag = 1;
+    if (UI_USER_INTERFACE_IDIOM() != UIUserInterfaceIdiomPad) {
+        [sheet showInView:self.view.superview ? self.view.superview : self.view];
+    } else if ([source isKindOfClass:[UIBarButtonItem class]]) {
+        [sheet showFromBarButtonItem:(UIBarButtonItem *)source animated:YES];
+    } else {
+        UIView *anchor = [source isKindOfClass:[UIView class]] ? source : nil;
+        [DCActionSheetPresenter showActionSheet:sheet
+                                      fromView:anchor
+                                        inView:self.view
+                                      animated:YES];
+    }
+}
+
+- (void)handleGuildLongPress:(UILongPressGestureRecognizer *)recognizer {
+    if (recognizer.state != UIGestureRecognizerStateBegan ||
+        self.guildFolderAnimationInProgress) return;
+
+    CGPoint point = [recognizer locationInView:self.guildTableView];
+    NSIndexPath *indexPath = [self.guildTableView indexPathForRowAtPoint:point];
+    if (!indexPath || indexPath.row >= (NSInteger)self.displayGuilds.count) return;
+
+    id item = [self.displayGuilds objectAtIndex:indexPath.row];
+    if (![item isKindOfClass:[DCGuild class]] || [self isDirectMessagesGuild:item]) return;
+    UIView *cell = [self.guildTableView cellForRowAtIndexPath:indexPath];
+    [self showGuildOptionsForGuild:(DCGuild *)item source:cell];
+}
+
 - (IBAction)moreInfo:(id)sender {
-    UIActionSheet *messageActionSheet =
-        [[UIActionSheet alloc] initWithTitle:self.selectedGuild.name
-                                    delegate:self
-                           cancelButtonTitle:@"Okay"
-                      destructiveButtonTitle:nil
-                           otherButtonTitles:self.selectedGuild ? @"Copy Guild ID" : nil,
-                                             nil];
-    messageActionSheet.tag      = 1;
-    messageActionSheet.delegate = self;
-    [messageActionSheet showInView:self.view.superview ? self.view.superview : self.view];
+    id anchor = sender;
+    if (![sender isKindOfClass:[UIView class]] &&
+        ![sender isKindOfClass:[UIBarButtonItem class]]) {
+        NSUInteger row = [self.displayGuilds indexOfObjectIdenticalTo:self.selectedGuild];
+        if (row != NSNotFound) {
+            NSIndexPath *indexPath = [NSIndexPath indexPathForRow:row inSection:0];
+            anchor = [self.guildTableView cellForRowAtIndexPath:indexPath];
+        }
+    }
+    [self showGuildOptionsForGuild:self.selectedGuild source:anchor];
 }
 
 - (void)actionSheet:(UIActionSheet *)popup
@@ -1350,18 +2232,16 @@
     if (popup.tag == 1) {
         switch (buttonIndex) {
             case 0: {
-                if (!self.selectedGuild) {
-                    break; // No guild selected
-                }
-                // Copy guild ID
+                if (!self.optionGuild) break;
                 UIPasteboard *pasteboard = [UIPasteboard generalPasteboard];
-                pasteboard.string        = self.selectedGuild.snowflake;
+                pasteboard.string = self.optionGuild.snowflake;
                 break;
             }
             default: {
                 break;
             }
         }
+        self.optionGuild = nil;
     } else if (popup.tag == 2) {
         DCChannel *channel = self.optionChannel;
         if (!channel) return;
@@ -1411,7 +2291,17 @@
                                   @"Until I turn it back on",
                                   nil];
                 muteSheet.tag = 3;
-                [muteSheet showInView:self.view.superview ? self.view.superview : self.view];
+                NSIndexPath *indexPath = [self indexPathForDisplayedChannelID:channel.snowflake];
+                UIView *anchor = indexPath
+                    ? [self.channelTableView cellForRowAtIndexPath:indexPath] : nil;
+                if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
+                    [DCActionSheetPresenter showActionSheet:muteSheet
+                                                  fromView:anchor
+                                                    inView:self.view
+                                                  animated:YES];
+                } else {
+                    [muteSheet showInView:self.view.superview ? self.view.superview : self.view];
+                }
                 return;
             }
             case 3: {
@@ -1470,6 +2360,7 @@
             if ([selectedGuild isKindOfClass:[DCGuildFolder class]]) {
                 DCGuildFolder *folder           = selectedGuild;
                 folder.opened                   = !folder.opened;
+                [self refreshMentionedGuildRow:(NSUInteger)indexPath.row];
                 NSDictionary *constFolderDict   = [[NSUserDefaults standardUserDefaults]
                     dictionaryForKey:[@(folder.id) stringValue]];
                 NSMutableDictionary *folderDict = constFolderDict ? [constFolderDict mutableCopy] : [NSMutableDictionary dictionary];
@@ -1513,6 +2404,12 @@
                     [self.guildTableView deleteRowsAtIndexPaths:indexPathsToDelete withRowAnimation:UITableViewRowAnimationAutomatic];
                 }
                 [self.guildTableView endUpdates];
+                DCGuildTableViewCell *folderCell =
+                    (DCGuildTableViewCell *)[tableView cellForRowAtIndexPath:indexPath];
+                if ([folderCell isKindOfClass:[DCGuildTableViewCell class]]) {
+                    [folderCell animateFolderBadgeWithCount:[self mentionCountForFolder:folder]
+                                                    opened:folder.opened];
+                }
                 [CATransaction commit];
                 return;
             }
@@ -1533,12 +2430,6 @@
         } else if (tableView == self.channelTableView) {
             DCChannel *channelAtRowIndex = [self displayedChannelAtIndexPath:indexPath];
             if (!channelAtRowIndex) return;
-
-            // If the channel is a category, do nothing
-            if (channelAtRowIndex.type == 4) {
-                [tableView deselectRowAtIndexPath:indexPath animated:YES];
-                return;
-            }
 
             [self markColdChatRestoreHandled];
             DCServerCommunicator.sharedInstance.selectedChannel = channelAtRowIndex;
@@ -1563,13 +2454,6 @@
 }
 
 - (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
-    if (tableView == self.channelTableView) {
-        DCChannel *channelAtRowIndex = [self displayedChannelAtIndexPath:indexPath];
-        if (channelAtRowIndex.type == 4) {
-            // Category cell height
-            return 20.0;
-        }
-    }
     return tableView.rowHeight;
 }
 
@@ -1681,6 +2565,8 @@
                   initWithStyle:UITableViewCellStyleDefault
                 reuseIdentifier:@"guild"];
         }
+        [[cell viewWithTag:DCGuildMentionRevealHighlightTag] removeFromSuperview];
+        [cell cancelFolderBadgeAnimation];
         @autoreleasepool {
             if ([objectAtRowIndex isKindOfClass:[DCGuild class]]) {
                 DCGuild *guildAtRowIndex = objectAtRowIndex;
@@ -1718,7 +2604,8 @@
                 }
                 cell.unreadMessages.hidden = !folderUnread;
                 
-                cell.mentionBadge.mentionCount = folderMentionCount;
+                cell.mentionBadge.mentionCount = folderAtRowIndex.opened
+                    ? 0 : folderMentionCount;
                 [cell setNeedsLayout];
                 
                 NSString *folderCacheKey = [self compositeCacheKeyForFolder:folderAtRowIndex];
@@ -1824,6 +2711,7 @@
                       initWithStyle:UITableViewCellStyleDefault
                     reuseIdentifier:@"private"];
             }
+            [[cell viewWithTag:DCChannelMentionRevealHighlightTag] removeFromSuperview];
 
             DCChannel *channelAtRowIndex = [self displayedChannelAtIndexPath:indexPath];
             if (!channelAtRowIndex) {
@@ -1881,31 +2769,13 @@
                                                reuseIdentifier:nil];
             }
 
-            if (channelAtRowIndex.type == 4) {
-                UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"Category Cell"];
-                if (cell == nil) {
-                    cell = [[UITableViewCell alloc]
-                          initWithStyle:UITableViewCellStyleDefault
-                        reuseIdentifier:@"Category Cell"];
-                    // make unclickable
-                    cell.selectionStyle = UITableViewCellSelectionStyleNone;
-                    cell.userInteractionEnabled = NO;
-                    cell.textLabel.enabled = NO;
-                    cell.textLabel.font = [UIFont fontWithName:@"HelveticaNeue" size:15.0];
-                    cell.detailTextLabel.enabled = NO;
-                    cell.alpha = 0.5;
-                    cell.accessoryType = UITableViewCellAccessoryNone;
-                }
-                cell.textLabel.text = channelAtRowIndex.name;
-                return cell;
-            }
-
             DCChannelViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"channel"];
             if (cell == nil) {
                 cell = [[DCChannelViewCell alloc]
                       initWithStyle:UITableViewCellStyleDefault
                     reuseIdentifier:@"channel"];
             }
+            [[cell viewWithTag:DCChannelMentionRevealHighlightTag] removeFromSuperview];
             cell.mentionBadge.mentionCount = channelAtRowIndex.mentionCount;
             cell.messageIndicator.hidden = (channelAtRowIndex.mentionCount == 0 &&
                                             !(channelAtRowIndex.unread && !channelAtRowIndex.muted));
@@ -1936,57 +2806,47 @@
 
 - (CGFloat)tableView:(UITableView *)tableView
     heightForHeaderInSection:(NSInteger)section {
-    return (section == 0) ? 0 : 28.0;
+    if (tableView != self.channelTableView) return 0.0f;
+    return [self categoryInDisplayedSection:section]
+        ? [DCChannelCategoryHeaderView headerHeight] : 0.0f;
+}
+
+- (CGFloat)tableView:(UITableView *)tableView
+    heightForFooterInSection:(NSInteger)section {
+    return 0.0f;
 }
 
 - (UIView *)tableView:(UITableView *)tableView
     viewForHeaderInSection:(NSInteger)section {
-    NSCAssert(section != 0, @"Unexpected section");
+    if (tableView != self.channelTableView) return nil;
+    DCChannel *category = [self categoryInDisplayedSection:section];
+    if (!category) return nil;
 
-    UIView *headerView = [[UIView alloc]
-        initWithFrame:CGRectMake(0, 0, tableView.frame.size.width, 28)];
-    UIImageView *backgroundImageView =
-        [[UIImageView alloc] initWithFrame:headerView.bounds];
-    backgroundImageView.contentMode = UIViewContentModeScaleToFill;
-
-    UILabel *label  = [[UILabel alloc]
-        initWithFrame:CGRectMake(10, 5, tableView.frame.size.width - 20, 18)];
-    label.textColor = [UIColor colorWithRed:158.0 / 255.0
-                                      green:159.0 / 255.0
-                                       blue:159.0 / 255.0
-                                      alpha:1.0];
-
-    backgroundImageView.image = [DCInterfaceStyle sectionHeaderSeparatorImage];
-    label.layer.shadowColor   = [UIColor blackColor].CGColor;
-    label.layer.shadowOffset  = CGSizeMake(0, 1);
-    label.backgroundColor     = [UIColor clearColor];
-    label.font                = [UIFont boldSystemFontOfSize:16];
-
-
-    [headerView addSubview:backgroundImageView];
-    if (section == 1) {
-        label.text = @"Chats";
-    }
-
-    [headerView addSubview:label];
-    return headerView;
+    DCChannelCategoryHeaderView *header = [[DCChannelCategoryHeaderView alloc]
+        initWithFrame:CGRectMake(0.0f, 0.0f, tableView.bounds.size.width,
+                                 [DCChannelCategoryHeaderView headerHeight])];
+    header.title = category.name;
+    header.categoryID = category.snowflake;
+    header.section = section;
+    header.collapsed = [self isChannelCategoryCollapsed:category];
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc]
+        initWithTarget:self action:@selector(didTapChannelCategoryHeader:)];
+    [header addGestureRecognizer:tap];
+    return header;
 }
 
-
-
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
-    return 1;
+    return tableView == self.channelTableView ? self.displayChannelSections.count : 1;
 }
 
 - (NSInteger)tableView:(UITableView *)tableView
     numberOfRowsInSection:(NSInteger)section {
     if (tableView == self.guildTableView) {
-        return self.displayGuilds.count;
+        return section == 0 ? self.displayGuilds.count : 0;
     } else if (tableView == self.channelTableView) {
-        return self.displayChannels.count;
-    } else {
-        return 0;
+        return [self channelsInDisplayedSection:section].count;
     }
+    return 0;
 }
 
 // SEGUE

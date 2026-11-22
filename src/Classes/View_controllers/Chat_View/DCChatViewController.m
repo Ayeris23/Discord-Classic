@@ -7,6 +7,7 @@
 //
 
 #import "DCInterfaceStyle.h"
+#import "DCActionSheetPresenter.h"
 #import "DCChatViewController.h"
 #import "DCConnectionPopup.h"
 #import "DCTypingIndicatorView.h"
@@ -4490,6 +4491,31 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
     DCMessage *pressed = [self.messages objectAtIndex:messageIndex];
     self.selectedMessage = pressed;
+    UIView *pressedCell = [self.chatTableView cellForRowAtIndexPath:indexPath];
+
+    NSString *actionSheetTitle = self.selectedMessage.content;
+    if (actionSheetTitle.length > 300) {
+        __block NSUInteger characterCount = 0;
+        __block NSUInteger previewEnd = 0;
+        __block BOOL truncated = NO;
+        [actionSheetTitle enumerateSubstringsInRange:NSMakeRange(0, actionSheetTitle.length)
+                                          options:NSStringEnumerationByComposedCharacterSequences
+                                       usingBlock:^(NSString *substring, NSRange substringRange,
+                                                    NSRange enclosingRange, BOOL *stop) {
+            characterCount++;
+            if (characterCount == 299) previewEnd = NSMaxRange(substringRange);
+            if (characterCount > 300) {
+                truncated = YES;
+                *stop = YES;
+            }
+        }];
+        if (truncated) {
+            actionSheetTitle = [[actionSheetTitle substringToIndex:previewEnd]
+                                stringByAppendingString:@"…"];
+        }
+    }
+    actionSheetTitle = [[actionSheetTitle stringByReplacingOccurrencesOfString:@"\r" withString:@" "]
+                         stringByReplacingOccurrencesOfString:@"\n" withString:@" "];
 
     NSString *replyButton = self.replyingToMessage
             && [self.replyingToMessage.snowflake isEqualToString:self.selectedMessage.snowflake]
@@ -4503,7 +4529,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
             ? @"Cancel Edit"
             : @"Edit";
         UIActionSheet *messageActionSheet =
-            [[UIActionSheet alloc] initWithTitle:self.selectedMessage.content
+            [[UIActionSheet alloc] initWithTitle:actionSheetTitle
                                         delegate:self
                                cancelButtonTitle:@"Cancel"
                           destructiveButtonTitle:@"Delete"
@@ -4514,10 +4540,17 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                                                  nil];
         messageActionSheet.tag = 1;
         messageActionSheet.delegate = self;
-        [messageActionSheet showFromRect:self.toolbar.frame inView:self.view animated:YES];
+        if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
+            [DCActionSheetPresenter showActionSheet:messageActionSheet
+                                          fromView:pressedCell
+                                            inView:self.view
+                                          animated:YES];
+        } else {
+            [messageActionSheet showFromRect:self.toolbar.frame inView:self.view animated:YES];
+        }
     } else {
         UIActionSheet *messageActionSheet = [[UIActionSheet alloc]
-                     initWithTitle:self.selectedMessage.content
+                     initWithTitle:actionSheetTitle
                           delegate:self
                  cancelButtonTitle:nil
             destructiveButtonTitle:nil
@@ -4535,7 +4568,14 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
         messageActionSheet.cancelButtonIndex = [messageActionSheet addButtonWithTitle:@"Cancel"];
         messageActionSheet.tag = 3;
         messageActionSheet.delegate = self;
-        [messageActionSheet showFromRect:self.toolbar.frame inView:self.view animated:YES];
+        if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
+            [DCActionSheetPresenter showActionSheet:messageActionSheet
+                                          fromView:pressedCell
+                                            inView:self.view
+                                          animated:YES];
+        } else {
+            [messageActionSheet showFromRect:self.toolbar.frame inView:self.view animated:YES];
+        }
     }
 }
 
@@ -6248,7 +6288,8 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
                         [[DCMarkdownParser sharedParser]
                             attributedStringFromMarkdown:referenceText
                                              maxFontSize:10.0f
-                                                   color:referenceColor];
+                                                   color:referenceColor
+                                                 inGuild:DCServerCommunicator.sharedInstance.selectedChannel.parentGuild];
                     if (referencedContent && messageAtRowIndex.snowflake.length) {
                         DCChatReferencePresentation *presentation =
                             [[DCChatReferencePresentation alloc] init];
@@ -6385,7 +6426,8 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
             } else {
                 if (!messageAtRowIndex.attributedContent && messageAtRowIndex.content.length > 0) {
                     messageAtRowIndex.attributedContent = [[DCMarkdownParser sharedParser]
-                        attributedStringFromMarkdown:messageAtRowIndex.content];
+                        attributedStringFromMarkdown:messageAtRowIndex.content
+                                              inGuild:DCServerCommunicator.sharedInstance.selectedChannel.parentGuild];
                 }
 
                 cell.contentTextView.hidden = NO;
@@ -8789,9 +8831,10 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
     if ([UIDevice currentDevice].userInterfaceIdiom == UIUserInterfaceIdiomPad) {
         UIView *sourceView = [sender isKindOfClass:[UIView class]] ? sender : self.photoButton;
-        [imageSourceActionSheet showFromRect:sourceView.bounds
-                                      inView:sourceView
-                                    animated:YES];
+        [DCActionSheetPresenter showActionSheet:imageSourceActionSheet
+                                      fromView:sourceView
+                                        inView:self.view
+                                      animated:YES];
     } else {
         [imageSourceActionSheet showFromRect:self.toolbar.frame
                                       inView:self.view

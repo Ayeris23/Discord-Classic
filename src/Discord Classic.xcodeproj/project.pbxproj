@@ -7,7 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        B21AC1000000000000000003 /* DCActionSheetPresenter.m in Sources */ = {isa = PBXBuildFile; fileRef = B21AC1000000000000000001 /* DCActionSheetPresenter.m */; };
 		B21EA0010000000000000003 /* DCMemberListSectionHeaderView.m in Sources */ = {isa = PBXBuildFile; fileRef = B21EA0010000000000000002 /* DCMemberListSectionHeaderView.m */; };
+		B21EC1000000000000000003 /* DCChannelCategoryHeaderView.m in Sources */ = {isa = PBXBuildFile; fileRef = B21EC1000000000000000001 /* DCChannelCategoryHeaderView.m */; };
+		B21ED1000000000000000003 /* DCUnreadEdgeIndicatorView.m in Sources */ = {isa = PBXBuildFile; fileRef = B21ED1000000000000000001 /* DCUnreadEdgeIndicatorView.m */; };
 		09C6B925204A0F54007EAC26 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 09C6B924204A0F54007EAC26 /* UIKit.framework */; };
 		09C6B927204A0F54007EAC26 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 09C6B926204A0F54007EAC26 /* Foundation.framework */; };
 		09C6B929204A0F54007EAC26 /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 09C6B928204A0F54007EAC26 /* CoreGraphics.framework */; };
@@ -572,8 +575,14 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+        B21AC1000000000000000001 /* DCActionSheetPresenter.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = DCActionSheetPresenter.m; sourceTree = "<group>"; };
+        B21AC1000000000000000002 /* DCActionSheetPresenter.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = DCActionSheetPresenter.h; sourceTree = "<group>"; };
 		B21EA0010000000000000001 /* DCMemberListSectionHeaderView.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = DCMemberListSectionHeaderView.h; sourceTree = "<group>"; };
 		B21EA0010000000000000002 /* DCMemberListSectionHeaderView.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = DCMemberListSectionHeaderView.m; sourceTree = "<group>"; };
+		B21EC1000000000000000002 /* DCChannelCategoryHeaderView.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = DCChannelCategoryHeaderView.h; sourceTree = "<group>"; };
+		B21EC1000000000000000001 /* DCChannelCategoryHeaderView.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = DCChannelCategoryHeaderView.m; sourceTree = "<group>"; };
+		B21ED1000000000000000001 /* DCUnreadEdgeIndicatorView.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = DCUnreadEdgeIndicatorView.m; sourceTree = "<group>"; };
+		B21ED1000000000000000002 /* DCUnreadEdgeIndicatorView.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = DCUnreadEdgeIndicatorView.h; sourceTree = "<group>"; };
 		09C6B924204A0F54007EAC26 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
 		09C6B926204A0F54007EAC26 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = System/Library/Frameworks/Foundation.framework; sourceTree = SDKROOT; };
 		09C6B928204A0F54007EAC26 /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
@@ -2482,6 +2491,10 @@
 				2F1123462F4EB0AD00159D64 /* DCGuildListViewController.m */,
 				2F1123472F4EB0AD00159D64 /* DCMenuViewController.h */,
 				2F1123482F4EB0AD00159D64 /* DCMenuViewController.m */,
+				B21EC1000000000000000002 /* DCChannelCategoryHeaderView.h */,
+				B21EC1000000000000000001 /* DCChannelCategoryHeaderView.m */,
+				B21ED1000000000000000002 /* DCUnreadEdgeIndicatorView.h */,
+				B21ED1000000000000000001 /* DCUnreadEdgeIndicatorView.m */,
 			);
 			path = Guild_channel_and_menu;
 			sourceTree = "<group>";
@@ -2921,6 +2934,8 @@
 		9D43EA28E6394828AFD75534 /* Interface */ = {
 			isa = PBXGroup;
 			children = (
+				B21AC1000000000000000002 /* DCActionSheetPresenter.h */,
+				B21AC1000000000000000001 /* DCActionSheetPresenter.m */,
 				7D2DF2048B574519BF851AA9 /* DCInterfaceAssetCatalog.h */,
 				422F4AE731E2409BAE181FE0 /* DCInterfaceAssetCatalog.m */,
 				9F3DA05C620C4AAD96BA0FB8 /* DCInterfaceStyle.h */,
@@ -3240,6 +3255,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B21AC1000000000000000003 /* DCActionSheetPresenter.m in Sources */,
 				F22BFBD64E9A4137B1343EEC /* DCInterfaceAssetCatalog.m in Sources */,
 				9FDE61CDBE304A9B989107DC /* DCInterfaceStyle.m in Sources */,
 				2F11228E2F4EA03000159D64 /* enc_mips32.c in Sources */,
@@ -3531,6 +3547,8 @@
 				2F11227A2F4EA03000159D64 /* alpha_processing.c in Sources */,
 				2F7424112F78A50100FAF3D9 /* MentionBadge.m in Sources */,
 				2F11237B2F4EB0AD00159D64 /* DCMenuViewController.m in Sources */,
+				B21EC1000000000000000003 /* DCChannelCategoryHeaderView.m in Sources */,
+				B21ED1000000000000000003 /* DCUnreadEdgeIndicatorView.m in Sources */,
 				2FE82DE92F6697E100375F28 /* DCGifInfo.m in Sources */,
 				2FFA3A692F98879E00E67A40 /* UIWebView+DTFoundation.m in Sources */,
 				2F1122992F4EA03000159D64 /* lossless.c in Sources */,

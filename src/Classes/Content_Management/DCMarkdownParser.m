@@ -12,6 +12,7 @@
 #import "DCMarkdownParser.h"
 #import "DTCoreTextConstants.h"
 #import "DCServerCommunicator.h"
+#import "DCUser.h"
 #import "DCEmoji.h"
 #import "DTImageTextAttachment.h"
 #import "DCContentManager.h"
@@ -431,6 +432,11 @@ static DCMarkdownFeatures DCScanMarkdownFeatures(NSString *text) {
 #pragma mark - Main Entry Point
 
 - (NSAttributedString *)attributedStringFromMarkdown:(NSString *)markdown {
+    return [self attributedStringFromMarkdown:markdown inGuild:nil];
+}
+
+- (NSAttributedString *)attributedStringFromMarkdown:(NSString *)markdown
+                                              inGuild:(DCGuild *)guild {
     if (!markdown || markdown.length == 0) {
         return [[NSAttributedString alloc] initWithString:@""];
     }
@@ -462,7 +468,7 @@ static DCMarkdownFeatures DCScanMarkdownFeatures(NSString *text) {
         [self applyEscapedMentions:result protectedRanges:protectedRanges];
     }
     if (features & DCMarkdownFeatureMention) {
-        [self applyMentions:result protectedRanges:protectedRanges];
+        [self applyMentions:result inGuild:guild protectedRanges:protectedRanges];
     }
     if (features & DCMarkdownFeatureCustomEmoji) {
         [self applyCustomEmojis:result protectedRanges:protectedRanges];
@@ -495,6 +501,16 @@ static DCMarkdownFeatures DCScanMarkdownFeatures(NSString *text) {
 - (NSAttributedString *)attributedStringFromMarkdown:(NSString *)markdown
                                          maxFontSize:(CGFloat)maxFontSize
                                                color:(UIColor *)color {
+    return [self attributedStringFromMarkdown:markdown
+                                  maxFontSize:maxFontSize
+                                        color:color
+                                      inGuild:nil];
+}
+
+- (NSAttributedString *)attributedStringFromMarkdown:(NSString *)markdown
+                                         maxFontSize:(CGFloat)maxFontSize
+                                               color:(UIColor *)color
+                                             inGuild:(DCGuild *)guild {
     // Cache compact reply parsers by rendering style.
     static NSMutableDictionary *compactParserCache = nil;
     static dispatch_once_t compactParserCacheOnce;
@@ -554,7 +570,7 @@ static DCMarkdownFeatures DCScanMarkdownFeatures(NSString *text) {
 
     NSAttributedString *parsed = nil;
     @synchronized (p) {
-        parsed = [p attributedStringFromMarkdown:markdown];
+        parsed = [p attributedStringFromMarkdown:markdown inGuild:guild];
     }
     NSMutableAttributedString *result = [parsed mutableCopy];
 
@@ -1324,21 +1340,22 @@ static DCMarkdownFeatures DCScanMarkdownFeatures(NSString *text) {
 }
 
 - (void)applyMentions:(NSMutableAttributedString *)string
+                inGuild:(DCGuild *)guild
        protectedRanges:(NSMutableArray *)protectedRanges {
     NSString *plain = string.string;
     if ([plain rangeOfString:@"<"].location == NSNotFound &&
         [plain rangeOfString:@"@"].location == NSNotFound) return;
     [self applyMentionPattern:@"<@!?([0-9]+)>"
                     urlPrefix:@"discord-user://"
-                       string:string protectedRanges:protectedRanges];
+                       string:string inGuild:guild protectedRanges:protectedRanges];
 
     [self applyMentionPattern:@"<#([0-9]+)>"
                     urlPrefix:@"discord-channel://"
-                       string:string protectedRanges:protectedRanges];
+                       string:string inGuild:guild protectedRanges:protectedRanges];
 
     [self applyMentionPattern:@"<@&([0-9]+)>"
                     urlPrefix:@"discord-role://"
-                       string:string protectedRanges:protectedRanges];
+                       string:string inGuild:guild protectedRanges:protectedRanges];
 
     [self applyLiteralMention:@"@everyone" string:string protectedRanges:protectedRanges];
     [self applyLiteralMention:@"@here"     string:string protectedRanges:protectedRanges];
@@ -1349,6 +1366,7 @@ static DCMarkdownFeatures DCScanMarkdownFeatures(NSString *text) {
 - (void)applyMentionPattern:(NSString *)pattern
                   urlPrefix:(NSString *)urlPrefix
                      string:(NSMutableAttributedString *)string
+                    inGuild:(DCGuild *)guild
              protectedRanges:(NSMutableArray *)protectedRanges {
     NSRegularExpression *regex = [self cachedRegexWithPattern:pattern options:0];
 
@@ -1367,13 +1385,14 @@ static DCMarkdownFeatures DCScanMarkdownFeatures(NSString *text) {
         NSString *displayText = nil;
         if ([urlPrefix isEqualToString:@"discord-user://"]) {
             DCUser *user = [DCServerCommunicator.sharedInstance userForSnowflake:entityID];
-            displayText = user ? [NSString stringWithFormat:@"@%@", user.username] : @"@unknown";
+            NSString *name = [user displayNameInGuild:guild];
+            displayText = name.length ? [@"@" stringByAppendingString:name] : @"@unknown";
         } else if ([urlPrefix isEqualToString:@"discord-channel://"]) {
             DCChannel *channel = [DCServerCommunicator.sharedInstance.channels objectForKey:entityID];
             BOOL canResolveChannel = channel &&
                 (!channel.parentGuild.snowflake.length || channel.readable);
             if (canResolveChannel) {
-                DCGuild *contextGuild = DCServerCommunicator.sharedInstance.selectedChannel.parentGuild;
+                DCGuild *contextGuild = guild ?: DCServerCommunicator.sharedInstance.selectedChannel.parentGuild;
                 if (channel.parentGuild && channel.parentGuild != contextGuild) {
                     displayText = [NSString stringWithFormat:@"%@ > #%@",
                         channel.parentGuild.name, channel.name];

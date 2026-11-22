@@ -13,4 +13,6 @@
 @property (weak, nonatomic) IBOutlet UIImageView *guildAvatar;
 @property (weak, nonatomic) IBOutlet UIImageView *unreadMessages;
 @property (strong, nonatomic) MentionBadge *mentionBadge;
+- (void)cancelFolderBadgeAnimation;
+- (void)animateFolderBadgeWithCount:(NSInteger)count opened:(BOOL)opened;
 @end

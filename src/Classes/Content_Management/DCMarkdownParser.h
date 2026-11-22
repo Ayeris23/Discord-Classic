@@ -10,6 +10,8 @@
 #import <CoreText/CoreText.h>
 #import <UIKit/UIKit.h>
 
+@class DCGuild;
+
 // Custom attribute key for block-level element type
 // Value is an NSNumber wrapping a DCMarkdownBlockType enum value
 extern NSString *const DCMarkdownBlockTypeAttributeName;
@@ -37,6 +39,8 @@ typedef NS_ENUM(NSInteger, DCMarkdownBackgroundStyle) {
 
 // Primary parse method — returns CoreText-compatible attributed string
 - (NSAttributedString *)attributedStringFromMarkdown:(NSString *)markdown;
+- (NSAttributedString *)attributedStringFromMarkdown:(NSString *)markdown
+                                              inGuild:(DCGuild *)guild;
 
 // Precompile reusable regex/data-detector machinery on a low-priority queue.
 - (void)prewarmReusableMatchers;
@@ -47,6 +51,10 @@ typedef NS_ENUM(NSInteger, DCMarkdownBackgroundStyle) {
 - (NSAttributedString *)attributedStringFromMarkdown:(NSString *)markdown
                                          maxFontSize:(CGFloat)maxFontSize
                                                color:(UIColor *)color;
+- (NSAttributedString *)attributedStringFromMarkdown:(NSString *)markdown
+                                         maxFontSize:(CGFloat)maxFontSize
+                                               color:(UIColor *)color
+                                             inGuild:(DCGuild *)guild;
 
 
 // Controls the CTParagraphStyle minimum line height used in baseAttributes.
