@@ -2207,8 +2207,10 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
 
     if (!self.channels)
         self.channels = [NSMutableDictionary dictionary];
-    if (!privateGuild.channels)
-        privateGuild.channels = [NSMutableArray array];
+    @synchronized (privateGuild) {
+        if (!privateGuild.channels)
+            privateGuild.channels = [NSMutableArray array];
+    }
 
     NSMutableArray *orderedChannels = [NSMutableArray array];
     NSMutableSet *incomingIDs = [NSMutableSet set];
@@ -2884,9 +2886,10 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
     if (!self.channels) self.channels = [NSMutableDictionary dictionary];
 
     // Build one per-guild channel index up front for O(1) channel resolution.
+    NSArray *listedChannels = [guild channelsSnapshot];
     NSMutableDictionary *listedByID =
-        [NSMutableDictionary dictionaryWithCapacity:guild.channels.count];
-    for (DCChannel *listedChannel in [guild channelsSnapshot]) {
+        [NSMutableDictionary dictionaryWithCapacity:listedChannels.count];
+    for (DCChannel *listedChannel in listedChannels) {
         if (listedChannel.snowflake.length)
             [listedByID setObject:listedChannel forKey:listedChannel.snowflake];
     }
@@ -2997,8 +3000,12 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
 
     CFAbsoluteTime sortStarted = CFAbsoluteTimeGetCurrent();
     BOOL appliedPreparedOrder = NO;
+    NSUInteger visibleChannelCount;
+    @synchronized (guild) {
+        visibleChannelCount = guild.channels.count;
+    }
     if (forReady && [preparedChannelOrder isKindOfClass:[NSArray class]] &&
-        preparedChannelOrder.count == guild.channels.count) {
+        preparedChannelOrder.count == visibleChannelCount) {
         NSMutableArray *ordered =
             [NSMutableArray arrayWithCapacity:preparedChannelOrder.count];
         for (NSString *channelID in preparedChannelOrder) {
@@ -3007,7 +3014,7 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
                 (orderedChannel.type == DCChannelTypeGuildCategory || orderedChannel.readable))
                 [ordered addObject:orderedChannel];
         }
-        if (ordered.count == guild.channels.count) {
+        if (ordered.count == visibleChannelCount) {
             @synchronized (guild) {
                 [guild.channels setArray:ordered];
             }
@@ -4610,22 +4617,39 @@ typedef struct {
         });
         return;
     } else if ([t isEqualToString:TYPING_START]) {
-        if (!self.selectedChannel ||
-            ![d[@"channel_id"] isEqualToString:self.selectedChannel.snowflake]) {
-            DBGLOG(@"Ignoring typing start event for channel %@, not currently selected channel", d[@"channel_id"]);
+        NSString *channelID = [d objectForKey:@"channel_id"];
+        NSString *userID = [d objectForKey:@"user_id"];
+        if (![channelID isKindOfClass:[NSString class]] ||
+            ![userID isKindOfClass:[NSString class]] ||
+            ![channelID isEqualToString:self.selectedChannel.snowflake]) {
             return;
         }
-        DBGLOG(@"Got typing start event for channel %@", d[@"channel_id"]);
-        if (![self userForSnowflake:d[@"user_id"]]) {
-            NSDictionary *memberUser = [d valueForKeyPath:@"member.user"];
+
+        DCUser *user = [self userForSnowflake:userID];
+        NSDictionary *member = [d objectForKey:@"member"];
+        if (!user && [member isKindOfClass:[NSDictionary class]]) {
+            NSDictionary *memberUser = [member objectForKey:@"user"];
             if ([memberUser isKindOfClass:[NSDictionary class]]) {
                 [DCTools convertJsonUser:memberUser cache:YES];
+                user = [self userForSnowflake:userID];
             }
         }
+        NSString *guildID = [d objectForKey:@"guild_id"];
+        if (![guildID isKindOfClass:[NSString class]]) {
+            DCChannel *channel = [self.channels objectForKey:channelID];
+            guildID = channel.parentGuild.snowflake;
+        }
+        if (user && [member isKindOfClass:[NSDictionary class]] &&
+            [guildID isKindOfClass:[NSString class]] && guildID.length) {
+            [self applyGuildProfileFromMember:member toUser:user
+                                      guildID:guildID authoritative:NO];
+        }
+
         dispatch_async(dispatch_get_main_queue(), ^{
             [NSNotificationCenter.defaultCenter
                 postNotificationName:@"TYPING START"
-                              object:d[@"user_id"]];
+                              object:userID
+                            userInfo:@{@"channelId": channelID}];
         });
     } else if ([t isEqualToString:GUILD_CREATE]) {
         [self handleGuildCreateWithData:d];

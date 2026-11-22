@@ -162,6 +162,14 @@ typedef enum {
 - (void)setAttributedTitle:(NSAttributedString *)attributedTitle {
     _attributedTitle = attributedTitle;
     textLabel.text = attributedTitle.string;
+    UIFont *titleFont = nil;
+    if (attributedTitle.length > 0) {
+        id fontAttribute = [attributedTitle attribute:@"NSFont" atIndex:0 effectiveRange:NULL];
+        if ([fontAttribute isKindOfClass:[UIFont class]]) {
+            titleFont = fontAttribute;
+        }
+    }
+    textLabel.font = titleFont ?: [UIFont systemFontOfSize:[UIFont smallSystemFontSize]];
 }
 
 - (void)beginRefreshing {

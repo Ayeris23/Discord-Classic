@@ -34,7 +34,7 @@
     return [NSString
         stringWithFormat:
             @"[Guild] Snowflake: %@, Read: %d, Name: %@, Channels: %@",
-            self.snowflake, self.unread, self.name, self.channels];
+            self.snowflake, self.unread, self.name, [self channelsSnapshot]];
 }
 
 - (void)checkIfRead {
@@ -108,7 +108,14 @@
         self.memberCount = [aDecoder decodeIntegerForKey:@"memberCount"];
         self.muted       = [aDecoder decodeBoolForKey:@"muted"];
         CFAbsoluteTime stepStart = DCCacheGuildProfileBegin();
-        self.channels    = [aDecoder decodeObjectForKey:@"channels"];
+        id cachedChannels = [aDecoder decodeObjectForKey:@"channels"];
+        if ([cachedChannels isKindOfClass:[NSMutableArray class]]) {
+            self.channels = cachedChannels;
+        } else if ([cachedChannels isKindOfClass:[NSArray class]]) {
+            self.channels = [cachedChannels mutableCopy];
+        } else {
+            self.channels = [NSMutableArray array];
+        }
         DCCacheGuildProfileStep(DCCacheGuildDecodeStepChannels, stepStart);
 
         stepStart = DCCacheGuildProfileBegin();

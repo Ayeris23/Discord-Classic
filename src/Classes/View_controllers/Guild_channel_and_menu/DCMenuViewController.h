@@ -35,7 +35,6 @@
 @property (strong, nonatomic) DCGuild *selectedGuild;
 @property (strong, nonatomic) DCChannel *selectedChannel;
 @property (strong, nonatomic) UIRefreshControl *refreshControl;
-@property (strong, nonatomic) UIRefreshControl *reloadControl;
 @property (weak, nonatomic) IBOutlet UIToolbar *toolbar;
 @property (weak, nonatomic) IBOutlet UILabel *guildLabel;
 @property (weak, nonatomic) IBOutlet UIImageView *guildBanner;

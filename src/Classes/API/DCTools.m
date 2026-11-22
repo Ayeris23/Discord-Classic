@@ -2618,20 +2618,18 @@ static void DCFillMissingUserFieldsFromJSON(DCUser *user, NSDictionary *jsonUser
 
     // Add categories to the guild
     for (DCChannel *category in categories) {
-        int i = 0;
-        for (DCChannel *channel in newGuild.channels) {
-            if (channel.type == DCChannelTypeGuildCategory
-                || channel.parentID == nil
-                || (NSNull *)channel.parentID == [NSNull null]) {
-                // If the channel is a category or has no parent, skip it
-                i++;
-                continue;
-            }
+        NSUInteger insertionIndex = NSNotFound;
+        for (NSUInteger i = 0; i < newGuild.channels.count; i++) {
+            DCChannel *channel = [newGuild.channels objectAtIndex:i];
+            if (channel.type == DCChannelTypeGuildCategory ||
+                ![channel.parentID isKindOfClass:[NSString class]]) continue;
             if ([channel.parentID isEqualToString:category.snowflake]) {
-                [newGuild.channels insertObject:category atIndex:i];
+                insertionIndex = i;
                 break;
             }
-            i++;
+        }
+        if (insertionIndex != NSNotFound) {
+            [newGuild.channels insertObject:category atIndex:insertionIndex];
         }
     }
 
@@ -2768,7 +2766,7 @@ static void DCFillMissingUserFieldsFromJSON(DCUser *user, NSDictionary *jsonUser
 
         while (embeddedMention) {
             NSString *channelName = [messageString substringWithRange:[embeddedMention rangeAtIndex:1]];
-            DCChannel *channel    = [guild.channels
+            DCChannel *channel    = [[guild channelsSnapshot]
                                      filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(DCChannel *obj, NSDictionary *bindings) {
                                          return [obj.name isEqualToString:channelName];
                                      }]]

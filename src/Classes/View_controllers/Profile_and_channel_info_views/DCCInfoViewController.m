@@ -8,6 +8,7 @@
 
 #import "DCInterfaceStyle.h"
 #import "DCCInfoViewController.h"
+#import "DCMemberListSectionHeaderView.h"
 #include "DCUser.h"
 #include "DCGuild.h"
 #include "DCChannel.h"
@@ -644,7 +645,7 @@ static const NSUInteger DCMemberListMaximumRefreshRetries = 2;
 
 - (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section {
     if (!self.memberListGuild || self.memberListGroups.count == 0) return 0.01f;
-    return 22.0f;
+    return [DCMemberListSectionHeaderView headerHeight];
 }
 
 - (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section {
@@ -653,19 +654,11 @@ static const NSUInteger DCMemberListMaximumRefreshRetries = 2;
         return nil;
     }
 
-    UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, tableView.bounds.size.width, 22.0f)];
-    header.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    header.backgroundColor = [UIColor colorWithWhite:0.13f alpha:0.96f];
-
-    UILabel *label = [[UILabel alloc] initWithFrame:CGRectMake(10, 0, tableView.bounds.size.width - 20, 22.0f)];
-    label.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    label.backgroundColor = [UIColor clearColor];
-    label.textColor = [UIColor colorWithWhite:1.0f alpha:0.55f];
-    label.font = [UIFont fontWithName:@"HelveticaNeue-Bold" size:12.0f];
-    label.shadowColor = [UIColor blackColor];
-    label.shadowOffset = CGSizeMake(0, 1);
-    label.text = [self titleForMemberListGroup:[self.memberListGroups objectAtIndex:section]];
-    [header addSubview:label];
+    DCMemberListSectionHeaderView *header =
+        [[DCMemberListSectionHeaderView alloc] initWithFrame:
+         CGRectMake(0.0f, 0.0f, tableView.bounds.size.width,
+                    [DCMemberListSectionHeaderView headerHeight])];
+    header.title = [self titleForMemberListGroup:[self.memberListGroups objectAtIndex:section]];
     return header;
 }
 

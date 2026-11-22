@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		B21EA0010000000000000003 /* DCMemberListSectionHeaderView.m in Sources */ = {isa = PBXBuildFile; fileRef = B21EA0010000000000000002 /* DCMemberListSectionHeaderView.m */; };
 		09C6B925204A0F54007EAC26 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 09C6B924204A0F54007EAC26 /* UIKit.framework */; };
 		09C6B927204A0F54007EAC26 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 09C6B926204A0F54007EAC26 /* Foundation.framework */; };
 		09C6B929204A0F54007EAC26 /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 09C6B928204A0F54007EAC26 /* CoreGraphics.framework */; };
@@ -369,6 +370,7 @@
 		2F1123752F4EB0AD00159D64 /* DCOwnAccountInfoManagementController.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F1123392F4EB0AD00159D64 /* DCOwnAccountInfoManagementController.m */; };
 		2F1123762F4EB0AD00159D64 /* DCViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F11233C2F4EB0AD00159D64 /* DCViewController.m */; };
 		2F1123772F4EB0AD00159D64 /* DCChatViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F11233F2F4EB0AD00159D64 /* DCChatViewController.m */; };
+		A5D1C1000000000000000001 /* DCTypingIndicatorView.m in Sources */ = {isa = PBXBuildFile; fileRef = A5D1C1000000000000000003 /* DCTypingIndicatorView.m */; };
 		2F1123782F4EB0AD00159D64 /* UILazyImageView.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F1123412F4EB0AD00159D64 /* UILazyImageView.m */; };
 		2F1123792F4EB0AD00159D64 /* DCChannelListViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F1123442F4EB0AD00159D64 /* DCChannelListViewController.m */; };
 		2F11237A2F4EB0AD00159D64 /* DCGuildListViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F1123462F4EB0AD00159D64 /* DCGuildListViewController.m */; };
@@ -570,6 +572,8 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		B21EA0010000000000000001 /* DCMemberListSectionHeaderView.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = DCMemberListSectionHeaderView.h; sourceTree = "<group>"; };
+		B21EA0010000000000000002 /* DCMemberListSectionHeaderView.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = DCMemberListSectionHeaderView.m; sourceTree = "<group>"; };
 		09C6B924204A0F54007EAC26 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
 		09C6B926204A0F54007EAC26 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = System/Library/Frameworks/Foundation.framework; sourceTree = SDKROOT; };
 		09C6B928204A0F54007EAC26 /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
@@ -1058,6 +1062,8 @@
 		2F11233C2F4EB0AD00159D64 /* DCViewController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCViewController.m; sourceTree = "<group>"; };
 		2F11233E2F4EB0AD00159D64 /* DCChatViewController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCChatViewController.h; sourceTree = "<group>"; };
 		2F11233F2F4EB0AD00159D64 /* DCChatViewController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; lineEnding = 0; path = DCChatViewController.m; sourceTree = "<group>"; };
+		A5D1C1000000000000000002 /* DCTypingIndicatorView.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = DCTypingIndicatorView.h; sourceTree = "<group>"; };
+		A5D1C1000000000000000003 /* DCTypingIndicatorView.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = DCTypingIndicatorView.m; sourceTree = "<group>"; };
 		2F1123402F4EB0AD00159D64 /* UILazyImageView.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = UILazyImageView.h; sourceTree = "<group>"; };
 		2F1123412F4EB0AD00159D64 /* UILazyImageView.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = UILazyImageView.m; sourceTree = "<group>"; };
 		2F1123432F4EB0AD00159D64 /* DCChannelListViewController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCChannelListViewController.h; sourceTree = "<group>"; };
@@ -2457,6 +2463,8 @@
 			children = (
 				2F11233E2F4EB0AD00159D64 /* DCChatViewController.h */,
 				2F11233F2F4EB0AD00159D64 /* DCChatViewController.m */,
+				A5D1C1000000000000000002 /* DCTypingIndicatorView.h */,
+				A5D1C1000000000000000003 /* DCTypingIndicatorView.m */,
 				2F1123402F4EB0AD00159D64 /* UILazyImageView.h */,
 				2F1123412F4EB0AD00159D64 /* UILazyImageView.m */,
 			);
@@ -2505,6 +2513,8 @@
 			children = (
 				2F1123502F4EB0AD00159D64 /* DCCInfoViewController.h */,
 				2F1123512F4EB0AD00159D64 /* DCCInfoViewController.m */,
+				B21EA0010000000000000001 /* DCMemberListSectionHeaderView.h */,
+				B21EA0010000000000000002 /* DCMemberListSectionHeaderView.m */,
 				2F1123522F4EB0AD00159D64 /* DCContactViewController.h */,
 				2F1123532F4EB0AD00159D64 /* DCContactViewController.m */,
 				2F1123542F4EB0AD00159D64 /* Mutual */,
@@ -3409,6 +3419,7 @@
 				2F1122732F4EA03000159D64 /* vp8l_dec.c in Sources */,
 				2F11236F2F4EB0AD00159D64 /* DCPrivateChannelTableCell.m in Sources */,
 				2F1123772F4EB0AD00159D64 /* DCChatViewController.m in Sources */,
+				A5D1C1000000000000000001 /* DCTypingIndicatorView.m in Sources */,
 				2FFA3A572F98879E00E67A40 /* DTActivityTitleView.m in Sources */,
 				2F1123002F4EA03000159D64 /* WSWebSocket.m in Sources */,
 				2FFA39612F987C2C00E67A40 /* DTCoreTextGlyphRun.m in Sources */,
@@ -3516,6 +3527,7 @@
 				2F1122A52F4EA03000159D64 /* lossless_sse41.c in Sources */,
 				2F1122942F4EA03000159D64 /* filters.c in Sources */,
 				2F11237E2F4EB0AE00159D64 /* DCCInfoViewController.m in Sources */,
+				B21EA0010000000000000003 /* DCMemberListSectionHeaderView.m in Sources */,
 				2F11227A2F4EA03000159D64 /* alpha_processing.c in Sources */,
 				2F7424112F78A50100FAF3D9 /* MentionBadge.m in Sources */,
 				2F11237B2F4EB0AD00159D64 /* DCMenuViewController.m in Sources */,

@@ -16,6 +16,7 @@
 
 @interface DCChannelListViewController ()
 @property int selectedChannelIndex;
+@property (strong, nonatomic) NSArray *displayChannels;
 @property DCChannel *selectedChannel;
 @property (strong, nonatomic) NSMutableSet *pendingAckChannelIDs;
 @property (assign, nonatomic) BOOL pendingFullChannelReload;
@@ -42,20 +43,32 @@
 }
 
 
+- (void)reloadDisplayedChannels {
+    self.displayChannels = self.selectedGuild
+        ? [self.selectedGuild channelsSnapshot] : [NSArray array];
+    [self.tableView reloadData];
+}
+
+- (DCChannel *)displayedChannelAtIndexPath:(NSIndexPath *)indexPath {
+    if (!indexPath || indexPath.section != 0 || indexPath.row < 0 ||
+        (NSUInteger)indexPath.row >= self.displayChannels.count) return nil;
+    return [self.displayChannels objectAtIndex:(NSUInteger)indexPath.row];
+}
+
+- (BOOL)displayedChannelsMatch:(NSArray *)channels {
+    if (self.displayChannels.count != channels.count) return NO;
+    for (NSUInteger i = 0; i < channels.count; i++) {
+        if ([self.displayChannels objectAtIndex:i] != [channels objectAtIndex:i]) return NO;
+    }
+    return YES;
+}
+
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
     [self.navigationItem setTitle:self.selectedGuild.name];
-    [self.tableView reloadData];
+    [self reloadDisplayedChannels];
     [DCServerCommunicator.sharedInstance setSelectedChannel:nil];
 
-    // nono we wouldnt want rebels getting BASIC FEATURES!111111 :devious:
-    /*if ([self.navigationItem.title isEqualToString:@"Direct Messages"]) { n
-        // Sort the DMs list by most recent...
-        NSSortDescriptor *sortDescriptor = [NSSortDescriptor
-    sortDescriptorWithKey:@"lastMessageId" ascending:NO
-    selector:@selector(localizedStandardCompare:)]; [self.selectedGuild.channels
-    sortUsingDescriptors:@[sortDescriptor]]; [self.tableView reloadData];
-    }*/
 }
 
 
@@ -93,16 +106,17 @@
     [self.pendingAckChannelIDs removeAllObjects];
     if (!self.isViewLoaded || !self.view.window) return;
 
-    if (fullReload || [self.tableView numberOfRowsInSection:0] !=
-        (NSInteger)self.selectedGuild.channels.count) {
-        [self.tableView reloadData];
+    if (fullReload || ![self displayedChannelsMatch:
+                        [self.selectedGuild channelsSnapshot]] ||
+        [self.tableView numberOfRowsInSection:0] != (NSInteger)self.displayChannels.count) {
+        [self reloadDisplayedChannels];
         return;
     }
 
     NSSet *visible = [NSSet setWithArray:[self.tableView indexPathsForVisibleRows] ?: @[]];
     NSMutableArray *rows = [NSMutableArray array];
     NSUInteger index = 0;
-    for (DCChannel *channel in self.selectedGuild.channels) {
+    for (DCChannel *channel in self.displayChannels) {
         NSIndexPath *path = [NSIndexPath indexPathForRow:index inSection:0];
         if (channel.snowflake.length && [channelIDs containsObject:channel.snowflake] &&
             [visible containsObject:path]) {
@@ -119,8 +133,11 @@
 - (UITableViewCell *)tableView:(UITableView *)tableView
          cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     // Show blue indicator if channel contains any unread messages
-    DCChannel *channelAtRowIndex =
-        [self.selectedGuild.channels objectAtIndex:indexPath.row];
+    DCChannel *channelAtRowIndex = [self displayedChannelAtIndexPath:indexPath];
+    if (!channelAtRowIndex) {
+        return [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault
+                                       reuseIdentifier:nil];
+    }
 
     if (channelAtRowIndex.type == 4) {
         UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"Category Cell"];
@@ -166,10 +183,11 @@
 
 - (void)tableView:(UITableView *)tableView
     didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
-    DCServerCommunicator.sharedInstance.selectedChannel =
-        [self.selectedGuild.channels objectAtIndex:indexPath.row];
-    
-    if (DCServerCommunicator.sharedInstance.selectedChannel.type == 4) {
+    DCChannel *channel = [self displayedChannelAtIndexPath:indexPath];
+    if (!channel) return;
+    DCServerCommunicator.sharedInstance.selectedChannel = channel;
+
+    if (channel.type == 4) {
         // If the channel is a category, do nothing
         [tableView deselectRowAtIndexPath:indexPath animated:YES];
         return;
@@ -212,6 +230,6 @@
 }
 - (NSInteger)tableView:(UITableView *)tableView
     numberOfRowsInSection:(NSInteger)section {
-    return self.selectedGuild.channels.count;
+    return self.displayChannels.count;
 }
 @end

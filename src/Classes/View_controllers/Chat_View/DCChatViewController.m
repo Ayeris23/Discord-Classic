@@ -9,6 +9,7 @@
 #import "DCInterfaceStyle.h"
 #import "DCChatViewController.h"
 #import "DCConnectionPopup.h"
+#import "DCTypingIndicatorView.h"
 #include <dispatch/dispatch.h>
 #include <objc/runtime.h>
 #include "DCEmoji.h"
@@ -73,7 +74,7 @@
 @implementation DCPendingAttachmentUpload
 @end
 
-@interface DCChatViewController ()
+@interface DCChatViewController () <DCTypingIndicatorViewDelegate>
 @property (nonatomic, readonly) NSMutableArray *messages;
 @property (strong, nonatomic) DCMessageLayoutBuilder *messageLayoutBuilder;
 @property (nonatomic, strong) DCChannelWindow *currentWindow;
@@ -88,9 +89,7 @@
 @property (strong, nonatomic) UILabel *emptyChatLoadingLabel;
 @property (strong, nonatomic) UIActivityIndicatorView *olderEdgeLoadingSpinner;
 @property (strong, nonatomic) UIActivityIndicatorView *newerEdgeLoadingSpinner;
-@property (strong, nonatomic) UIView *typingIndicatorView;
-@property (strong, nonatomic) UILabel *typingLabel;
-@property (strong, nonatomic) NSMutableDictionary *typingUsers;
+@property (strong, nonatomic) DCTypingIndicatorView *typingIndicator;
 @property (assign, nonatomic) CGFloat keyboardHeight;
 @property (strong, nonatomic) DCMessage *replyingToMessage;
 @property (assign, nonatomic) BOOL disablePing;
@@ -162,7 +161,12 @@
 @property (nonatomic, retain) UILabel *stagedAttachmentCountLabel;
 @property (nonatomic, assign) CGFloat attachmentComposerBaseOriginX;
 @property (nonatomic, assign) CGFloat attachmentCameraButtonBaseWidth;
+@property (nonatomic, assign) CGFloat composerMeasuredTextHeight;
+@property (nonatomic, assign) CGFloat composerOffsetBeforeEdit;
+@property (nonatomic, assign) BOOL composerWasAtBottomBeforeEdit;
+@property (nonatomic, assign) BOOL composerHasPendingEditOffset;
 @property (nonatomic, retain) ALAssetsLibrary *attachmentAssetLibrary;
+- (void)resetTypingIndicatorForChannelChange;
 - (void)setupJumpToPresentButton;
 - (void)updateJumpToPresentButtonFrame;
 - (void)updateJumpToPresentButtonVisibility;
@@ -2025,6 +2029,7 @@ static dispatch_queue_t chat_presentation_queue;
     [NSNotificationCenter.defaultCenter removeObserver:self];
     self.view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     self.chatTableView.transform = CGAffineTransformMakeScale(1, -1);
+    self.view.backgroundColor = self.chatTableView.backgroundColor;
 
     DBGLOG(@"%s: Loading chat view controller", __PRETTY_FUNCTION__);
 
@@ -2231,33 +2236,18 @@ static dispatch_queue_t chat_presentation_queue;
 
     self.inputField.scrollEnabled = NO;
 
-    self.typingIndicatorView                  = [[UIView alloc] initWithFrame:CGRectMake(
-                                                                 0,
-                                                                 self.view.frame.size.height - self.view.frame.origin.y - self.toolbar.height - 43,
-                                                                 self.view.frame.size.width,
-                                                                 20
-                                                             )];
-    self.typingIndicatorView.backgroundColor  = [UIColor darkGrayColor];
-    self.typingIndicatorView.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    self.typingIndicatorView.hidden           = YES;
-
-    self.typingLabel                 = [[UILabel alloc] initWithFrame:CGRectMake(
-                                                          8, 0,
-                                                          self.typingIndicatorView.frame.size.width - 16,
-                                                          20
-                                                      )];
-    self.typingLabel.font            = [UIFont systemFontOfSize:12];
-    self.typingLabel.textColor       = [UIColor lightGrayColor];
-    self.typingLabel.backgroundColor = [UIColor clearColor];
-
-    [self.typingIndicatorView addSubview:self.typingLabel];
+    CGFloat composerTop = self.view.bounds.size.height - self.toolbar.height;
+    self.typingIndicator = [[DCTypingIndicatorView alloc]
+        initWithFrame:CGRectMake(0.0f, composerTop, self.view.bounds.size.width,
+                                 [DCTypingIndicatorView bannerHeight])
+            tableView:self.chatTableView];
+    self.typingIndicator.delegate = self;
     if (self.toolbar) {
-        [self.view insertSubview:self.typingIndicatorView belowSubview:self.toolbar];
+        [self.view insertSubview:self.typingIndicator belowSubview:self.toolbar];
     } else {
-        [self.view addSubview:self.typingIndicatorView];
+        [self.view addSubview:self.typingIndicator];
     }
-    self.typingUsers = [NSMutableDictionary dictionary];
-    
+
     // Message Input bitmap
     UIImage *img = [DCInterfaceStyle messageFieldBackgroundImage];
     UIEdgeInsets caps = UIEdgeInsetsMake(15, 15, 15, 15);
@@ -2721,6 +2711,21 @@ static dispatch_queue_t chat_presentation_queue;
     return YES;
 }
 
+- (BOOL)textView:(UITextView *)textView
+    shouldChangeTextInRange:(NSRange)range
+            replacementText:(NSString *)replacementText {
+    if (textView == self.inputField) {
+        UIEdgeInsets insets = textView.contentInset;
+        CGFloat bottomY = MAX(-insets.top,
+            textView.contentSize.height - textView.bounds.size.height + insets.bottom);
+        self.composerOffsetBeforeEdit = textView.contentOffset.y;
+        self.composerWasAtBottomBeforeEdit =
+            bottomY - self.composerOffsetBeforeEdit <= 2.0f;
+        self.composerHasPendingEditOffset = YES;
+    }
+    return YES;
+}
+
 - (void)textViewDidChange:(UITextView *)textView {
     self.inputFieldPlaceholder.hidden = self.inputField.text.length != 0;
     [self updateSendButtonEnabledState];
@@ -2755,17 +2760,13 @@ static dispatch_queue_t chat_presentation_queue;
 - (void)handleChatReset {
     assertMainThread();
     DBGLOG(@"%s: Resetting chat data", __PRETTY_FUNCTION__);
-    [self invalidateAllTypingTimers];
+    [self resetTypingIndicatorForChannelChange];
     [self invalidatePendingMessageLoads];
 
     [self syncWindowForSelectedChannel];
     @autoreleasepool {
         self.selectedMessage = nil;
         self.selectedImage = nil;
-        if (!self.typingUsers) {
-            self.typingUsers =
-                [NSMutableDictionary dictionary];
-        }
         self.replyingToMessage = nil;
         self.editingMessage = nil;
         [self.messages removeAllObjects];
@@ -2777,9 +2778,7 @@ static dispatch_queue_t chat_presentation_queue;
         self.disablePing = NO;
     }
     [self updateMessageComposerForSelectedChannel];
-    self.typingIndicatorView.hidden     = YES;
     self.chatTableView.height = self.view.height - self.keyboardHeight - self.toolbar.height;
-    self.typingIndicatorView.y = self.view.height - self.keyboardHeight - self.toolbar.height - 20;
     [self.chatTableView
         setContentOffset:CGPointMake(
                              0,
@@ -2975,7 +2974,7 @@ static dispatch_queue_t chat_presentation_queue;
 
                 if (self.messages.count > 0) {
                     [self.chatTableView
-                        setContentOffset:CGPointZero
+                        setContentOffset:CGPointMake(0.0f, -self.chatTableView.contentInset.top)
                                 animated:NO];
                 }
 
@@ -3018,7 +3017,7 @@ static dispatch_queue_t chat_presentation_queue;
                 window.hasMoreAfter = NO;
                 window.atPresentTime = YES;
                 [self.chatTableView reloadData];
-                [self.chatTableView setContentOffset:CGPointZero animated:NO];
+                [self.chatTableView setContentOffset:CGPointMake(0.0f, -self.chatTableView.contentInset.top) animated:NO];
                 self.restoringWindowPosition = NO;
 
                 NSLog(@"[ChatPerf] A4 compacted forward reconcile to %lu complete messages",
@@ -3086,7 +3085,7 @@ static dispatch_queue_t chat_presentation_queue;
                  * The user was at the live edge, so keep following it.
                  */
                 [self.chatTableView
-                    setContentOffset:CGPointZero
+                    setContentOffset:CGPointMake(0.0f, -self.chatTableView.contentInset.top)
                             animated:YES];
 
                 window.atPresentTime = YES;
@@ -3175,6 +3174,7 @@ static dispatch_queue_t chat_presentation_queue;
     BOOL changedWindow = previousWindow != self.currentWindow;
     BOOL enteringChannel = changedWindow ||
         ![self.unreadBoundaryChannelID isEqualToString:channel.snowflake];
+    if (enteringChannel) [self resetTypingIndicatorForChannelChange];
     if (changedWindow) [self invalidatePendingMessageLoads];
 
     BOOL readStateReady = DCServerCommunicator.sharedInstance.readyReadStateAvailable;
@@ -3882,7 +3882,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
         [self.chatTableView layoutIfNeeded];
 
         if (followLiveTail) {
-            [self.chatTableView setContentOffset:CGPointZero animated:NO];
+            [self.chatTableView setContentOffset:CGPointMake(0.0f, -self.chatTableView.contentInset.top) animated:NO];
             self.currentWindow.atPresentTime = YES;
             [self evictOldestDownToCeiling];
         } else if (viewportAnchorSnowflake.length) {
@@ -4028,7 +4028,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
          * visible.
          */
         [self.chatTableView
-            setContentOffset:CGPointZero
+            setContentOffset:CGPointMake(0.0f, -self.chatTableView.contentInset.top)
                     animated:NO];
 
         self.currentWindow.atPresentTime = YES;
@@ -4430,92 +4430,50 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
         });
         return;
     }
-    if (![self isViewLoaded] || self.view.window == nil || !self.typingIndicatorView) {
-        DBGLOG(@"%s: Typing indicator view is not initialized", __PRETTY_FUNCTION__);
+    if (![self isViewLoaded] || !self.view.window || !self.typingIndicator) return;
+
+    NSString *userID = notification.object;
+    NSString *eventChannelID = [notification.userInfo objectForKey:@"channelId"];
+    DCChannel *channel = DCServerCommunicator.sharedInstance.selectedChannel;
+    if (![userID isKindOfClass:[NSString class]] || !userID.length ||
+        ![eventChannelID isKindOfClass:[NSString class]] ||
+        ![eventChannelID isEqualToString:channel.snowflake] ||
+        [userID isEqualToString:DCServerCommunicator.sharedInstance.snowflake]) {
         return;
     }
 
-    NSString *typingUserId = notification.object;
-    if (!typingUserId) {
-        DBGLOG(@"%s: No typing user provided", __PRETTY_FUNCTION__);
-        return;
-    }
-
-    if ([typingUserId isEqualToString:DCServerCommunicator.sharedInstance.snowflake]) {
-        // Ignore typing events from the current user
-        return;
-    }
-
-    NSTimer *existingTimer =
-        [self.typingUsers objectForKey:typingUserId];
-
-    NSTimer *replacementTimer =
-        [NSTimer scheduledTimerWithTimeInterval:10.0
-                                         target:self
-                                       selector:@selector(typingTimerFired:)
-                                       userInfo:typingUserId
-                                        repeats:NO];
-
-    /*
-     * Install the replacement before invalidating the old timer. The new timer
-     * now retains this controller, so invalidating the previous timer cannot
-     * destroy the controller in the middle of this method.
-     */
-    [self.typingUsers setObject:replacementTimer
-                         forKey:typingUserId];
-
-    [existingTimer invalidate];
-
-    [self updateTypingIndicator];
+    [self.typingIndicator userStartedTypingWithID:userID inChannel:channel];
 }
 
 - (void)handleStopTyping:(NSNotification *)notification {
-    if (!self.typingIndicatorView) {
-        DBGLOG(@"%s: Typing indicator view is not initialized", __PRETTY_FUNCTION__);
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self handleStopTyping:notification];
+        });
         return;
     }
-
-    NSString *typingUserId = notification.object;
-    if (!typingUserId) {
-        DBGLOG(@"%s: No typing user provided", __PRETTY_FUNCTION__);
-        return;
+    NSString *userID = notification.object;
+    if ([userID isKindOfClass:[NSString class]] && userID.length &&
+        ![userID isEqualToString:DCServerCommunicator.sharedInstance.snowflake]) {
+        [self.typingIndicator userStoppedTypingWithID:userID];
     }
-
-    if ([typingUserId isEqualToString:DCServerCommunicator.sharedInstance.snowflake]) {
-        // Ignore typing events from the current user
-        return;
-    }
-
-    NSTimer *existingTimer = [self.typingUsers objectForKey:typingUserId];
-    if (existingTimer) {
-        /*
-         * Update all controller-owned state while the timer still retains the
-         * controller. Invalidation is deliberately the final operation.
-         */
-        [self.typingUsers removeObjectForKey:typingUserId];
-        [self updateTypingIndicator];
-        [existingTimer invalidate];
-        return;
-    }
-    [self updateTypingIndicator];
 }
 
-- (void)invalidateAllTypingTimers {
-    if (!self.typingUsers) {
-        return;
-    }
+- (BOOL)typingIndicatorShouldFollowLiveTail:(DCTypingIndicatorView *)indicator {
+    return self.currentWindow && self.currentWindow.atPresentTime &&
+        !self.currentWindow.hasMoreAfter && !self.unreadNeedsFirstEntryPosition &&
+        !self.restoringWindowPosition && !self.chatTableView.dragging &&
+        !self.chatTableView.decelerating &&
+        fabs(self.chatTableView.contentOffset.y +
+             self.chatTableView.contentInset.top) <= 10.0f;
+}
 
-    /*
-     * Copy first because invalidating timers can alter run-loop ownership.
-     */
-    NSArray *timers =
-        [self.typingUsers.allValues copy];
-
-    [self.typingUsers removeAllObjects];
-
-    for (NSTimer *timer in timers) {
-        [timer invalidate];
-    }
+- (void)resetTypingIndicatorForChannelChange {
+    NSAssert([NSThread isMainThread], @"Typing UI must be updated on main thread");
+    BOOL wasRestoring = self.restoringWindowPosition;
+    self.restoringWindowPosition = YES;
+    [self.typingIndicator resetForChannelChange];
+    self.restoringWindowPosition = wasRestoring;
 }
 
 - (void)handleCellLongPress:(UILongPressGestureRecognizer *)recognizer {
@@ -4622,125 +4580,6 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
             inversion)) {
         self.chatTableView.transform = inversion;
     }
-}
-
-- (void)typingTimerFired:(NSTimer *)timer {
-    assertMainThread();
-
-    NSString *typingUserId = timer.userInfo;
-
-    if (![typingUserId isKindOfClass:[NSString class]] ||
-        typingUserId.length == 0) {
-        return;
-    }
-
-    /*
-     * A previous timer may have been replaced by a newer typing event.
-     * Only remove the entry if this is still the current timer.
-     */
-    NSTimer *currentTimer =
-        [self.typingUsers objectForKey:typingUserId];
-
-    if (currentTimer != timer) {
-        return;
-    }
-
-    [self.typingUsers removeObjectForKey:typingUserId];
-    [self updateTypingIndicator];
-
-    /*
-     * This is a nonrepeating timer, so it automatically becomes invalid
-     * after firing. Do not invalidate it before touching controller state.
-     */
-}
-
-- (void)updateTypingIndicator {
-    assertMainThread();
-
-    BOOL shouldShow = self.typingUsers.count > 0;
-    BOOL wasVisible = !self.typingIndicatorView.hidden;
-
-    if (shouldShow) {
-        NSMutableArray *typingNames = [NSMutableArray array];
-        for (NSString *userId in self.typingUsers.allKeys) {
-            DCUser *user = [DCServerCommunicator.sharedInstance userForSnowflake:userId];
-            if (!user) {
-                for (DCUser *recipient in DCServerCommunicator.sharedInstance.selectedChannel.recipients) {
-                    if ([recipient.snowflake isEqualToString:userId]) {
-                        user = recipient;
-                        break;
-                    }
-                }
-            }
-            if (user) {
-                [typingNames addObject:[user displayName]];
-            }
-        }
-
-        NSString *typingText;
-        if (typingNames.count == 1) {
-            typingText = [NSString stringWithFormat:@"%@ is typing...", typingNames.firstObject];
-        } else if (typingNames.count == 2) {
-            typingText = [NSString stringWithFormat:@"%@ and %@ are typing...", typingNames[0], typingNames[1]];
-        } else if (typingNames.count == 3) {
-            typingText = [NSString stringWithFormat:@"%@, %@, and %@ are typing...", typingNames[0], typingNames[1], typingNames[2]];
-        } else {
-            typingText = @"Several users are typing...";
-        }
-
-        self.typingLabel.text = typingText;
-        [self.typingIndicatorView setNeedsDisplay];
-    }
-
-    if (shouldShow == wasVisible) {
-        return;
-    }
-
-    CGFloat composerTop = self.view.height - self.keyboardHeight - self.toolbar.height;
-    CGFloat targetTableHeight = composerTop - (shouldShow ? 20.0f : 0.0f);
-    CGFloat visibleIndicatorY = composerTop - 20.0f;
-    CGFloat hiddenIndicatorY = composerTop;
-
-    BOOL followLiveTail =
-        self.currentWindow &&
-        !self.unreadNeedsFirstEntryPosition &&
-        !self.currentWindow.hasMoreAfter &&
-        self.chatTableView.contentOffset.y <= 10.0f;
-
-    if (shouldShow) {
-        [self.typingIndicatorView.layer removeAllAnimations];
-        [self.typingIndicatorView setY:hiddenIndicatorY];
-        self.typingIndicatorView.hidden = NO;
-    }
-
-    if (followLiveTail) {
-        [self.chatTableView setContentOffset:CGPointZero animated:NO];
-    } else {
-        [self.chatTableView setHeight:targetTableHeight];
-        [self layoutEmptyChatLoadingIndicator];
-    }
-
-    [UIView animateWithDuration:0.24
-                          delay:0.0
-                        options:UIViewAnimationOptionBeginFromCurrentState |
-                                UIViewAnimationOptionCurveEaseOut |
-                                UIViewAnimationOptionAllowUserInteraction
-                     animations:^{
-                         [self.typingIndicatorView setY:shouldShow
-                             ? visibleIndicatorY
-                             : hiddenIndicatorY];
-
-                         if (followLiveTail) {
-                             [self.chatTableView setHeight:targetTableHeight];
-                             [self.chatTableView setContentOffset:CGPointZero animated:NO];
-                             [self layoutEmptyChatLoadingIndicator];
-                         }
-                     }
-                     completion:^(BOOL finished) {
-                         if (!shouldShow && self.typingUsers.count == 0) {
-                             self.typingIndicatorView.hidden = YES;
-                         }
-                     }];
 }
 
 - (void)getMessages:(int)numberOfMessages beforeMessage:(DCMessage *)message {
@@ -8395,6 +8234,20 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     CGFloat desiredHeight = ceilf([self.inputField sizeThatFits:
         CGSizeMake(self.inputField.frame.size.width, MAXFLOAT)].height);
 
+    BOOL lineGrew = self.composerMeasuredTextHeight > 0.0f &&
+        desiredHeight - self.composerMeasuredTextHeight > lineHeight * 0.5f;
+    self.composerMeasuredTextHeight = desiredHeight;
+    CGFloat previousOffset = self.composerHasPendingEditOffset
+        ? self.composerOffsetBeforeEdit : self.inputField.contentOffset.y;
+    UIEdgeInsets previousInsets = self.inputField.contentInset;
+    CGFloat previousBottom = MAX(-previousInsets.top,
+        self.inputField.contentSize.height - self.inputField.bounds.size.height +
+        previousInsets.bottom);
+    BOOL wasAtBottom = self.composerHasPendingEditOffset
+        ? self.composerWasAtBottomBeforeEdit
+        : previousBottom - previousOffset <= 2.0f;
+    self.composerHasPendingEditOffset = NO;
+
     BOOL singleLine = desiredHeight <= kSingleLineHeight;
     BOOL needsScroll = !singleLine && desiredHeight > maxInputHeight;
     if (self.inputField.scrollEnabled != needsScroll) {
@@ -8416,6 +8269,9 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     inputFrame.size.height = newInputHeight;
     inputFrame.origin.y = singleLine ? _baseInputOriginY
         : (bgFrame.origin.y + bgFrame.size.height / 2.0f - newInputHeight / 2.0f);
+    CGFloat screenScale = [UIScreen mainScreen].scale;
+    if (screenScale < 1.0f) screenScale = 1.0f;
+    inputFrame.origin.y = roundf(inputFrame.origin.y * screenScale) / screenScale;
     if (!CGRectEqualToRect(self.inputField.frame, inputFrame)) {
         self.inputField.frame = inputFrame;
     }
@@ -8429,43 +8285,49 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
         [self updateJumpToPresentButtonFrame];
     }
 
-    CGFloat typingOffset = self.typingUsers.count > 0 ? 20.0f : 0.0f;
     CGFloat tableHeight = self.view.bounds.size.height - self.keyboardHeight
-        - newToolbarHeight - typingOffset;
+        - newToolbarHeight;
     if (fabs(self.chatTableView.frame.size.height - tableHeight) > 0.5f) {
         [self.chatTableView setHeight:tableHeight];
         [self layoutEmptyChatLoadingIndicator];
     }
 
-    if (self.typingUsers.count > 0) {
-        CGFloat indicatorY = self.view.bounds.size.height - self.keyboardHeight
-            - newToolbarHeight - 20.0f;
-        if (fabs(self.typingIndicatorView.frame.origin.y - indicatorY) > 0.5f) {
-            [self.typingIndicatorView setY:indicatorY];
-        }
-    }
+    [self.typingIndicator positionAboveComposerAtY:
+        self.view.bounds.size.height - self.keyboardHeight - newToolbarHeight];
 
     if (needsScroll && [self.inputField isFirstResponder]) {
-        NSRange selection = self.inputField.selectedRange;
-        if (selection.location != NSNotFound &&
-            NSMaxRange(selection) == self.inputField.text.length) {
+        UITextRange *selectedText = self.inputField.selectedTextRange;
+        if (selectedText) {
+            CGRect caret = [self.inputField caretRectForPosition:selectedText.end];
             UIEdgeInsets insets = self.inputField.contentInset;
             CGFloat visibleHeight = self.inputField.bounds.size.height;
-            CGFloat currentY = self.inputField.contentOffset.y;
-            CGFloat bottomY = MAX(-insets.top,
-                self.inputField.contentSize.height - visibleHeight + insets.bottom);
+            CGFloat minY = -insets.top;
+            CGFloat maxY = MAX(minY,
+                MAX(desiredHeight, self.inputField.contentSize.height) -
+                visibleHeight + insets.bottom);
+            CGFloat preservedY = MIN(maxY, MAX(minY, previousOffset));
+            CGFloat visibleTop = preservedY + insets.top;
+            CGFloat visibleBottom = preservedY + visibleHeight - insets.bottom;
+            BOOL caretVisible = CGRectGetMinY(caret) >= visibleTop - 2.0f &&
+                CGRectGetMaxY(caret) <= visibleBottom + 2.0f;
+            NSRange selection = self.inputField.selectedRange;
+            BOOL typingAtEnd = selection.location != NSNotFound &&
+                NSMaxRange(selection) == self.inputField.text.length;
 
-            if (bottomY - currentY > 2.0f) {
-                UITextRange *selectedText = self.inputField.selectedTextRange;
-                if (selectedText) {
-                    CGRect caret = [self.inputField caretRectForPosition:selectedText.end];
-                    CGFloat visibleBottom = currentY + visibleHeight - insets.bottom;
-                    if (CGRectGetMaxY(caret) > visibleBottom + 1.0f) {
-                        [self.inputField setContentOffset:
-                            CGPointMake(self.inputField.contentOffset.x, bottomY)
-                                               animated:NO];
-                    }
-                }
+            // Keep manual positioning until the caret leaves view or text wraps.
+            CGFloat targetY = preservedY;
+            if (wasAtBottom && typingAtEnd) {
+                targetY = maxY;
+            } else if (lineGrew || !caretVisible) {
+                targetY = CGRectGetMidY(caret) -
+                    (visibleHeight + insets.top - insets.bottom) * 0.5f;
+                targetY = MIN(maxY, MAX(minY, targetY));
+            }
+
+            if (fabs(self.inputField.contentOffset.y - targetY) > 1.0f) {
+                [self.inputField setContentOffset:
+                    CGPointMake(self.inputField.contentOffset.x, targetY)
+                                       animated:NO];
             }
         }
     }
@@ -8489,10 +8351,9 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     [UIView setAnimationCurve:keyboardAnimationCurve];
     [UIView setAnimationBeginsFromCurrentState:YES];
     [self.chatTableView
-        setHeight:self.view.height - self.keyboardHeight - self.toolbar.height - (self.typingUsers.count > 0 ? 20 : 0)];
-    if (self.typingUsers.count > 0) {
-        [self.typingIndicatorView setY:self.view.height - self.keyboardHeight - self.toolbar.height - 20];
-    }
+        setHeight:self.view.height - self.keyboardHeight - self.toolbar.height];
+    [self.typingIndicator positionAboveComposerAtY:
+        self.view.height - self.keyboardHeight - self.toolbar.height];
     [self.toolbar setY:self.view.height - self.keyboardHeight - self.toolbar.height];
     [self updateJumpToPresentButtonFrame];
     [self layoutEmptyChatLoadingIndicator];
@@ -8521,10 +8382,9 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     [UIView setAnimationDuration:keyboardAnimationDuration];
     [UIView setAnimationCurve:keyboardAnimationCurve];
     [UIView setAnimationBeginsFromCurrentState:YES];
-    [self.chatTableView setHeight:self.view.height - self.toolbar.height - (self.typingUsers.count > 0 ? 20 : 0)];
-    if (self.typingUsers.count > 0) {
-        [self.typingIndicatorView setY:self.view.height - self.toolbar.height - 20];
-    }
+    [self.chatTableView setHeight:self.view.height - self.toolbar.height];
+    [self.typingIndicator positionAboveComposerAtY:
+        self.view.height - self.toolbar.height];
     [self.toolbar setY:self.view.height - self.toolbar.height];
     [self updateJumpToPresentButtonFrame];
     [self layoutEmptyChatLoadingIndicator];
@@ -8665,7 +8525,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
         self.inputFieldPlaceholder.hidden = NO;
         lastTimeInterval = 0;
 
-        [self.chatTableView setContentOffset:CGPointZero animated:YES];
+        [self.chatTableView setContentOffset:CGPointMake(0.0f, -self.chatTableView.contentInset.top) animated:YES];
     });
 }
 
@@ -9388,7 +9248,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     if (self.restoringWindowPosition) return;
 
     if (followLiveTail) {
-        [self.chatTableView setContentOffset:CGPointZero animated:NO];
+        [self.chatTableView setContentOffset:CGPointMake(0.0f, -self.chatTableView.contentInset.top) animated:NO];
     } else {
         CGFloat contentHeightDelta =
             self.chatTableView.contentSize.height - previousContentHeight;
@@ -9591,11 +9451,10 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 }
 
 - (void)dc_repairGeometryForCurrentBounds {
-    CGFloat typingOffset = (self.typingUsers.count > 0) ? 20.0f : 0.0f;
     self.chatTableView.frame = CGRectMake(
         0, 0,
         self.view.bounds.size.width,
-        self.view.bounds.size.height - self.keyboardHeight - self.toolbar.height - typingOffset
+        self.view.bounds.size.height - self.keyboardHeight - self.toolbar.height
     );
     self.toolbar.frame = CGRectMake(
         0,
@@ -9603,6 +9462,8 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
         self.view.bounds.size.width,
         self.toolbar.height
     );
+    [self.typingIndicator positionAboveComposerAtY:
+        self.view.bounds.size.height - self.keyboardHeight - self.toolbar.height];
     [self rebuildPendingAttachmentUploadHeader];
     [self updateJumpToPresentButtonFrame];
     [self layoutEmptyChatLoadingIndicator];
@@ -9675,18 +9536,12 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     [self stopForwardMomentumContinuation];
     [super viewDidUnload];
 
-    // Invalidate all pending typing timers before clearing —
-    // they hold a reference to self as target and will fire into
-    // freed memory if not cancelled
-    for (NSTimer *timer in self.typingUsers.allValues) {
-        [timer invalidate];
-    }
-    [self.typingUsers removeAllObjects];
-
     // Remove programmatically created views from hierarchy
-    [self.typingIndicatorView removeFromSuperview];
-    self.typingIndicatorView = nil;
-    self.typingLabel         = nil;
+    [self.typingIndicator invalidateTypingTimers];
+    self.typingIndicator.delegate = nil;
+    self.typingIndicator.chatTableView = nil;
+    [self.typingIndicator removeFromSuperview];
+    self.typingIndicator = nil;
     [self.jumpToPresentButton removeFromSuperview];
     self.jumpToPresentButton = nil;
 
@@ -9697,6 +9552,8 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     self.toolbarBG              = nil;
     self.inputField             = nil;
     self.inputFieldPlaceholder  = nil;
+    self.composerMeasuredTextHeight = 0.0f;
+    self.composerHasPendingEditOffset = NO;
     self.inputView              = nil;
     self.messageFieldBG         = nil;
 }
@@ -9723,7 +9580,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
         return;
     }
 
-    [self invalidateAllTypingTimers];
+    [self resetTypingIndicatorForChannelChange];
 
     // Popping/dismissing the chat means the user's last active screen is now
     // the main menu. Do not clear this for temporary modal/profile transitions.
@@ -9746,9 +9603,9 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     [NSNotificationCenter.defaultCenter
         removeObserver:self];
 
-    for (NSTimer *timer in _typingUsers.allValues) {
-        [timer invalidate];
-    }
+    [_typingIndicator invalidateTypingTimers];
+    _typingIndicator.delegate = nil;
+    _typingIndicator.chatTableView = nil;
 }
 
 - (void)didReceiveMemoryWarning {

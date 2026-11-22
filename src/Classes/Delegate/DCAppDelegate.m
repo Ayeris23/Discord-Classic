@@ -274,7 +274,7 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
     DCGuild *restoredGuild = nil;
     DCChannel *restoredChannel = nil;
     for (DCGuild *guild in DCServerCommunicator.sharedInstance.guilds) {
-        for (DCChannel *channel in guild.channels) {
+        for (DCChannel *channel in [guild channelsSnapshot]) {
             if ([channel.snowflake isEqualToString:channelID]) {
                 restoredGuild = guild;
                 restoredChannel = channel;
@@ -352,7 +352,7 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
             (guild.snowflake == nil && [guild.name isEqualToString:@"Direct Messages"]);
         if (!isPrivateGuild) continue;
 
-        for (DCChannel *channel in guild.channels) {
+        for (DCChannel *channel in [guild channelsSnapshot]) {
             if (channel.recipientIDs.count == 0) continue;
 
             NSMutableArray *recipients = [NSMutableArray array];
@@ -608,7 +608,7 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
                 }
                 iconTime += CFAbsoluteTimeGetCurrent() - iconStart;
 
-                for (DCChannel *channel in guild.channels) {
+                for (DCChannel *channel in [guild channelsSnapshot]) {
                     restoredChannelCount++;
                     channel.parentGuild = guild;
 
@@ -810,7 +810,7 @@ didFailToRegisterForRemoteNotificationsWithError:(NSError *)error {
     NSMutableDictionary *counts = [NSMutableDictionary dictionary];
     NSInteger total = 0;
     for (DCGuild *guild in DCServerCommunicator.sharedInstance.guilds) {
-        for (DCChannel *channel in guild.channels) {
+        for (DCChannel *channel in [guild channelsSnapshot]) {
             if (channel.snowflake.length == 0 || channel.mentionCount <= 0) continue;
             NSInteger previous = [[counts objectForKey:channel.snowflake] integerValue];
             [counts setObject:@(channel.mentionCount) forKey:channel.snowflake];
