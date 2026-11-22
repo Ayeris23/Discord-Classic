@@ -65,4 +65,5 @@
 @property (strong, nonatomic) NSMutableDictionary* emojis;
 
 - (void)checkIfRead;
+- (NSArray *)channelsSnapshot;
 @end

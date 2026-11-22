@@ -748,10 +748,9 @@ static void DCHydrateCachedPrivateChannelIcon(DCChannel *channel) {
 
         [self hydrateCachedUsersAfterFirstPaint];
 
-        // If the previous process durably checkpointed the matching local state,
-        // preload its Gateway cursor before opening the socket. handleHello will
-        // then send RESUME instead of IDENTIFY.
-        [DCServerCommunicator.sharedInstance restorePersistedGatewaySessionIfPossible];
+        // Display cached content immediately, then IDENTIFY for an authoritative
+        // READY/read_state. A cold RESUME has no read_state snapshot and can
+        // leave cached channels unable to acknowledge messages.
         [DCServerCommunicator.sharedInstance startCommunicator];
     }
     

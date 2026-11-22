@@ -60,6 +60,7 @@ static const NSUInteger DCMemberListMaximumRefreshRetries = 2;
 
 - (void)viewDidLoad {
     [super viewDidLoad];
+    [DCInterfaceStyle applyNavigationTitleStyleToBar:self.navigationController.navigationBar];
     self.tableView.dataSource = self;
     self.tableView.delegate = self;
 

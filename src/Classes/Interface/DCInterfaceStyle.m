@@ -18,6 +18,18 @@
     return [DCInterfaceAssetCatalog imageNamed:@"TbarBG"];
 }
 
++ (void)applyNavigationTitleStyleToBar:(UINavigationBar *)navigationBar {
+    if (!navigationBar) return;
+    UIFont *font = [UIFont fontWithName:@"HelveticaNeue-Bold" size:20.0f];
+    if (!font) font = [UIFont boldSystemFontOfSize:20.0f];
+    navigationBar.titleTextAttributes = @{
+        UITextAttributeFont : font,
+        UITextAttributeTextColor : [UIColor whiteColor],
+        UITextAttributeTextShadowColor : [UIColor blackColor],
+        UITextAttributeTextShadowOffset : [NSValue valueWithUIOffset:UIOffsetMake(0.0f, -1.0f)]
+    };
+}
+
 + (UIImage *)primaryBarButtonBackgroundImage {
     return [DCInterfaceAssetCatalog imageNamed:@"BarButtonDone"];
 }

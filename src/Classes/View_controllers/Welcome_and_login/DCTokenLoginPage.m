@@ -36,6 +36,7 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
+    [DCInterfaceStyle applyNavigationTitleStyleToBar:self.navBar];
 
     self.buttonLogIn.enabled = NO;
     

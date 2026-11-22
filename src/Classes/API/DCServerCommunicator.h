@@ -264,6 +264,7 @@ typedef NS_ENUM(uint64_t, DCGatewayCapabilities) {
 + (DCServerCommunicator*)sharedInstance;
 - (void)description;
 - (void)startCommunicator;
+- (void)refreshWithFreshReady;
 - (void)reconnect;
 // RESUME requires a complete cached guild/user baseline for the saved sequence.
 - (BOOL)restorePersistedGatewaySessionIfPossible;

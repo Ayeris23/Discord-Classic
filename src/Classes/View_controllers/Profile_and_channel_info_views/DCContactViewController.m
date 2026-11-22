@@ -57,6 +57,7 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
+    [DCInterfaceStyle applyNavigationTitleStyleToBar:self.navBar];
     [self.navBar setBackgroundImage:[DCInterfaceStyle navigationBarBackgroundImage]
                       forBarMetrics:UIBarMetricsDefault];
     [self.doneButton setBackgroundImage:[DCInterfaceStyle primaryBarButtonBackgroundImage]

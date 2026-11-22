@@ -38,24 +38,21 @@
 }
 
 - (void)checkIfRead {
-    BOOL oldUnread = self.unread;
-    if (self.muted && self.mentionCount == 0) {
-        // Only suppress unread dot if muted AND no mentions
-        self.unread = false;
-        goto refreshMarker;
-    }
-    /*Loop through all child channels
-     if any single one is unread, the guild
-     as a whole is unread*/
-    for (DCChannel *channel in self.channels) {
-        if (channel.unread) {
-            self.unread = true;
-            goto refreshMarker;
+    BOOL oldUnread;
+    BOOL isUnread = NO;
+    @synchronized (self) {
+        oldUnread = self.unread;
+        if (!self.muted || self.mentionCount > 0) {
+            for (DCChannel *channel in self.channels) {
+                if (channel.unread) {
+                    isUnread = YES;
+                    break;
+                }
+            }
         }
+        self.unread = isUnread;
     }
-    self.unread = false;
-refreshMarker:
-    if (self.unread != oldUnread) {
+    if (isUnread != oldUnread) {
         dispatch_async(dispatch_get_main_queue(), ^{
             [NSNotificationCenter.defaultCenter
                 postNotificationName:@"RELOAD GUILD"
@@ -66,10 +63,18 @@ refreshMarker:
 
 - (NSInteger)mentionCount {
     NSInteger total = 0;
-    for (DCChannel *channel in self.channels) {
-        total += channel.mentionCount;
+    @synchronized (self) {
+        for (DCChannel *channel in self.channels) {
+            total += channel.mentionCount;
+        }
     }
     return total;
+}
+
+- (NSArray *)channelsSnapshot {
+    @synchronized (self) {
+        return [self.channels copy] ?: [NSArray array];
+    }
 }
 
 #pragma mark - NSCoding
@@ -80,7 +85,11 @@ refreshMarker:
     [aCoder encodeObject:self.ownerID     forKey:@"ownerID"];
     [aCoder encodeInteger:self.memberCount forKey:@"memberCount"];
     [aCoder encodeBool:self.muted         forKey:@"muted"];
-    [aCoder encodeObject:self.channels    forKey:@"channels"];
+    NSMutableArray *channelsToEncode;
+    @synchronized (self) {
+        channelsToEncode = [self.channels mutableCopy];
+    }
+    [aCoder encodeObject:channelsToEncode forKey:@"channels"];
     [aCoder encodeObject:self.roles       forKey:@"roles"];
     [aCoder encodeObject:self.userRoles   forKey:@"userRoles"];
     [aCoder encodeObject:self.emojis      forKey:@"emojis"];

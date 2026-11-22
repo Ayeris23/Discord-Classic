@@ -59,6 +59,7 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
+    [DCInterfaceStyle applyNavigationTitleStyleToBar:self.navigationController.navigationBar];
     self.navigationItem.hidesBackButton     = YES;
     self.slideMenuController.gestureSupport = NO;
     self.emailField.delegate                = self;

@@ -68,6 +68,7 @@
 
 - (void)viewDidLoad {
     [super viewDidLoad];
+    [DCInterfaceStyle applyNavigationTitleStyleToBar:self.navigationController.navigationBar];
     [self.navigationController.navigationBar
         setBackgroundImage:[DCInterfaceStyle navigationBarBackgroundImage]
              forBarMetrics:UIBarMetricsDefault];

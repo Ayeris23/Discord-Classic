@@ -1219,7 +1219,7 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
 
 - (DCChannel *)findChannelById:(NSString *)channelId {
     for (DCGuild *guild in self.guilds) {
-        for (DCChannel *channel in guild.channels) {
+        for (DCChannel *channel in [guild channelsSnapshot]) {
             if ([channel.snowflake isEqualToString:channelId]) {
                 return channel;
             }
@@ -1855,7 +1855,7 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
 
     CFAbsoluteTime readyDMFinalizeStarted = CFAbsoluteTimeGetCurrent();
     // Refresh DM channel names with updated friend nicknames
-    NSArray *channelSnapshot = [privateGuild.channels copy];
+    NSArray *channelSnapshot = [privateGuild channelsSnapshot];
     for (DCChannel *channel in channelSnapshot) {
         if (channel.recipients.count == 1) {
             DCUser *recipient = channel.recipients.firstObject;
@@ -1981,7 +1981,7 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
         }
         // Wire up channel mute state from userChannelSettings
         for (DCGuild *guild in self.guilds) {
-            for (DCChannel *channel in guild.channels) {
+            for (DCChannel *channel in [guild channelsSnapshot]) {
                 NSNumber *muteValue = self.userChannelSettings[channel.snowflake];
                 if (muteValue) {
                     channel.muted = [muteValue boolValue];
@@ -2320,7 +2320,7 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
 
     // READY's private_channels array is a complete snapshot. Remove only DMs
     // that genuinely disappeared; server channels are untouched here.
-    NSArray *oldPrivate = [privateGuild.channels copy];
+    NSArray *oldPrivate = [privateGuild channelsSnapshot];
     for (DCChannel *oldChannel in oldPrivate) {
         if (![incomingIDs containsObject:oldChannel.snowflake]) {
             [self.channels removeObjectForKey:oldChannel.snowflake];
@@ -2335,7 +2335,9 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
         if (idA.length > idB.length) return NSOrderedAscending;
         return [idB compare:idA options:NSLiteralSearch];
     }];
-    [privateGuild.channels setArray:orderedChannels];
+    @synchronized (privateGuild) {
+        [privateGuild.channels setArray:orderedChannels];
+    }
     [privateGuild checkIfRead];
     return privateGuild;
 }
@@ -2459,7 +2461,7 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
                 }
 
                 [result addObject:guild];
-                for (DCChannel *channel in guild.channels) {
+                for (DCChannel *channel in [guild channelsSnapshot]) {
                     NSString *channelID = channel.snowflake;
                     if (!channelID) continue;
                     if ([self.channels objectForKey:channelID] == channel) {
@@ -2508,7 +2510,7 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
             if (!oldGuildID || [incomingGuildIDs containsObject:oldGuildID]) continue;
 
             [retiredGuildIDs addObject:oldGuildID];
-            for (DCChannel *channel in [oldGuild.channels copy]) {
+            for (DCChannel *channel in [oldGuild channelsSnapshot]) {
                 if (channel.snowflake) {
                     [self.channels removeObjectForKey:channel.snowflake];
                     [[DCMessageStore sharedInstance] removeWindowForChannel:channel.snowflake];
@@ -2876,13 +2878,15 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
     NSUInteger rawThreadCount = [rawThreads isKindOfClass:[NSArray class]] ? [rawThreads count] : 0;
     NSUInteger combinedCount = rawChannelCount + rawThreadCount;
 
-    if (!guild.channels) guild.channels = [NSMutableArray array];
+    @synchronized (guild) {
+        if (!guild.channels) guild.channels = [NSMutableArray array];
+    }
     if (!self.channels) self.channels = [NSMutableDictionary dictionary];
 
     // Build one per-guild channel index up front for O(1) channel resolution.
     NSMutableDictionary *listedByID =
         [NSMutableDictionary dictionaryWithCapacity:guild.channels.count];
-    for (DCChannel *listedChannel in guild.channels) {
+    for (DCChannel *listedChannel in [guild channelsSnapshot]) {
         if (listedChannel.snowflake.length)
             [listedByID setObject:listedChannel forKey:listedChannel.snowflake];
     }
@@ -2945,20 +2949,22 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
         } else {
             // Threads-only GUILD_CREATE updates are not authoritative for the
             // whole guild list. Preserve the old incremental membership rules.
-            DCChannel *listed = [listedByID objectForKey:channelID];
-            if (!shouldAppear) {
-                if (listed) {
-                    [guild.channels removeObjectIdenticalTo:listed];
-                    [listedByID removeObjectForKey:channelID];
+            @synchronized (guild) {
+                DCChannel *listed = [listedByID objectForKey:channelID];
+                if (!shouldAppear) {
+                    if (listed) {
+                        [guild.channels removeObjectIdenticalTo:listed];
+                        [listedByID removeObjectForKey:channelID];
+                    }
+                } else if (!listed) {
+                    [guild.channels addObject:channel];
+                    [listedByID setObject:channel forKey:channelID];
+                } else if (listed != channel) {
+                    NSUInteger index = [guild.channels indexOfObjectIdenticalTo:listed];
+                    if (index != NSNotFound)
+                        [guild.channels replaceObjectAtIndex:index withObject:channel];
+                    [listedByID setObject:channel forKey:channelID];
                 }
-            } else if (!listed) {
-                [guild.channels addObject:channel];
-                [listedByID setObject:channel forKey:channelID];
-            } else if (listed != channel) {
-                NSUInteger index = [guild.channels indexOfObjectIdenticalTo:listed];
-                if (index != NSNotFound)
-                    [guild.channels replaceObjectAtIndex:index withObject:channel];
-                [listedByID setObject:channel forKey:channelID];
             }
         }
         if (perf)
@@ -2968,7 +2974,9 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
     if (hasChannelSnapshot) {
         // Rebuild the visible membership array directly. This replaces a
         // per-channel linear membership scan plus a second stale-list pass.
-        [guild.channels setArray:authoritativeVisibleChannels];
+        @synchronized (guild) {
+            [guild.channels setArray:authoritativeVisibleChannels];
+        }
 
         if (!forReady) {
             // Live GUILD_CREATE still needs immediate stale retirement. READY
@@ -3000,7 +3008,9 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
                 [ordered addObject:orderedChannel];
         }
         if (ordered.count == guild.channels.count) {
-            [guild.channels setArray:ordered];
+            @synchronized (guild) {
+                [guild.channels setArray:ordered];
+            }
             appliedPreparedOrder = YES;
         }
     }
@@ -3169,7 +3179,7 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
     if (!guild) return; // idempotent replay/delete
 
     NSMutableSet *removedChannelIDs = [NSMutableSet set];
-    for (DCChannel *channel in guild.channels) {
+    for (DCChannel *channel in [guild channelsSnapshot]) {
         if (channel.snowflake.length) [removedChannelIDs addObject:channel.snowflake];
     }
     NSArray *allChannelIDs = [[self.channels allKeys] copy];
@@ -3331,8 +3341,10 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
 
 - (DCChannel *)channelInGuild:(DCGuild *)guild withSnowflake:(NSString *)channelID {
     if (!guild || !channelID) return nil;
-    for (DCChannel *candidate in guild.channels) {
-        if ([candidate.snowflake isEqualToString:channelID]) return candidate;
+    @synchronized (guild) {
+        for (DCChannel *candidate in guild.channels) {
+            if ([candidate.snowflake isEqualToString:channelID]) return candidate;
+        }
     }
     return nil;
 }
@@ -3341,19 +3353,21 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
       membershipInGuild:(DCGuild *)guild
           shouldAppear:(BOOL)shouldAppear {
     if (!guild || !channel.snowflake) return;
-    if (!guild.channels) guild.channels = [NSMutableArray array];
+    @synchronized (guild) {
+        if (!guild.channels) guild.channels = [NSMutableArray array];
 
-    DCChannel *listed = [self channelInGuild:guild withSnowflake:channel.snowflake];
-    if (!shouldAppear) {
-        if (listed) [guild.channels removeObject:listed];
-        return;
-    }
+        DCChannel *listed = [self channelInGuild:guild withSnowflake:channel.snowflake];
+        if (!shouldAppear) {
+            if (listed) [guild.channels removeObject:listed];
+            return;
+        }
 
-    if (!listed) {
-        [guild.channels addObject:channel];
-    } else if (listed != channel) {
-        NSUInteger index = [guild.channels indexOfObjectIdenticalTo:listed];
-        if (index != NSNotFound) [guild.channels replaceObjectAtIndex:index withObject:channel];
+        if (!listed) {
+            [guild.channels addObject:channel];
+        } else if (listed != channel) {
+            NSUInteger index = [guild.channels indexOfObjectIdenticalTo:listed];
+            if (index != NSNotFound) [guild.channels replaceObjectAtIndex:index withObject:channel];
+        }
     }
 }
 
@@ -3590,82 +3604,85 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
 }
 
 - (void)resortChannelsForGuild:(DCGuild *)guild {
-    if (!guild || guild.channels.count < 2) return;
+    if (!guild) return;
+    @synchronized (guild) {
+        if (guild.channels.count < 2) return;
 
-    if (!guild.snowflake) {
-        [guild.channels sortUsingComparator:^NSComparisonResult(DCChannel *a, DCChannel *b) {
-            NSString *idA = [a.lastMessageId isKindOfClass:[NSString class]] ? a.lastMessageId : @"0";
-            NSString *idB = [b.lastMessageId isKindOfClass:[NSString class]] ? b.lastMessageId : @"0";
-            return [idB compare:idA options:NSNumericSearch];
+        if (!guild.snowflake) {
+            [guild.channels sortUsingComparator:^NSComparisonResult(DCChannel *a, DCChannel *b) {
+                NSString *idA = [a.lastMessageId isKindOfClass:[NSString class]] ? a.lastMessageId : @"0";
+                NSString *idB = [b.lastMessageId isKindOfClass:[NSString class]] ? b.lastMessageId : @"0";
+                return [idB compare:idA options:NSNumericSearch];
+            }];
+            return;
+        }
+
+        NSMutableArray *categories = [NSMutableArray array];
+        NSMutableArray *channels = [NSMutableArray array];
+        for (DCChannel *channel in guild.channels) {
+            // Older READY/cached channel objects may contain NSNull for parent_id.
+            // Normalize it here too so structural events can safely resort a mixed
+            // pre-hotfix object graph without waiting for a fresh READY.
+            if (![channel.parentID isKindOfClass:[NSString class]])
+                channel.parentID = nil;
+
+            if (channel.type == DCChannelTypeGuildCategory)
+                [categories addObject:channel];
+            else
+                [channels addObject:channel];
+        }
+
+        [categories sortUsingComparator:^NSComparisonResult(DCChannel *a, DCChannel *b) {
+            if (a.position < b.position) return NSOrderedAscending;
+            if (a.position > b.position) return NSOrderedDescending;
+            return [a.snowflake compare:b.snowflake];
         }];
-        return;
-    }
 
-    NSMutableArray *categories = [NSMutableArray array];
-    NSMutableArray *channels = [NSMutableArray array];
-    for (DCChannel *channel in guild.channels) {
-        // Older READY/cached channel objects may contain NSNull for parent_id.
-        // Normalize it here too so structural events can safely resort a mixed
-        // pre-hotfix object graph without waiting for a fresh READY.
-        if (![channel.parentID isKindOfClass:[NSString class]])
-            channel.parentID = nil;
+        [channels sortUsingComparator:^NSComparisonResult(DCChannel *channel1, DCChannel *channel2) {
+            BOOL hasParent1 = [channel1.parentID isKindOfClass:[NSString class]];
+            BOOL hasParent2 = [channel2.parentID isKindOfClass:[NSString class]];
+            if (hasParent1 != hasParent2)
+                return hasParent1 ? NSOrderedDescending : NSOrderedAscending;
 
-        if (channel.type == DCChannelTypeGuildCategory)
-            [categories addObject:channel];
-        else
-            [channels addObject:channel];
-    }
+            if (hasParent1 && ![channel1.parentID isEqualToString:channel2.parentID]) {
+                DCChannel *parent1 = [self.channels objectForKey:channel1.parentID];
+                DCChannel *parent2 = [self.channels objectForKey:channel2.parentID];
+                if (parent1.position < parent2.position) return NSOrderedAscending;
+                if (parent1.position > parent2.position) return NSOrderedDescending;
+            }
 
-    [categories sortUsingComparator:^NSComparisonResult(DCChannel *a, DCChannel *b) {
-        if (a.position < b.position) return NSOrderedAscending;
-        if (a.position > b.position) return NSOrderedDescending;
-        return [a.snowflake compare:b.snowflake];
-    }];
+            if (channel1.position < channel2.position) return NSOrderedAscending;
+            if (channel1.position > channel2.position) return NSOrderedDescending;
+            return [channel1.snowflake compare:channel2.snowflake];
+        }];
 
-    [channels sortUsingComparator:^NSComparisonResult(DCChannel *channel1, DCChannel *channel2) {
-        BOOL hasParent1 = [channel1.parentID isKindOfClass:[NSString class]];
-        BOOL hasParent2 = [channel2.parentID isKindOfClass:[NSString class]];
-        if (hasParent1 != hasParent2)
-            return hasParent1 ? NSOrderedDescending : NSOrderedAscending;
-
-        if (hasParent1 && ![channel1.parentID isEqualToString:channel2.parentID]) {
-            DCChannel *parent1 = [self.channels objectForKey:channel1.parentID];
-            DCChannel *parent2 = [self.channels objectForKey:channel2.parentID];
-            if (parent1.position < parent2.position) return NSOrderedAscending;
-            if (parent1.position > parent2.position) return NSOrderedDescending;
+        // Insert each category immediately before its first child in one pass.
+        // The old code searched the growing ordered array once per category.
+        NSMutableDictionary *categoriesByID =
+            [NSMutableDictionary dictionaryWithCapacity:categories.count];
+        for (DCChannel *category in categories) {
+            if ([category.snowflake isKindOfClass:[NSString class]])
+                [categoriesByID setObject:category forKey:category.snowflake];
         }
 
-        if (channel1.position < channel2.position) return NSOrderedAscending;
-        if (channel1.position > channel2.position) return NSOrderedDescending;
-        return [channel1.snowflake compare:channel2.snowflake];
-    }];
-
-    // Insert each category immediately before its first child in one pass.
-    // The old code searched the growing ordered array once per category.
-    NSMutableDictionary *categoriesByID =
-        [NSMutableDictionary dictionaryWithCapacity:categories.count];
-    for (DCChannel *category in categories) {
-        if ([category.snowflake isKindOfClass:[NSString class]])
-            [categoriesByID setObject:category forKey:category.snowflake];
-    }
-
-    NSMutableSet *insertedCategoryIDs =
-        [NSMutableSet setWithCapacity:categories.count];
-    NSMutableArray *ordered =
-        [NSMutableArray arrayWithCapacity:channels.count + categories.count];
-    for (DCChannel *channel in channels) {
-        NSString *parentID = [channel.parentID isKindOfClass:[NSString class]]
-            ? channel.parentID : nil;
-        DCChannel *category = parentID ? [categoriesByID objectForKey:parentID] : nil;
-        if (category && ![insertedCategoryIDs containsObject:parentID]) {
-            [ordered addObject:category];
-            [insertedCategoryIDs addObject:parentID];
+        NSMutableSet *insertedCategoryIDs =
+            [NSMutableSet setWithCapacity:categories.count];
+        NSMutableArray *ordered =
+            [NSMutableArray arrayWithCapacity:channels.count + categories.count];
+        for (DCChannel *channel in channels) {
+            NSString *parentID = [channel.parentID isKindOfClass:[NSString class]]
+                ? channel.parentID : nil;
+            DCChannel *category = parentID ? [categoriesByID objectForKey:parentID] : nil;
+            if (category && ![insertedCategoryIDs containsObject:parentID]) {
+                [ordered addObject:category];
+                [insertedCategoryIDs addObject:parentID];
+            }
+            [ordered addObject:channel];
         }
-        [ordered addObject:channel];
+        // Category rows are structural only. If no readable child survived the
+        // permission filter, omit the empty category as well.
+        guild.channels = ordered;
     }
-    // Category rows are structural only. If no readable child survived the
-    // permission filter, omit the empty category as well.
-    guild.channels = ordered;
 }
 
 - (void)refreshChannelAccessForGuild:(DCGuild *)guild {
@@ -3762,7 +3779,11 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
 
     if (oldGuild && oldGuild != guild) {
         DCChannel *oldListed = [self channelInGuild:oldGuild withSnowflake:channelID];
-        if (oldListed) [oldGuild.channels removeObject:oldListed];
+        if (oldListed) {
+            @synchronized (oldGuild) {
+                [oldGuild.channels removeObject:oldListed];
+            }
+        }
         [self resortChannelsForGuild:oldGuild];
     }
 
@@ -3794,7 +3815,11 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
 
     if (guild) {
         DCChannel *listed = [self channelInGuild:guild withSnowflake:channelID];
-        if (listed) [guild.channels removeObject:listed];
+        if (listed) {
+            @synchronized (guild) {
+                [guild.channels removeObject:listed];
+            }
+        }
         [self resortChannelsForGuild:guild];
         [guild checkIfRead];
     }
@@ -5222,6 +5247,21 @@ typedef struct {
         //exit app when app is in background
         exit(EXIT_SUCCESS);
     }
+}
+
+- (void)refreshWithFreshReady {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        // Keep cached models visible while the replacement session authenticates.
+        // Clearing this cursor makes the next HELLO send IDENTIFY, not RESUME.
+        if (self.isReconnecting) return;
+        self.sequenceNumber = 0;
+        self.persistedSequenceNumber = 0;
+        self.sessionId = nil;
+        self.resumeGatewayURL = nil;
+        self.readyReadStateAvailable = NO;
+        [[DCCacheManager sharedInstance] invalidateGatewayCheckpoint];
+        [self reconnect];
+    });
 }
 
 - (void)reconnect {

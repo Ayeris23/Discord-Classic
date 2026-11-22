@@ -8,6 +8,7 @@
 
 #import "DCIPadSplitViewController.h"
 #import "DCInterfaceStyle.h"
+#import "DCMenuViewController.h"
 static const CGFloat DCIPadPortraitSidebarWidth = 320.0f;
 
 @interface DCIPadSplitViewController ()
@@ -66,6 +67,14 @@ static const CGFloat DCIPadPortraitSidebarWidth = 320.0f;
     return [master isKindOfClass:[UINavigationController class]]
         ? (UINavigationController *)master
         : nil;
+}
+
+- (void)refreshVisibleMasterMenu {
+    UINavigationController *navigationController = [self masterNavigationController];
+    UIViewController *controller = navigationController.topViewController;
+    if ([controller isKindOfClass:[DCMenuViewController class]]) {
+        [(DCMenuViewController *)controller refreshTrayFromCanonicalState];
+    }
 }
 
 - (CGFloat)portraitSidebarWidth {
@@ -252,6 +261,7 @@ static const CGFloat DCIPadPortraitSidebarWidth = 320.0f;
 
     [self installCloseButton];
     [self layoutVisiblePortraitSidebar];
+    [self refreshVisibleMasterMenu];
 
     void (^changes)(void) = ^{
         containerView.frame = finalFrame;
@@ -401,6 +411,7 @@ static const CGFloat DCIPadPortraitSidebarWidth = 320.0f;
     masterView.alpha = 1.0f;
     [self.view setNeedsLayout];
     [self.view layoutIfNeeded];
+    [self refreshVisibleMasterMenu];
 }
 
 - (BOOL)shouldAutorotateToInterfaceOrientation:(UIInterfaceOrientation)interfaceOrientation {

@@ -14,6 +14,7 @@
 @interface DCInterfaceStyle : NSObject
 
 + (UIImage *)navigationBarBackgroundImage;
++ (void)applyNavigationTitleStyleToBar:(UINavigationBar *)navigationBar;
 + (UIImage *)primaryBarButtonBackgroundImage;
 + (UIImage *)primaryBarButtonPressedBackgroundImage;
 + (UIImage *)barButtonBackgroundImage;

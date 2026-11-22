@@ -466,11 +466,13 @@
     self.guildLabel.text = guildName;
 
     if ([self isDirectMessagesGuild:guild]) {
-        [guild.channels sortUsingComparator:^NSComparisonResult(DCChannel *a, DCChannel *b) {
-            NSString *idA = ([a.lastMessageId isKindOfClass:[NSString class]]) ? a.lastMessageId : @"0";
-            NSString *idB = ([b.lastMessageId isKindOfClass:[NSString class]]) ? b.lastMessageId : @"0";
-            return [idB localizedStandardCompare:idA];
-        }];
+        @synchronized (guild) {
+            [guild.channels sortUsingComparator:^NSComparisonResult(DCChannel *a, DCChannel *b) {
+                NSString *idA = ([a.lastMessageId isKindOfClass:[NSString class]]) ? a.lastMessageId : @"0";
+                NSString *idB = ([b.lastMessageId isKindOfClass:[NSString class]]) ? b.lastMessageId : @"0";
+                return [idB localizedStandardCompare:idA];
+            }];
+        }
 
         self.totalView.hidden = NO;
         self.userName.text = DCServerCommunicator.sharedInstance.currentUserInfo.globalName;
@@ -585,6 +587,8 @@
     [self.navigationController.navigationBar
         setBackgroundImage:[DCInterfaceStyle navigationBarBackgroundImage]
              forBarMetrics:UIBarMetricsDefault];
+    [DCInterfaceStyle applyNavigationTitleStyleToBar:self.navigationController.navigationBar];
+    [self installMenuRefreshControls];
 
     self.experimentalMode =
         [[NSUserDefaults standardUserDefaults] boolForKey:@"experimentalMode"];
@@ -603,6 +607,7 @@
     self.guildTableView = nil;
     self.channelTableView = nil;
     self.refreshControl = nil;
+    self.reloadControl = nil;
     // ... nil any other IBOutlets
     [super viewDidUnload];
 }
@@ -684,7 +689,7 @@
     }
 
     for (DCGuild *guild in DCServerCommunicator.sharedInstance.guilds) {
-        for (DCChannel *channel in guild.channels) {
+        for (DCChannel *channel in [guild channelsSnapshot]) {
             if (![channel.snowflake isEqualToString:channelID]) continue;
 
             self.shouldAttemptColdChatRestore = NO;
@@ -732,7 +737,7 @@
     }
 
     for (DCGuild *guild in DCServerCommunicator.sharedInstance.guilds) {
-        for (DCChannel *channel in guild.channels) {
+        for (DCChannel *channel in [guild channelsSnapshot]) {
             if (![channel.snowflake isEqualToString:channelId]) {
                 continue;
             }
@@ -806,6 +811,61 @@
 // end of block
 
 // reload
+- (void)installMenuRefreshControls {
+    self.guildTableView.alwaysBounceVertical = YES;
+    self.channelTableView.alwaysBounceVertical = YES;
+    if (self.guildTableView && !self.refreshControl) {
+        UIRefreshControl *control = [[UIRefreshControl alloc] init];
+        control.attributedTitle = [[NSAttributedString alloc] initWithString:@"Reload"];
+        [control addTarget:self action:@selector(reconnect)
+          forControlEvents:UIControlEventValueChanged];
+        [self.guildTableView addSubview:control];
+        self.refreshControl = control;
+    }
+    if (self.channelTableView && !self.reloadControl) {
+        UIRefreshControl *control = [[UIRefreshControl alloc] init];
+        control.attributedTitle = [[NSAttributedString alloc] initWithString:@"Reload"];
+        [control addTarget:self action:@selector(reconnect)
+          forControlEvents:UIControlEventValueChanged];
+        [self.channelTableView addSubview:control];
+        self.reloadControl = control;
+    }
+}
+
+- (void)refreshTrayFromCanonicalState {
+    if (!self.isViewLoaded) return;
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self refreshTrayFromCanonicalState];
+        });
+        return;
+    }
+
+    DCServerCommunicator *communicator = DCServerCommunicator.sharedInstance;
+    if (self.selectedGuild) {
+        DCGuild *canonicalGuild = nil;
+        for (DCGuild *guild in communicator.guilds) {
+            if (guild == self.selectedGuild ||
+                (guild.snowflake.length &&
+                 [guild.snowflake isEqualToString:self.selectedGuild.snowflake]) ||
+                ([self isDirectMessagesGuild:guild] &&
+                 [self isDirectMessagesGuild:self.selectedGuild])) {
+                canonicalGuild = guild;
+                break;
+            }
+        }
+        if (canonicalGuild) self.selectedGuild = canonicalGuild;
+        else if (communicator.guilds.count)
+            self.selectedGuild = [communicator.guilds objectAtIndex:0];
+    } else if (communicator.guilds.count) {
+        self.selectedGuild = [communicator.guilds objectAtIndex:0];
+    }
+
+    [self synchronizeSelectedGuildUI];
+    [self reloadGuildTableFromCanonicalState];
+    [self reloadChannelTableForSelectedGuildRestoringScroll];
+}
+
 - (void)handleReady {
     dispatch_async(dispatch_get_main_queue(), ^{
         // Capture the visible channel anchor before READY replaces guild/channel
@@ -852,18 +912,9 @@
         [self reloadGuildTableFromCanonicalState];
         [self reloadChannelTableForSelectedGuildRestoringScroll];
 
-        if (!self.refreshControl) {
-            self.refreshControl = UIRefreshControl.new;
-
-            self.refreshControl.attributedTitle =
-                [[NSAttributedString alloc] initWithString:@"Reload"];
-
-            [self.guildTableView addSubview:self.refreshControl];
-
-            [self.refreshControl addTarget:self
-                                    action:@selector(reconnect)
-                          forControlEvents:UIControlEventValueChanged];
-        }
+        [self installMenuRefreshControls];
+        [self.refreshControl endRefreshing];
+        [self.reloadControl endRefreshing];
 
         [self attemptColdChatRestoreIfNeeded];
     });
@@ -881,7 +932,7 @@
     if (!channelId) return;
 
     for (DCGuild *guild in DCServerCommunicator.sharedInstance.guilds) {
-        for (DCChannel *channel in guild.channels) {
+        for (DCChannel *channel in [guild channelsSnapshot]) {
             if (![channel.snowflake isEqualToString:channelId]) continue;
 
             [self markColdChatRestoreHandled];
@@ -918,9 +969,18 @@
 }
 
 - (void)reloadGuild:(NSNotification *)notification {
-    assertMainThread();
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self reloadGuild:notification];
+        });
+        return;
+    }
     DCGuild *guild = notification.object;
-    if (guild == nil) return;
+    if (!guild) {
+        if (self.isViewLoaded && self.view.window)
+            [self reloadGuildTableFromCanonicalState];
+        return;
+    }
 
     // A folder-cache miss may have lazily requested this guild icon. A normal
     // RELOAD GUILD means the runtime asset/state changed, so allow future
@@ -999,9 +1059,16 @@
                                withRowAnimation:UITableViewRowAnimationNone];
 }
 
-- (void)updateStatusForUser:(DCUser *)updatedUser {
-    assertMainThread();
-    if (!updatedUser || ![updatedUser isKindOfClass:[DCUser class]] ||
+- (void)updateStatusForUser:(NSNotification *)notification {
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self updateStatusForUser:notification];
+        });
+        return;
+    }
+    DCUser *updatedUser = [notification.object isKindOfClass:[DCUser class]]
+        ? (DCUser *)notification.object : nil;
+    if (!updatedUser ||
         !updatedUser.snowflake.length) {
         return;
     }
@@ -1020,7 +1087,7 @@
     // cached channels whose recipient object has not been relinked yet.
     NSMutableArray *matchingRows = [NSMutableArray array];
     NSUInteger row = 0;
-    for (DCChannel *channel in privateGuild.channels) {
+    for (DCChannel *channel in [privateGuild channelsSnapshot]) {
         if (channel.type == DCChannelTypeDM) {
             BOOL referencesUser = [channel.recipientIDs containsObject:updatedUser.snowflake];
             DCUser *buddy = [self directMessageBuddyForChannel:channel];
@@ -1063,16 +1130,17 @@
 }
 
 - (void)reloadTable {
-    [self handleMessageAck:nil];
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [self.reloadControl endRefreshing];
-    });
+    [self reconnect];
 }
 
 - (void)reconnect {
-    [DCServerCommunicator.sharedInstance reconnect];
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [self.refreshControl endRefreshing];
+    [DCServerCommunicator.sharedInstance refreshWithFreshReady];
+    // End on READY. Also release the gesture if the network is unavailable.
+    __weak DCMenuViewController *weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(45.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        [weakSelf.refreshControl endRefreshing];
+        [weakSelf.reloadControl endRefreshing];
     });
 }
 
@@ -1190,26 +1258,30 @@
     }
     if (viewingDMs && changedSelectedDM) {
         BOOL needsReorder = NO;
-        NSString *previousMessageID = nil;
-        for (DCChannel *channel in self.selectedGuild.channels) {
-            NSString *messageID = [channel.lastMessageId isKindOfClass:[NSString class]]
-                ? channel.lastMessageId : @"0";
-            if (previousMessageID &&
-                [previousMessageID localizedStandardCompare:messageID] == NSOrderedAscending) {
-                needsReorder = YES;
-                break;
+        @synchronized (self.selectedGuild) {
+            NSString *previousMessageID = nil;
+            for (DCChannel *channel in self.selectedGuild.channels) {
+                NSString *messageID = [channel.lastMessageId isKindOfClass:[NSString class]]
+                    ? channel.lastMessageId : @"0";
+                if (previousMessageID &&
+                    [previousMessageID localizedStandardCompare:messageID] == NSOrderedAscending) {
+                    needsReorder = YES;
+                    break;
+                }
+                previousMessageID = messageID;
             }
-            previousMessageID = messageID;
+            if (needsReorder) {
+                [self.selectedGuild.channels
+                    sortUsingComparator:^NSComparisonResult(DCChannel *a, DCChannel *b) {
+                        NSString *idA = [a.lastMessageId isKindOfClass:[NSString class]]
+                            ? a.lastMessageId : @"0";
+                        NSString *idB = [b.lastMessageId isKindOfClass:[NSString class]]
+                            ? b.lastMessageId : @"0";
+                        return [idB localizedStandardCompare:idA];
+                    }];
+            }
         }
         if (needsReorder) {
-            [self.selectedGuild.channels
-                sortUsingComparator:^NSComparisonResult(DCChannel *a, DCChannel *b) {
-                    NSString *idA = [a.lastMessageId isKindOfClass:[NSString class]]
-                        ? a.lastMessageId : @"0";
-                    NSString *idB = [b.lastMessageId isKindOfClass:[NSString class]]
-                        ? b.lastMessageId : @"0";
-                    return [idB localizedStandardCompare:idA];
-                }];
             [self.channelTableView reloadData];
             return;
         }
@@ -1240,10 +1312,8 @@
 // their default Direct Messages text at that point.
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
-
-    [self synchronizeSelectedGuildUI];
-    [self reloadGuildTableFromCanonicalState];
-    [self reloadChannelTableForSelectedGuildRestoringScroll];
+    [self installMenuRefreshControls];
+    [self refreshTrayFromCanonicalState];
 }
 
 - (void)viewDidAppear:(BOOL)animated {

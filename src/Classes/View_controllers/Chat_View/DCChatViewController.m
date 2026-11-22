@@ -1889,6 +1889,8 @@ static dispatch_queue_t chat_presentation_queue;
              forBarMetrics:UIBarMetricsDefault];
     [self.nbbar setBackgroundImage:navigationBackground
                      forBarMetrics:UIBarMetricsDefault];
+    [DCInterfaceStyle applyNavigationTitleStyleToBar:self.navigationController.navigationBar];
+    [DCInterfaceStyle applyNavigationTitleStyleToBar:self.nbbar];
 
     [self activateSelectedChannel];
 }
@@ -6324,7 +6326,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
             cell.configuredLayout = nil;
             cellPerfCleanupStart = CFAbsoluteTimeGetCurrent();
             // cleanup loop
-            for (UIView *subView in cell.subviews) {
+            for (UIView *subView in [NSArray arrayWithArray:cell.subviews]) {
                 @autoreleasepool {
                     if ([subView isKindOfClass:[DCChatGifAttachment class]]) {
                         [(DCChatGifAttachment *)subView releaseThumbnailForResidency];

@@ -29,6 +29,7 @@ static void DCThemeBarButton(UIBarButtonItem *button) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
+    [DCInterfaceStyle applyNavigationTitleStyleToBar:self.navigationController.navigationBar];
     self.experimentalToggle.on = [[NSUserDefaults standardUserDefaults] boolForKey:@"experimentalMode"];
     self.dataSaverToggle.on    = [[NSUserDefaults standardUserDefaults] boolForKey:@"dataSaver"];
     self.developerLoggingToggle.on = [[NSUserDefaults standardUserDefaults] boolForKey:@"developerConsoleLogging"];
