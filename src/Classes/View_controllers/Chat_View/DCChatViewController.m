@@ -9,6 +9,9 @@
 #import "DCInterfaceStyle.h"
 #import "DCActionSheetPresenter.h"
 #import "DCChatViewController.h"
+#import "DCPinnedMessagesViewController.h"
+#import "DCThreadsViewController.h"
+#import "DCChatMessageRenderer.h"
 #import "DCConnectionPopup.h"
 #import "DCTypingIndicatorView.h"
 #include <dispatch/dispatch.h>
@@ -57,12 +60,8 @@
 #import "DCMessageLayoutBuilder.h"
 #import "DCIPadSplitViewController.h"
 
-@interface DCChatReferencePresentation : NSObject
-@property (nonatomic, copy) NSString *sourceText;
-@property (nonatomic, retain) NSAttributedString *attributedText;
-@end
-
-@implementation DCChatReferencePresentation
+@interface DCServerCommunicator (DCThreadRegistration)
+- (void)handleChannelCreateWithData:(NSDictionary *)data;
 @end
 
 @interface DCPendingAttachmentUpload : NSObject
@@ -75,10 +74,18 @@
 @implementation DCPendingAttachmentUpload
 @end
 
-@interface DCChatViewController () <DCTypingIndicatorViewDelegate>
+@interface DCChatViewController () <DCTypingIndicatorViewDelegate, DCChatMessageRenderingContext>
 @property (nonatomic, readonly) NSMutableArray *messages;
 @property (strong, nonatomic) DCMessageLayoutBuilder *messageLayoutBuilder;
 @property (nonatomic, strong) DCChannelWindow *currentWindow;
+@property (nonatomic, assign) BOOL readOnlyMessageListMode;
+@property (nonatomic, strong) DCChannel *readOnlyMessageListChannel;
+@property (nonatomic, strong) DCChannel *displayedMessageChannel;
+@property (nonatomic, strong) DCChatMessageRenderer *messageRenderer;
+@property (nonatomic, strong) UIBarButtonItem *pinnedMessagesButton;
+@property (nonatomic, strong) UIBarButtonItem *threadsButton;
+@property (nonatomic, strong) UIBarButtonItem *notificationsButton;
+@property (nonatomic, strong) DCCInfoViewController *experimentalMemberListController;
 @property (assign, nonatomic) NSUInteger numberOfMessagesLoaded;
 @property (strong, nonatomic) UIImage *selectedImage;
 @property (strong, nonatomic) DCMessage *selectedImageMessage;
@@ -168,6 +175,14 @@
 @property (nonatomic, assign) BOOL composerHasPendingEditOffset;
 @property (nonatomic, retain) ALAssetsLibrary *attachmentAssetLibrary;
 - (void)resetTypingIndicatorForChannelChange;
+- (void)configureReadOnlyMessageListView;
+- (void)configureMessageListActionForCell:(DCChatTableCell *)cell layoutHeight:(CGFloat)height;
+- (void)tappedMessageListAction:(UIButton *)sender;
+- (void)handlePinnedMessageJump:(NSNotification *)notification;
+- (void)handleThreadOpenRequest:(NSNotification *)notification;
+- (void)showThreads:(id)sender;
+- (void)configureExperimentalMemberNavigation;
+- (void)showPinnedMessages:(id)sender;
 - (void)setupJumpToPresentButton;
 - (void)updateJumpToPresentButtonFrame;
 - (void)updateJumpToPresentButtonVisibility;
@@ -254,22 +269,17 @@ CGFloat _baseInputOriginY;
 
 static const CGFloat DCPendingAttachmentCellHeight = 53.0f;
 static const CGFloat DCForwardedContentInset = 10.0f;
-static const CGFloat DCForwardedHeaderHeight = 16.0f;
-static const CGFloat DCForwardedVerticalInset = 18.0f;
 static const CGFloat DCForwardedSourceFooterHeight = 30.0f;
 static const CGFloat DCChatBodyOriginX = 55.0f;
-static const NSInteger DCForwardedLineTag = 9472;
-static const NSInteger DCForwardedHeaderTag = 9473;
 static const NSInteger DCForwardedSourceTag = 9474;
 static const NSInteger DCForwardedSourceIconTag = 9475;
 static const NSInteger DCForwardedSourceNameTag = 9476;
 static const NSInteger DCForwardedSourceTimestampTag = 9477;
 static const NSInteger DCMessageJumpHighlightTag = 9478;
+static const NSInteger DCMessageListActionButtonTag = 9488;
+static const CGFloat DCMessageListActionButtonHeight = 30.0f;
+static const CGFloat DCMessageListActionRowPadding = 40.0f;
 
-static UIFont *DCForwardedHeaderFont(void) {
-    UIFont *font = [UIFont fontWithName:@"HelveticaNeue-BoldItalic" size:12.0f];
-    return font ?: [UIFont boldSystemFontOfSize:12.0f];
-}
 
 static BOOL DCForwardedSourceContext(DCMessage *message,
                                       DCGuild **guildOut,
@@ -311,61 +321,6 @@ static BOOL DCForwardedSourceContext(DCMessage *message,
     return YES;
 }
 
-static void DCConfigureForwardedCellChrome(DCChatTableCell *cell,
-                                           DCMessage *message,
-                                           DCMessageLayout *layout,
-                                           CGFloat tableWidth,
-                                           UIColor *headerColor) {
-    UIView *line = [cell.contentView viewWithTag:DCForwardedLineTag];
-    UILabel *forwardedHeader = (UILabel *)[cell.contentView viewWithTag:DCForwardedHeaderTag];
-
-    cell.profileImage.hidden = NO;
-    cell.avatarDecoration.hidden = NO;
-    cell.timestampLabel.hidden = NO;
-    cell.authorLabel.hidden = NO;
-    cell.authorLabel.font = [UIFont boldSystemFontOfSize:15.0f];
-    CGRect authorFrame = cell.authorLabel.frame;
-    authorFrame.origin.x = DCChatBodyOriginX;
-    cell.authorLabel.frame = authorFrame;
-
-    if (!message.isForwarded) {
-        if (line) line.hidden = YES;
-        if (forwardedHeader) forwardedHeader.hidden = YES;
-        return;
-    }
-
-    if (!line) {
-        line = [[UIView alloc] initWithFrame:CGRectZero];
-        line.tag = DCForwardedLineTag;
-        line.userInteractionEnabled = NO;
-        [cell.contentView addSubview:line];
-    }
-    line.hidden = NO;
-    line.backgroundColor = headerColor;
-
-    if (!forwardedHeader) {
-        forwardedHeader = [[UILabel alloc] initWithFrame:CGRectZero];
-        forwardedHeader.tag = DCForwardedHeaderTag;
-        forwardedHeader.backgroundColor = [UIColor clearColor];
-        forwardedHeader.userInteractionEnabled = NO;
-        forwardedHeader.font = DCForwardedHeaderFont();
-        forwardedHeader.text = @"↪ Forwarded";
-        [cell.contentView addSubview:forwardedHeader];
-    }
-    forwardedHeader.hidden = NO;
-    forwardedHeader.textColor = headerColor;
-    forwardedHeader.font = DCForwardedHeaderFont();
-    forwardedHeader.text = @"↪ Forwarded";
-    forwardedHeader.frame = CGRectMake(DCChatBodyOriginX + DCForwardedContentInset,
-                                       28.0f,
-                                       MAX(0.0f, tableWidth - DCChatBodyOriginX
-                                           - DCForwardedContentInset - 8.0f),
-                                       DCForwardedHeaderHeight);
-
-    CGFloat lineY = 28.0f;
-    CGFloat lineHeight = MAX(2.0f, layout.height - lineY - 7.0f);
-    line.frame = CGRectMake(DCChatBodyOriginX, lineY, 3.0f, lineHeight);
-}
 
 static NSString *DCMimeTypeForAttachmentExtension(NSString *extension, NSString *assetType) {
     NSString *lowercase = [extension lowercaseString];
@@ -1549,8 +1504,7 @@ static dispatch_queue_t chat_presentation_queue;
 
     if (!self.emptyChatLoadingView) return;
 
-    BOOL hasChannel =
-        DCServerCommunicator.sharedInstance.selectedChannel.snowflake.length > 0;
+    BOOL hasChannel = [self messageRenderingChannel].snowflake.length > 0;
     BOOL isLoading = self.loadingOlderMessages || self.loadingNewerMessages;
     BOOL shouldShow = hasChannel &&
         _currentWindow.messages.count == 0 &&
@@ -1813,7 +1767,9 @@ static dispatch_queue_t chat_presentation_queue;
 // Point the controller at the window for whatever channel is now selected.
 // Called at every channel-entry point so the cached window can't go stale.
 - (void)syncWindowForSelectedChannel {
-    NSString *cid = DCServerCommunicator.sharedInstance.selectedChannel.snowflake;
+    DCChannel *channel = DCServerCommunicator.sharedInstance.selectedChannel;
+    NSString *cid = channel.snowflake;
+    self.displayedMessageChannel = channel;
     self.currentWindow = cid ? [[DCMessageStore sharedInstance] windowForChannel:cid] : nil;
     [self.referencePresentationCache removeAllObjects];
     self.presentationRunwayPrewarmPending = NO;
@@ -1884,6 +1840,8 @@ static dispatch_queue_t chat_presentation_queue;
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
 
+    if (self.readOnlyMessageListMode) return;
+
     [self updateIPadPortraitSidebarButton];
 
     [[UIApplication sharedApplication] setStatusBarHidden:NO];
@@ -1900,9 +1858,30 @@ static dispatch_queue_t chat_presentation_queue;
     [self activateSelectedChannel];
 }
 
+- (void)configureExperimentalMemberNavigation {
+    if (![[NSUserDefaults standardUserDefaults] boolForKey:@"experimentalMode"]) return;
+
+    APLSlideMenuViewController *slideMenu = self.slideMenuController;
+    if (!slideMenu) return;
+
+    UIViewController *rightMenu = slideMenu.rightMenuViewController;
+    if ([rightMenu isKindOfClass:[DCCInfoViewController class]]) {
+        self.experimentalMemberListController = (DCCInfoViewController *)rightMenu;
+        slideMenu.rightMenuViewController = nil;
+    }
+
+    slideMenu.gestureSupport = APLSlideMenuGestureSupportDrag;
+}
+
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
 
+    if (self.readOnlyMessageListMode) {
+        [self updateVisibleChatMediaResidency];
+        return;
+    }
+
+    [self configureExperimentalMemberNavigation];
     [self acknowledgeNewestMessageIfFollowingLiveTail];
 
     BOOL experimentalMode =
@@ -2057,6 +2036,7 @@ static dispatch_queue_t chat_presentation_queue;
 
     if ([[NSUserDefaults standardUserDefaults] boolForKey:@"experimentalMode"]) {
         self.slideMenuController.bouncing = YES;
+        self.slideMenuController.view.backgroundColor = [UIColor blackColor];
         self.slideMenuController.gestureSupport =
             APLSlideMenuGestureSupportDrag;
         self.slideMenuController.separatorColor = [UIColor grayColor];
@@ -2293,10 +2273,61 @@ static dispatch_queue_t chat_presentation_queue;
     [self setupEmptyChatLoadingIndicator];
     [self setupMessageEdgeLoadingIndicators];
     [self setupJumpToPresentButton];
+
+    if (self.readOnlyMessageListMode) {
+        [self configureReadOnlyMessageListView];
+    } else {
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(handlePinnedMessageJump:)
+                                                     name:@"DCPinnedMessageJumpRequested"
+                                                   object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(handleThreadOpenRequest:)
+                                                     name:@"DCThreadOpenRequested"
+                                                   object:nil];
+        if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPad) {
+            self.pinnedMessagesButton = [[UIBarButtonItem alloc]
+                initWithTitle:@"Pins" style:UIBarButtonItemStyleBordered
+                       target:self action:@selector(showPinnedMessages:)];
+            [self.pinnedMessagesButton
+                setBackgroundImage:[DCInterfaceStyle barButtonBackgroundImage]
+                            forState:UIControlStateNormal
+                          barMetrics:UIBarMetricsDefault];
+            [self.pinnedMessagesButton
+                setBackgroundImage:[DCInterfaceStyle barButtonPressedBackgroundImage]
+                            forState:UIControlStateHighlighted
+                          barMetrics:UIBarMetricsDefault];
+            self.threadsButton = [[UIBarButtonItem alloc]
+                initWithTitle:@"Threads" style:UIBarButtonItemStyleBordered
+                       target:self action:@selector(showThreads:)];
+            self.notificationsButton = [[UIBarButtonItem alloc]
+                initWithTitle:@"Notifications" style:UIBarButtonItemStyleBordered
+                       target:nil action:NULL];
+            NSArray *additionalItems = @[self.threadsButton, self.notificationsButton];
+            for (UIBarButtonItem *item in additionalItems) {
+                [item setBackgroundImage:[DCInterfaceStyle barButtonBackgroundImage]
+                               forState:UIControlStateNormal
+                             barMetrics:UIBarMetricsDefault];
+                [item setBackgroundImage:[DCInterfaceStyle barButtonPressedBackgroundImage]
+                               forState:UIControlStateHighlighted
+                             barMetrics:UIBarMetricsDefault];
+            }
+            self.notificationsButton.enabled = NO;
+            if (self.memberButton) {
+                self.navigationItem.rightBarButtonItems =
+                    @[self.memberButton, self.pinnedMessagesButton,
+                      self.notificationsButton, self.threadsButton];
+            }
+        }
+    }
 }
 
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
+    if (self.readOnlyMessageListMode) {
+        self.chatTableView.frame = self.view.bounds;
+        return;
+    }
     for (CALayer *layer in self.toolbar.layer.sublayers) {
         if ([layer isKindOfClass:[CAGradientLayer class]]) {
             layer.frame = CGRectMake(0, -3, self.toolbar.bounds.size.width, 3);
@@ -2307,6 +2338,200 @@ static dispatch_queue_t chat_presentation_queue;
     [self layoutEmptyChatLoadingIndicator];
     [self layoutMessageEdgeLoadingIndicators];
     [self updateMessageEdgeLoadingIndicators];
+}
+
+#pragma mark - Reusable read-only message list
+
+- (DCChatMessageRenderer *)messageRenderer {
+    if (!_messageRenderer) {
+        _messageRenderer = [[DCChatMessageRenderer alloc] init];
+    }
+    return _messageRenderer;
+}
+
+- (DCChannel *)messageRenderingChannel {
+    if (self.readOnlyMessageListMode) return self.readOnlyMessageListChannel;
+
+    NSString *windowID = _currentWindow.channelSnowflake;
+    if (self.displayedMessageChannel.snowflake.length &&
+        (!windowID.length || [self.displayedMessageChannel.snowflake isEqualToString:windowID])) {
+        return self.displayedMessageChannel;
+    }
+
+    DCChannel *selected = DCServerCommunicator.sharedInstance.selectedChannel;
+    if (!windowID.length || [selected.snowflake isEqualToString:windowID]) {
+        return selected;
+    }
+    return [DCServerCommunicator.sharedInstance.channels objectForKey:windowID];
+}
+
+- (DCGuild *)messageRenderingGuild {
+    return [self messageRenderingChannel].parentGuild;
+}
+
+- (void)configureReadOnlyMessageListForChannel:(DCChannel *)channel {
+    if (!channel.snowflake.length) return;
+    self.readOnlyMessageListChannel = channel;
+    self.displayedMessageChannel = channel;
+    self.readOnlyMessageListMode = YES;
+    DCChannelWindow *window = [[DCChannelWindow alloc]
+        initWithChannelSnowflake:channel.snowflake];
+    window.hasMoreBefore = NO;
+    window.hasMoreAfter = NO;
+    self.currentWindow = window;
+}
+
+- (void)setReadOnlyMessages:(NSArray *)messages {
+    NSAssert([NSThread isMainThread], @"Message lists must update on main thread");
+    if (!self.readOnlyMessageListMode) return;
+    [self.currentWindow.messages setArray:messages ?: @[]];
+    if (self.isViewLoaded) {
+        [self.chatTableView reloadData];
+        [self updateVisibleChatMediaResidency];
+    }
+}
+
+- (void)refreshReadOnlyMessage:(DCMessage *)message {
+    NSAssert([NSThread isMainThread], @"Read-only message refresh must run on main thread");
+    if (!self.readOnlyMessageListMode || !self.isViewLoaded || !message) return;
+
+    if (message.snowflake.length) {
+        [self.referencePresentationCache removeObjectForKey:message.snowflake];
+    }
+    NSUInteger index = [self.messages indexOfObjectIdenticalTo:message];
+    if (index == NSNotFound) return;
+
+    NSIndexPath *path = [NSIndexPath indexPathForRow:[self rowForModelIndex:index]
+                                             inSection:0];
+    DCChatTableCell *cell = (DCChatTableCell *)[self.chatTableView cellForRowAtIndexPath:path];
+    if (!cell || [self.chatTableView numberOfRowsInSection:0] != (NSInteger)self.messages.count) {
+        return;
+    }
+    cell.configuredLayout = nil;
+    [self.chatTableView reloadRowsAtIndexPaths:@[path]
+                             withRowAnimation:UITableViewRowAnimationNone];
+}
+
+- (void)configureReadOnlyMessageListView {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(emojiImageReady:)
+                                                 name:@"EMOJI IMAGE READY"
+                                               object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(handleReloadUser:)
+                                                 name:@"RELOAD USER DATA"
+                                               object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(handleReloadMessage:)
+                                                 name:@"RELOAD MESSAGE DATA"
+                                               object:nil];
+    self.toolbar.hidden = YES;
+    self.typingIndicator.hidden = YES;
+    self.jumpToPresentButton.hidden = YES;
+    self.chatTableView.frame = self.view.bounds;
+    self.chatTableView.autoresizingMask =
+        UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    self.chatTableView.scrollsToTop = YES;
+}
+
+- (void)showPinnedMessages:(id)sender {
+    [DCPinnedMessagesViewController presentForChannel:
+        DCServerCommunicator.sharedInstance.selectedChannel
+                                      fromController:self
+                                 sourceBarButtonItem:self.pinnedMessagesButton];
+}
+
+- (void)showThreads:(id)sender {
+    [DCThreadsViewController presentForChannel:
+        DCServerCommunicator.sharedInstance.selectedChannel fromController:self];
+}
+
+- (void)handleThreadOpenRequest:(NSNotification *)notification {
+    if (self.readOnlyMessageListMode || !self.isViewLoaded) return;
+    BOOL membersOnTop = [self.navigationController.topViewController
+        isKindOfClass:[DCCInfoViewController class]];
+    if (!self.view.window && !membersOnTop) return;
+    NSDictionary *payload = [notification.userInfo objectForKey:@"thread"];
+    if (![payload isKindOfClass:[NSDictionary class]]) return;
+    NSString *channelID = [payload objectForKey:@"id"];
+    if (![channelID isKindOfClass:[NSString class]] || !channelID.length) return;
+
+    DCServerCommunicator *communicator = DCServerCommunicator.sharedInstance;
+    [communicator handleChannelCreateWithData:payload];
+    DCChannel *thread = [communicator.channels objectForKey:channelID];
+    if (!thread) return;
+    thread.readable = YES;
+
+    if (membersOnTop) {
+        [self.navigationController popToViewController:self animated:NO];
+        if (self.experimentalMemberListController) [self configureExperimentalMemberNavigation];
+    }
+    if (self.slideMenuController.isMenuViewVisible) {
+        [self.slideMenuController hideMenu:NO];
+    }
+    [self navigateToChannel:thread];
+}
+
+- (void)configureMessageListActionForCell:(DCChatTableCell *)cell layoutHeight:(CGFloat)height {
+    if (!cell || !self.messageCellActionTitle.length) return;
+    UIButton *button = (UIButton *)[cell.contentView viewWithTag:DCMessageListActionButtonTag];
+    if (!button) {
+        button = [UIButton buttonWithType:UIButtonTypeCustom];
+        button.tag = DCMessageListActionButtonTag;
+        button.titleLabel.font = [UIFont boldSystemFontOfSize:13.0f];
+        [button setBackgroundImage:[[DCInterfaceStyle barButtonBackgroundImage]
+                                    stretchableImageWithLeftCapWidth:5 topCapHeight:14]
+                          forState:UIControlStateNormal];
+        [button setBackgroundImage:[[DCInterfaceStyle barButtonPressedBackgroundImage]
+                                    stretchableImageWithLeftCapWidth:5 topCapHeight:14]
+                          forState:UIControlStateHighlighted];
+        [button addTarget:self action:@selector(tappedMessageListAction:)
+         forControlEvents:UIControlEventTouchUpInside];
+        [cell.contentView addSubview:button];
+    }
+    [button setTitle:self.messageCellActionTitle forState:UIControlStateNormal];
+    CGFloat cellWidth = CGRectGetWidth(cell.contentView.bounds);
+    CGFloat buttonWidth = MIN(160.0f, MAX(0.0f, cellWidth - 20.0f));
+    button.frame = CGRectMake(floorf((cellWidth - buttonWidth) / 2.0f),
+                              height + 5.0f, buttonWidth, DCMessageListActionButtonHeight);
+    button.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin |
+                              UIViewAutoresizingFlexibleRightMargin;
+    button.hidden = NO;
+}
+
+- (void)tappedMessageListAction:(UIButton *)sender {
+    if (!self.messageCellActionHandler) return;
+    UIView *view = sender;
+    while (view && ![view isKindOfClass:[DCChatTableCell class]]) view = view.superview;
+    if (!view) return;
+    NSIndexPath *path = [self.chatTableView indexPathForCell:(DCChatTableCell *)view];
+    if (!path) return;
+    NSInteger index = [self modelIndexForRow:path.row];
+    if (index < 0 || index >= (NSInteger)self.messages.count) return;
+    self.messageCellActionHandler([self.messages objectAtIndex:index]);
+}
+
+- (void)handlePinnedMessageJump:(NSNotification *)notification {
+    if (self.readOnlyMessageListMode || !self.isViewLoaded) return;
+
+    BOOL membersOnTop = self.experimentalMemberListController &&
+        self.navigationController.topViewController == self.experimentalMemberListController;
+    if (!self.view.window && !membersOnTop) return;
+
+    NSString *messageID = [notification.userInfo objectForKey:@"messageID"];
+    NSString *channelID = [notification.userInfo objectForKey:@"channelID"];
+    NSString *guildID = [notification.userInfo objectForKey:@"guildID"];
+    if (!messageID.length || !channelID.length) return;
+
+    if (membersOnTop) {
+        [self.navigationController popToViewController:self animated:NO];
+        [self configureExperimentalMemberNavigation];
+    }
+    if (self.slideMenuController.isMenuViewVisible) {
+        [self.slideMenuController hideMenu:NO];
+    }
+    [self jumpToMessageID:messageID channelID:channelID guildID:guildID];
 }
 
 - (void)setupJumpToPresentButton {
@@ -3329,6 +3554,7 @@ static dispatch_queue_t chat_presentation_queue;
     if (!self.chatTableView) return;
 
     DCUser *user = notification.object;
+    DCGuild *renderingGuild = [self messageRenderingGuild];
     for (int i = 0; i < self.messages.count; i++) {
         DCMessage *message = [self.messages objectAtIndex:i];
         BOOL authorMatches = [message.author.snowflake isEqualToString:user.snowflake];
@@ -3346,12 +3572,12 @@ static dispatch_queue_t chat_presentation_queue;
             DCMessageLayout *layout = [self layoutForModelIndex:i];
             if (!layout.grouped) {
                 NSString *displayName = [user displayNameInGuild:
-                    DCServerCommunicator.sharedInstance.selectedChannel.parentGuild];
+                    renderingGuild];
                 if (displayName) {
                     cell.authorLabel.text = displayName;
                     cell.authorLabel.textColor =
                         [DCInterfaceStyle roleColorForUser:user
-                                                  inGuild:DCServerCommunicator.sharedInstance.selectedChannel.parentGuild];
+                                                  inGuild:renderingGuild];
                 }
             }
         }
@@ -3359,7 +3585,7 @@ static dispatch_queue_t chat_presentation_queue;
             cell.referencedProfileImage.image = [self avatarImageForUser:user];
             cell.referencedAuthorLabel.textColor =
                 [DCInterfaceStyle roleColorForUser:user
-                                          inGuild:DCServerCommunicator.sharedInstance.selectedChannel.parentGuild];
+                                          inGuild:renderingGuild];
         }
     }
 }
@@ -5636,8 +5862,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 - (UIImage *)avatarImageForUser:(DCUser *)user {
     if (!user) return nil;
 
-    DCGuild *guild =
-        DCServerCommunicator.sharedInstance.selectedChannel.parentGuild;
+    DCGuild *guild = [self messageRenderingGuild];
     UIImage *guildAvatar = [DCTools cachedUserAvatar:user inGuild:guild];
     return guildAvatar ?: user.profileImage;
 }
@@ -5645,8 +5870,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 - (void)ensureAvatarForUser:(DCUser *)user {
     if (!user || !user.snowflake.length) return;
 
-    DCGuild *guild =
-        DCServerCommunicator.sharedInstance.selectedChannel.parentGuild;
+    DCGuild *guild = [self messageRenderingGuild];
     if (![DCTools cachedUserAvatar:user inGuild:guild]) {
         [DCTools getUserAvatar:user inGuild:guild];
     }
@@ -6051,744 +6275,22 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
         separator.transform = CGAffineTransformMakeScale(1, -1);
         return separator;
     }
-    DCChatTableCell *cell;
-
-    @autoreleasepool {
-        NSInteger messageIndex = [self modelIndexForRow:indexPath.row];
-        if (!self.messages || messageIndex < 0 ||
-            messageIndex >= (NSInteger)self.messages.count) {
-            NSCAssert(NO, @"Invalid message row");
-            return nil;
-        }
-        DCMessage *messageAtRowIndex = self.messages[messageIndex];
-
-        if (self.oldMode) {
-        } else {
-            NSInteger modelIndex = [self modelIndexForRow:indexPath.row];
-            DCMessageLayout *layout = [self layoutForModelIndex:modelIndex];
-            if (!layout) {
-                return [tableView dequeueReusableCellWithIdentifier:@"Message Cell"];
-            }
-            CFAbsoluteTime cellPerfStart = CFAbsoluteTimeGetCurrent();
-            CFAbsoluteTime cellPerfContentStart = 0;
-            CFAbsoluteTime cellPerfContentEnd = 0;
-            CFAbsoluteTime cellPerfAttachmentsStart = 0;
-            CFAbsoluteTime cellPerfAttachmentsEnd = 0;
-            CFAbsoluteTime cellPerfDequeueStart = 0;
-            CFAbsoluteTime cellPerfDequeueEnd = 0;
-            CFAbsoluteTime cellPerfAvatarStart = 0;
-            CFAbsoluteTime cellPerfAvatarEnd = 0;
-            CFAbsoluteTime cellPerfCleanupStart = 0;
-            CFAbsoluteTime cellPerfCleanupEnd = 0;
-            CFAbsoluteTime cellPerfReferenceParseStart = 0;
-            CFAbsoluteTime cellPerfReferenceParseEnd = 0;
-            NSTimeInterval cellPerfReferenceBindTime = 0;
-            CFAbsoluteTime cellPerfHeaderStart = 0;
-            CFAbsoluteTime cellPerfHeaderEnd = 0;
-            CFAbsoluteTime cellPerfPostContentStart = 0;
-            CFAbsoluteTime cellPerfPostContentEnd = 0;
-            static UIColor *replyHighlightColor = nil;
-            static UIColor *pingColor = nil;
-            static UIColor *normalColor = nil;
-            static UIColor *referenceColor = nil;
-            static dispatch_once_t onceToken;
-            dispatch_once(&onceToken, ^{
-                replyHighlightColor = [UIColor colorWithRed:55/255.0f green:59/255.0f blue:64/255.0f alpha:1.0f];
-                pingColor           = [UIColor colorWithRed:46/255.0f green:45/255.0f blue:40/255.0f alpha:1.0f];
-                normalColor         = [UIColor colorWithRed:40/255.0f green:41/255.0f blue:46/255.0f alpha:1.0f];
-                referenceColor      = [UIColor colorWithRed:128/255.0f green:128/255.0f blue:128/255.0f alpha:1.0f];
-            });
-
-            cellPerfDequeueStart = CFAbsoluteTimeGetCurrent();
-            cell = (DCChatTableCell *)[tableView dequeueReusableCellWithIdentifier:layout.reuseIdentifier];
-            cellPerfDequeueEnd = CFAbsoluteTimeGetCurrent();
-
-            UIView *oldJumpHighlight = [cell viewWithTag:DCMessageJumpHighlightTag];
-            [oldJumpHighlight removeFromSuperview];
-
-            cell.transform =
-                CGAffineTransformMakeScale(1.0f, -1.0f);
-
-            BOOL sameMessage =
-                cell.messageSnowflake.length &&
-                [cell.messageSnowflake
-                    isEqualToString:messageAtRowIndex.snowflake];
-
-            BOOL sameLayout =
-                cell.configuredLayout == layout;
-
-            BOOL isReplyTarget =
-                self.replyingToMessage &&
-                [self.replyingToMessage.snowflake isEqualToString:messageAtRowIndex.snowflake];
-
-            BOOL isEditTarget =
-                self.editingMessage &&
-                [self.editingMessage.snowflake isEqualToString:messageAtRowIndex.snowflake];
-
-            // Make the cells append avatars themselves
-            cellPerfAvatarStart = CFAbsoluteTimeGetCurrent();
-            [self ensureAvatarForUser:messageAtRowIndex.author];
-
-            DCMessage *reference = messageAtRowIndex.referencedMessage;
-
-            BOOL referenceResolved = reference && reference.author &&
-                (messageAtRowIndex.referencedMessageState ==
-                    DCMessageReferenceStateResolved ||
-                 messageAtRowIndex.referencedMessageState ==
-                    DCMessageReferenceStateNone);
-
-            if (reference.author) {
-                [self ensureAvatarForUser:reference.author];
-            }
-            cellPerfAvatarEnd = CFAbsoluteTimeGetCurrent();
-
-            DCConfigureForwardedCellChrome(cell,
-                                           messageAtRowIndex,
-                                           layout,
-                                           self.chatTableView.width,
-                                           cell.timestampLabel.textColor ?: referenceColor);
-
-            [self configureForwardSourceTagForCell:cell
-                                              message:messageAtRowIndex
-                                               layout:layout
-                                           tableWidth:self.chatTableView.width
-                                                color:cell.timestampLabel.textColor ?: referenceColor];
-
-            /*
-             * Fast path:
-             * If this reusable cell is already configured for this exact message and
-             * layout, refresh lightweight volatile fields only and skip the expensive
-             * markdown/layout/image attachment rebuild.
-             */
-            if (sameMessage && sameLayout && !isReplyTarget && !isEditTarget) {
-                cell.profileImage.image = [self avatarImageForUser:messageAtRowIndex.author];
-
-                DCGuild *guild =
-                    DCServerCommunicator.sharedInstance.selectedChannel.parentGuild;
-
-                if (!layout.grouped) {
-                    cell.authorLabel.text =
-                        [messageAtRowIndex.author displayNameInGuild:guild];
-                    cell.authorLabel.textColor =
-                        [DCInterfaceStyle roleColorForUser:messageAtRowIndex.author inGuild:guild];
-                }
-
-                if (messageAtRowIndex.referencedMessage) {
-                    cell.referencedProfileImage.image =
-                        [self avatarImageForUser:messageAtRowIndex.referencedMessage.author];
-
-                    if (layout.hasReference) {
-                        cell.referencedAuthorLabel.text =
-                            [messageAtRowIndex.referencedMessage.author
-                                displayNameInGuild:guild];
-                        cell.referencedAuthorLabel.textColor =
-                            [DCInterfaceStyle roleColorForUser:messageAtRowIndex.referencedMessage.author
-                                                      inGuild:guild];
-                    }
-                } else {
-                    cell.referencedProfileImage.image = nil;
-                    cell.referencedAuthorLabel.text = nil;
-                }
-
-                /*
-                 * A cell may have been fully rebuilt while it was the active
-                 * reply/edit target.  Once that state clears, the same-message
-                 * fast path must also restore its steady-state background or it
-                 * can retain the old highlight indefinitely.
-                 */
-                cell.contentView.backgroundColor =
-                    messageAtRowIndex.pingingUser ? pingColor : normalColor;
-
-                // Preserve the visible media view's hydrated thumbnail.
-                return cell;
-            }
-            cell.configuredLayout = nil;
-            cellPerfCleanupStart = CFAbsoluteTimeGetCurrent();
-            // cleanup loop
-            for (UIView *subView in [NSArray arrayWithArray:cell.subviews]) {
-                @autoreleasepool {
-                    if ([subView isKindOfClass:[DCChatGifAttachment class]]) {
-                        [(DCChatGifAttachment *)subView releaseThumbnailForResidency];
-                        [subView removeFromSuperview];
-                    } else if ([subView isKindOfClass:[UILazyImageView class]]) {
-                        [(UILazyImageView *)subView releaseChatThumbnailForResidency];
-                        [subView removeFromSuperview];
-                    } else if ([subView isKindOfClass:[DCChatVideoAttachment class]]) {
-                        [(DCChatVideoAttachment *)subView releaseThumbnailForResidency];
-                        [subView removeFromSuperview];
-                    }
-                    if ([subView isKindOfClass:[QLPreviewController class]]) {
-                        [subView removeFromSuperview];
-                    }
-                    if ([subView isKindOfClass:[UIButton class]] && 
-                        ![subView isKindOfClass:[DTLinkButton class]]) {
-                        [subView removeFromSuperview];
-                    }
-                    if ([subView isKindOfClass:[UIActivityIndicatorView class]]) {
-                        [subView removeFromSuperview];
-                    }
-                }
-            }
-
-            [cell.contentTextView removeAllCustomViewsForLinks];
-            [cell.referencedMessage removeAllCustomViewsForLinks];
-            cellPerfCleanupEnd = CFAbsoluteTimeGetCurrent();
-
-            if (layout.hasReference) {
-                NSString *referenceText =
-                    [self referencePreviewTextForMessage:messageAtRowIndex] ?:
-                    @"Unable to load message";
-                NSString *referenceAuthorName = @"";
-                CGFloat referenceAuthorWidth = 80.0f;
-
-                if (referenceResolved) {
-                    referenceAuthorName = [reference.author displayNameInGuild:DCServerCommunicator.sharedInstance.selectedChannel.parentGuild] ?: @"";
-
-                    CGSize nameSize = [referenceAuthorName sizeWithFont: [UIFont boldSystemFontOfSize:10.0f]];
-
-                    referenceAuthorWidth = 80.0f + nameSize.width;
-
-                    CGFloat maximumAuthorWidth = MAX(80.0f, self.chatTableView.width - 80.0f);
-
-                    referenceAuthorWidth = MIN(referenceAuthorWidth, maximumAuthorWidth);
-                }
-
-                CFAbsoluteTime referenceBindStart = CFAbsoluteTimeGetCurrent();
-                cell.referencedAuthorLabel.text = referenceAuthorName;
-                cell.referencedAuthorLabel.textColor = referenceResolved
-                    ? [DCInterfaceStyle roleColorForUser:reference.author
-                                                 inGuild:DCServerCommunicator.sharedInstance.selectedChannel.parentGuild]
-                    : [UIColor whiteColor];
-                cell.referencedProfileImage.image = referenceResolved ? [self avatarImageForUser:reference.author] : nil;
-
-                CGFloat referenceWidth = MAX(0.0f, self.chatTableView.width - referenceAuthorWidth);
-
-                // Clear stale reply layout and set final geometry before binding new text.
-                cell.referencedMessage.layoutFrame = nil;
-                cell.referencedMessage.attributedString = nil;
-                cell.referencedMessage.frame =
-                    CGRectMake(referenceAuthorWidth,
-                               cell.referencedMessage.y,
-                               referenceWidth,
-                               cell.referencedMessage.height);
-                cellPerfReferenceBindTime +=
-                    (CFAbsoluteTimeGetCurrent() - referenceBindStart);
-
-                cellPerfReferenceParseStart = CFAbsoluteTimeGetCurrent();
-                NSAttributedString *referencedContent = nil;
-                DCChatReferencePresentation *cachedReference =
-                    [self.referencePresentationCache objectForKey:messageAtRowIndex.snowflake];
-                if (cachedReference &&
-                    [cachedReference.sourceText isEqualToString:referenceText]) {
-                    referencedContent = cachedReference.attributedText;
-                }
-
-                if (!referencedContent) {
-                    referencedContent =
-                        [[DCMarkdownParser sharedParser]
-                            attributedStringFromMarkdown:referenceText
-                                             maxFontSize:10.0f
-                                                   color:referenceColor
-                                                 inGuild:DCServerCommunicator.sharedInstance.selectedChannel.parentGuild];
-                    if (referencedContent && messageAtRowIndex.snowflake.length) {
-                        DCChatReferencePresentation *presentation =
-                            [[DCChatReferencePresentation alloc] init];
-                        presentation.sourceText = referenceText;
-                        presentation.attributedText = referencedContent;
-                        [self.referencePresentationCache setObject:presentation
-                                                            forKey:messageAtRowIndex.snowflake];
-                    }
-                }
-                cellPerfReferenceParseEnd = CFAbsoluteTimeGetCurrent();
-
-                CFAbsoluteTime referenceStringBindStart = CFAbsoluteTimeGetCurrent();
-                cell.referencedMessage.attributedString = referencedContent;
-                cellPerfReferenceBindTime +=
-                    (CFAbsoluteTimeGetCurrent() - referenceStringBindStart);
-
-                /*
-                 * Deleted and unavailable references should not behave like
-                 * navigable messages.
-                 */
-                if (referenceResolved && reference.snowflake.length) {
-
-                    UIButton *referencedMessageButton = [UIButton buttonWithType: UIButtonTypeCustom];
-
-                    referencedMessageButton.frame =
-                        CGRectMake(
-                            cell.referencedProfileImage.x,
-                            cell.referencedMessage.y,
-                            cell.referencedMessage.x +
-                                cell.referencedMessage.width -
-                                cell.referencedProfileImage.x,
-                            cell.referencedMessage.height);
-
-                    referencedMessageButton.exclusiveTouch = YES;
-
-                    [referencedMessageButton addTarget:self action: @selector(tappedReferencedMessage:) forControlEvents: UIControlEventTouchUpInside];
-
-                    [cell addSubview: referencedMessageButton];
-                }
-            }
-
-            cellPerfHeaderStart = CFAbsoluteTimeGetCurrent();
-            if (!layout.grouped) {
-                NSString *displayName = [messageAtRowIndex.author 
-                    displayNameInGuild:DCServerCommunicator.sharedInstance.selectedChannel.parentGuild];
-                
-                // Calculate natural sizes
-                CGSize timestampSize = [messageAtRowIndex.prettyTimestamp 
-                    sizeWithFont:cell.timestampLabel.font];
-                CGSize nameSize = [displayName sizeWithFont:cell.authorLabel.font];
-                
-                CGFloat authorOriginX = cell.authorLabel.x;
-                CGFloat gap = 8.0; // gap between name and timestamp
-                CGFloat rightPadding = 8.0;
-                CGFloat maxRightEdge = self.chatTableView.width - rightPadding;
-                
-                // Natural timestamp position — right after the name
-                CGFloat naturalTimestampX = authorOriginX + nameSize.width + gap;
-                
-                // Maximum allowed timestamp X so it doesn't go off screen
-                CGFloat maxTimestampX = maxRightEdge - timestampSize.width;
-                
-                // Timestamp sits at natural position unless that would push it too far
-                CGFloat actualTimestampX = MIN(naturalTimestampX, maxTimestampX);
-                
-                // Author label is capped to whatever space is left before the timestamp
-                CGFloat actualNameWidth = MAX(0, actualTimestampX - authorOriginX - gap);
-                
-                cell.authorLabel.text = displayName;
-                cell.authorLabel.textColor =
-                    [DCInterfaceStyle roleColorForUser:messageAtRowIndex.author
-                                              inGuild:DCServerCommunicator.sharedInstance.selectedChannel.parentGuild];
-                cell.authorLabel.frame = CGRectMake(authorOriginX,
-                                                    cell.authorLabel.y,
-                                                    actualNameWidth,
-                                                    cell.authorLabel.height);
-                
-                cell.timestampLabel.text = messageAtRowIndex.prettyTimestamp;
-                cell.timestampLabel.frame = CGRectMake(actualTimestampX,
-                                                       cell.timestampLabel.y,
-                                                       timestampSize.width,
-                                                       cell.timestampLabel.height);
-            }
-
-            cell.universalImageView.image = nil;
-            if (messageAtRowIndex.messageType == DCMessageTypeRecipientAdd || messageAtRowIndex.messageType == DCMessageTypeUserJoin) {
-                cell.universalImageView.image = [DCInterfaceStyle universalAddImage];
-            } else if (messageAtRowIndex.messageType == DCMessageTypeRecipientRemove) {
-                cell.universalImageView.image = [DCInterfaceStyle universalRemoveImage];
-            } else if (messageAtRowIndex.messageType == DCMessageTypeChannelNameChange || messageAtRowIndex.messageType == DCMessageTypeChannelIconChange) {
-                cell.universalImageView.image = [DCInterfaceStyle universalEditImage];
-            } else if (messageAtRowIndex.messageType == DCMessageTypeChannelPinnedMessage) {
-                cell.universalImageView.image = [DCInterfaceStyle universalPinImage];
-            } else if (messageAtRowIndex.messageType == DCMessageTypeGuildBoost || messageAtRowIndex.messageType == DCMessageTypeThreadCreated) {
-                cell.universalImageView.image = [DCInterfaceStyle universalBoostImage];
-            }
-            cellPerfHeaderEnd = CFAbsoluteTimeGetCurrent();
-
-            CGFloat forwardedInset = messageAtRowIndex.isForwarded
-                ? DCForwardedContentInset : 0.0f;
-            CGFloat forwardedVerticalInset = messageAtRowIndex.isForwarded
-                ? DCForwardedVerticalInset : 0.0f;
-            BOOL isSystemCell = [layout.reuseIdentifier isEqualToString:@"Universal Typehandler Cell"];
-            CGFloat baseContentOriginY = isSystemCell ? 9.0f
-                : (layout.grouped ? 2.0f : (layout.hasReference ? 46.0f : 28.0f));
-            CGFloat contentOriginX = DCChatBodyOriginX + forwardedInset;
-            CGFloat contentOriginY = baseContentOriginY + forwardedVerticalInset;
-            float contentWidth = self.chatTableView.width - 63 - forwardedInset;
-
-            // Set content
-            cellPerfContentStart = CFAbsoluteTimeGetCurrent();
-
-            cell.contentTextView.delegate = self;
-            cell.contentTextView.userInteractionEnabled = YES;
-
-            NSCharacterSet *invisibleChars = [NSCharacterSet characterSetWithCharactersInString:@"\u00A0\u200B\n\r\t "];
-            BOOL hasVisibleContent = [[messageAtRowIndex.content stringByTrimmingCharactersInSet:invisibleChars] length] > 0 
-                || messageAtRowIndex.emojis.count > 0;
-            CGFloat textHeight = layout.textHeight;
-
-            if (!hasVisibleContent) {
-                // Drop the previous message's DTCoreText frame before changing
-                // the string/frame.  Otherwise DTAttributedLabel eagerly
-                // relayouts the NEW string using the OLD cell geometry.
-                cell.contentTextView.layoutFrame = nil;
-                cell.contentTextView.attributedString = nil;
-                cell.contentTextView.hidden = YES;
-                cell.contentTextView.frame = CGRectMake(
-                    contentOriginX,
-                    contentOriginY,
-                    contentWidth,
-                    0
-                );
-            } else {
-                if (!messageAtRowIndex.attributedContent && messageAtRowIndex.content.length > 0) {
-                    messageAtRowIndex.attributedContent = [[DCMarkdownParser sharedParser]
-                        attributedStringFromMarkdown:messageAtRowIndex.content
-                                              inGuild:DCServerCommunicator.sharedInstance.selectedChannel.parentGuild];
-                }
-
-                cell.contentTextView.hidden = NO;
-
-                // Reuse the prepared DTCoreText frame; clear stale geometry before binding it.
-                cell.contentTextView.layoutFrame = nil;
-                cell.contentTextView.attributedString = messageAtRowIndex.attributedContent;
-                cell.contentTextView.frame = CGRectMake(
-                    contentOriginX,
-                    contentOriginY,
-                    contentWidth,
-                    textHeight
-                );
-                cell.contentTextView.layoutFrame = layout.textLayoutFrame;
-
-                // Link buttons and custom emoji views still need to be built
-                // from the prepared frame.  This traverses the already-laid-out
-                // glyph runs; it no longer asks DTCoreText to shape/layout the
-                // text again.
-                [cell.contentTextView layoutSubviewsInRect:CGRectInfinite];
-            }
-            cellPerfContentEnd = CFAbsoluteTimeGetCurrent();
-            cellPerfPostContentStart = CFAbsoluteTimeGetCurrent();
-            UIImage *authorAvatar = [self avatarImageForUser:messageAtRowIndex.author];
-            if (cell.profileImage.image != authorAvatar) {
-                cell.profileImage.image = authorAvatar;
-            }
-            if (cell.profileImage.gestureRecognizers.count == 0) {
-                cell.profileImage.userInteractionEnabled = YES;
-                UITapGestureRecognizer *profileTap = [[UITapGestureRecognizer alloc]
-                    initWithTarget:self action:@selector(profileImageTapped:)];
-                profileTap.numberOfTapsRequired = 1;
-                [cell.profileImage addGestureRecognizer:profileTap];
-            }
-            if ((self.replyingToMessage
-                     && [self.replyingToMessage.snowflake
-                         isEqualToString:messageAtRowIndex.snowflake])
-                || (self.editingMessage
-                    && [self.editingMessage.snowflake
-                        isEqualToString:messageAtRowIndex.snowflake])) {
-                cell.contentView.backgroundColor = replyHighlightColor;
-            } else if (messageAtRowIndex.pingingUser) {
-                cell.contentView.backgroundColor = pingColor;
-            } else {
-                cell.contentView.backgroundColor = normalColor;
-            }
-
-            CGFloat imageViewOffset;
-            if (layout.grouped) {
-                imageViewOffset = MAX(textHeight, 18) + 4;
-            } else {
-                CGFloat authorHeight = layout.showsAuthorName ? [UIFont boldSystemFontOfSize:15].lineHeight : 0;
-                imageViewOffset = MAX(
-                    authorHeight
-                        + (messageAtRowIndex.attachmentCount ? (hasVisibleContent ? textHeight : 0) : MAX(textHeight, 18))
-                        + 10
-                        + (layout.hasReference ? 16 : 0),
-                    authorHeight + (hasVisibleContent ? [UIFont systemFontOfSize:14].lineHeight : 0) + 10
-                );
-            }
-            if (messageAtRowIndex.isForwarded) {
-                imageViewOffset += DCForwardedVerticalInset;
-            }
-            cellPerfPostContentEnd = CFAbsoluteTimeGetCurrent();
-
-            cellPerfAttachmentsStart = CFAbsoluteTimeGetCurrent();
-            BOOL allowAttachmentHydration =
-                ![self shouldDeferChatMediaHydration];
-            CGFloat attachmentOriginX = DCChatBodyOriginX + forwardedInset;
-            CGFloat attachmentMaximumWidth =
-                self.chatTableView.width - 66 - forwardedInset;
-            for (id attachment in messageAtRowIndex.attachments) {
-                @autoreleasepool {
-                    if ([attachment isKindOfClass:[UILazyImage class]]) {
-                        UILazyImageView *imageView = [UILazyImageView new];
-                        UILazyImage *lazyImage     = attachment;
-                        CGSize sourceSize = CGSizeZero;
-                        if (lazyImage.naturalSize.width > 0 && lazyImage.naturalSize.height > 0) {
-                            sourceSize = lazyImage.naturalSize;
-                        } else if (lazyImage.image) {
-                            sourceSize = lazyImage.image.size;
-                        }
-                        if (sourceSize.width <= 0 || sourceSize.height <= 0) continue;
-                        CGFloat aspectRatio = sourceSize.width / sourceSize.height;
-                        int newWidth  = messageAtRowIndex.isSticker ? 160 : (int)(200 * aspectRatio);
-                        int newHeight = messageAtRowIndex.isSticker ? 160 : 200;
-                        if (newWidth > attachmentMaximumWidth) {
-                            newWidth  = attachmentMaximumWidth;
-                            newHeight = newWidth / aspectRatio;
-                        }
-                        imageView.frame = CGRectMake(
-                            attachmentOriginX, imageViewOffset, newWidth, newHeight
-                        );
-                        imageView.imageURL = lazyImage.imageURL;
-                        imageViewOffset += newHeight;
-
-                        imageView.contentMode = UIViewContentModeScaleAspectFit;
-
-                        UITapGestureRecognizer *singleTap =
-                            [[UITapGestureRecognizer alloc]
-                                initWithTarget:self
-                                        action:@selector(tappedImage:)];
-                        singleTap.numberOfTapsRequired   = 1;
-                        imageView.userInteractionEnabled = YES;
-
-                        [imageView addGestureRecognizer:singleTap];
-                        if (lazyImage.spoiler) {
-                            DCChatSpoilerView *spoiler = [[DCChatSpoilerView alloc]
-                                initWithFrame:imageView.bounds
-                                  spoilerKey:lazyImage.spoilerKey
-                                 placeholder:lazyImage.spoilerPlaceholder];
-                            imageView.spoilerView = spoiler;
-                            [singleTap requireGestureRecognizerToFail:spoiler.revealTapRecognizer];
-                        }
-
-                        [cell addSubview:imageView];
-                        if ([self chatMediaSubviewShouldBeResident:imageView]) {
-                            [imageView prepareChatThumbnailForDisplaySize:
-                                CGSizeMake(newWidth, newHeight)
-                                                        allowLoading:
-                                                            allowAttachmentHydration];
-                        }
-                    } else if ([attachment
-                                   isKindOfClass:[DCChatVideoAttachment class]]) {
-                        DCChatVideoAttachment *video = attachment;
-
-                        NSArray *existingRecognizers = [NSArray arrayWithArray:video.gestureRecognizers];
-                        for (UIGestureRecognizer *gr in existingRecognizers) {
-                            [video removeGestureRecognizer:gr];
-                        }
-                        UITapGestureRecognizer *singleTap = [[UITapGestureRecognizer alloc]
-                            initWithTarget:self action:@selector(tappedVideo:)];
-                        singleTap.numberOfTapsRequired = 1;
-                        [video addGestureRecognizer:singleTap];
-
-                        CGSize videoSize = CGSizeZero;
-                        if (video.naturalSize.width > 0 && video.naturalSize.height > 0) {
-                            videoSize = video.naturalSize;
-                        } else if (video.thumbnailImage) {
-                            videoSize = video.thumbnailImage.size;
-                        } else {
-                            videoSize = CGSizeMake(16, 9);
-                        }
-                        CGFloat aspectRatio = videoSize.width / videoSize.height;
-                        int newWidth  = 200 * aspectRatio;
-                        int newHeight = 200;
-                        if (newWidth > attachmentMaximumWidth) {
-                            newWidth  = attachmentMaximumWidth;
-                            newHeight = newWidth / aspectRatio;
-                        }
-                        [video setFrame:CGRectMake(attachmentOriginX, imageViewOffset, newWidth, newHeight)];
-                        if (video.spoiler) {
-                            if (!video.spoilerView) {
-                                video.spoilerView = [[DCChatSpoilerView alloc]
-                                    initWithFrame:video.bounds
-                                      spoilerKey:video.spoilerKey
-                                     placeholder:video.spoilerPlaceholder];
-                            }
-                            [video.spoilerView refreshRevealState];
-                            [singleTap requireGestureRecognizerToFail:
-                                video.spoilerView.revealTapRecognizer];
-                        }
-
-                        imageViewOffset += newHeight;
-
-                        [cell addSubview:video];
-                        if ([self chatMediaSubviewShouldBeResident:video]) {
-                            [video prepareForDisplayAllowLoading:
-                                allowAttachmentHydration];
-                        }
-                    } else if ([attachment isKindOfClass:[DCGifInfo class]]) {
-                        DCGifInfo *gifInfo = (DCGifInfo *)attachment;
-                        CGSize gifSize = CGSizeZero;
-                        if (gifInfo.naturalSize.width > 0 && gifInfo.naturalSize.height > 0) {
-                            gifSize = gifInfo.naturalSize;
-                        } else {
-                            gifSize = CGSizeMake(16.0f, 9.0f);
-                        }
-
-                        CGFloat aspectRatio = gifSize.width / gifSize.height;
-                        int newWidth  = (int)(200 * aspectRatio);
-                        int newHeight = 200;
-                        if (newWidth > attachmentMaximumWidth) {
-                            newWidth  = attachmentMaximumWidth;
-                            newHeight = newWidth / aspectRatio;
-                        }
-
-                        DCChatGifAttachment *gif = [[DCChatGifAttachment alloc]
-                            initWithFrame:CGRectMake(attachmentOriginX, imageViewOffset, newWidth, newHeight)];
-                        gif.gifURL = gifInfo.gifURL;
-                        gif.videoBacked = gifInfo.videoBacked;
-                        gif.imageURL = gifInfo.thumbnailURL;
-                        if (gifInfo.spoiler) {
-                            DCChatSpoilerView *spoiler = [[DCChatSpoilerView alloc]
-                                initWithFrame:gif.bounds
-                                  spoilerKey:gifInfo.spoilerKey
-                                 placeholder:gifInfo.spoilerPlaceholder];
-                            gif.spoilerView = spoiler;
-                            for (UIGestureRecognizer *recognizer in gif.gestureRecognizers) {
-                                if ([recognizer isKindOfClass:[UITapGestureRecognizer class]]) {
-                                    [recognizer requireGestureRecognizerToFail:spoiler.revealTapRecognizer];
-                                }
-                            }
-                        }
-                        imageViewOffset += newHeight;
-                        [cell addSubview:gif];
-                        if ([self chatMediaSubviewShouldBeResident:gif]) {
-                            [gif prepareForDisplayAllowLoading:
-                                allowAttachmentHydration];
-                        }
-                    } else if ([attachment isKindOfClass:[QLPreviewController class]]) {
-                        QLPreviewController *preview = attachment;
-
-                        imageViewOffset += 210;
-
-                        [cell addSubview:preview.view];
-                    } else if ([attachment isKindOfClass:[NSArray class]]) {
-                        NSArray *dimensions = attachment;
-                        if (dimensions.count == 2) {
-                            int width  = [dimensions[0] intValue];
-                            int height = [dimensions[1] intValue];
-                            if (width <= 0 || height <= 0) {
-                                continue;
-                            }
-                            CGFloat aspectRatio = (CGFloat)width / height;
-                            int newWidth        = 200 * aspectRatio;
-                            int newHeight       = 200;
-                            if (newWidth > attachmentMaximumWidth) {
-                                newWidth  = attachmentMaximumWidth;
-                                newHeight = newWidth / aspectRatio;
-                            }
-                            UIActivityIndicatorView *activityIndicator =
-                                [[UIActivityIndicatorView alloc]
-                                    initWithActivityIndicatorStyle:
-                                        UIActivityIndicatorViewStyleWhite];
-                            activityIndicator.center = CGPointMake(
-                                attachmentOriginX + (newWidth * 0.5f),
-                                imageViewOffset + (newHeight * 0.5f));
-                            imageViewOffset += newHeight + 11;
-
-                            [cell addSubview:activityIndicator];
-                            [activityIndicator startAnimating];
-                        }
-                    }
-                }
-            }
-        cellPerfAttachmentsEnd = CFAbsoluteTimeGetCurrent();
-
-        /*
-         * Diagnostics only: a retained live message with attributed text must
-         * never reach a visible row with a zero text layout. Likewise, an
-         * attachmentCount with an empty attachment model would indicate that
-         * media geometry was published after layout prewarm (the old video
-         * race). Do not repair either condition here; preserve evidence.
-         */
-        if (layout.textHeight <= 0.0f &&
-            (messageAtRowIndex.attributedContent.length > 0 ||
-             messageAtRowIndex.content.length > 0 ||
-             messageAtRowIndex.rawContent.length > 0)) {
-            NSLog(@"[LayoutDiag] VISIBLE ZERO-TEXT LAYOUT %@ "
-                  @"row %ld rowH %.0f raw %lu content %lu attr %lu "
-                  @"attrObject %@ atts %lu/%ld frame %@",
-                  messageAtRowIndex.snowflake ?: @"?",
-                  (long)indexPath.row,
-                  layout.height,
-                  (unsigned long)messageAtRowIndex.rawContent.length,
-                  (unsigned long)messageAtRowIndex.content.length,
-                  (unsigned long)messageAtRowIndex.attributedContent.length,
-                  messageAtRowIndex.attributedContent ? @"present" : @"nil",
-                  (unsigned long)messageAtRowIndex.attachments.count,
-                  (long)messageAtRowIndex.attachmentCount,
-                  layout.textLayoutFrame ? @"cached" : @"missing");
-        }
-
-        if (messageAtRowIndex.attachmentCount > 0 &&
-            messageAtRowIndex.attachments.count == 0) {
-            NSLog(@"[LayoutDiag] VISIBLE ATTACHMENT MODEL MISMATCH %@ "
-                  @"row %ld rowH %.0f attachmentCount %ld arrayCount %lu",
-                  messageAtRowIndex.snowflake ?: @"?",
-                  (long)indexPath.row,
-                  layout.height,
-                  (long)messageAtRowIndex.attachmentCount,
-                  (unsigned long)messageAtRowIndex.attachments.count);
-        }
-
-        CFAbsoluteTime cellPerfEnd = CFAbsoluteTimeGetCurrent();
-        NSTimeInterval cellPerfTotal = cellPerfEnd - cellPerfStart;
-        if (cellPerfTotal >= 0.005) {
-            NSTimeInterval contentTime =
-                (cellPerfContentEnd > cellPerfContentStart)
-                    ? (cellPerfContentEnd - cellPerfContentStart) : 0;
-            NSTimeInterval attachmentTime =
-                (cellPerfAttachmentsEnd > cellPerfAttachmentsStart)
-                    ? (cellPerfAttachmentsEnd - cellPerfAttachmentsStart) : 0;
-            NSTimeInterval otherTime = MAX(0, cellPerfTotal - contentTime - attachmentTime);
-            NSLog(@"[ChatPerf] cell %@ total %.1fms content %.1fms attachments %.1fms "
-                  @"other %.1fms textH %.0f rowH %.0f atts %lu/%ld ref %d frame %@",
-                  messageAtRowIndex.snowflake ?: @"?",
-                  cellPerfTotal * 1000.0,
-                  contentTime * 1000.0,
-                  attachmentTime * 1000.0,
-                  otherTime * 1000.0,
-                  layout.textHeight,
-                  layout.height,
-                  (unsigned long)messageAtRowIndex.attachments.count,
-                  (long)messageAtRowIndex.attachmentCount,
-                  layout.hasReference,
-                  layout.textLayoutFrame ? @"cached" : @"missing");
-
-            if (cellPerfTotal >= 0.020 || otherTime >= 0.020) {
-                NSTimeInterval dequeueTime =
-                    (cellPerfDequeueEnd > cellPerfDequeueStart)
-                        ? (cellPerfDequeueEnd - cellPerfDequeueStart) : 0;
-                NSTimeInterval avatarTime =
-                    (cellPerfAvatarEnd > cellPerfAvatarStart)
-                        ? (cellPerfAvatarEnd - cellPerfAvatarStart) : 0;
-                NSTimeInterval cleanupTime =
-                    (cellPerfCleanupEnd > cellPerfCleanupStart)
-                        ? (cellPerfCleanupEnd - cellPerfCleanupStart) : 0;
-                NSTimeInterval referenceParseTime =
-                    (cellPerfReferenceParseEnd > cellPerfReferenceParseStart)
-                        ? (cellPerfReferenceParseEnd - cellPerfReferenceParseStart) : 0;
-                NSTimeInterval referenceBindTime = cellPerfReferenceBindTime;
-                NSTimeInterval headerTime =
-                    (cellPerfHeaderEnd > cellPerfHeaderStart)
-                        ? (cellPerfHeaderEnd - cellPerfHeaderStart) : 0;
-                NSTimeInterval postContentTime =
-                    (cellPerfPostContentEnd > cellPerfPostContentStart)
-                        ? (cellPerfPostContentEnd - cellPerfPostContentStart) : 0;
-
-                NSTimeInterval accounted = dequeueTime + avatarTime + cleanupTime +
-                    referenceParseTime + referenceBindTime + headerTime +
-                    contentTime + postContentTime + attachmentTime;
-                NSTimeInterval residual = MAX(0, cellPerfTotal - accounted);
-
-                NSLog(@"[ChatPerf] cell detail %@ dequeue %.1f avatar %.1f cleanup %.1f "
-                      @"refParse %.1f refBind %.1f header %.1f content %.1f post %.1f "
-                      @"attachments %.1f residual %.1f ref %d",
-                      messageAtRowIndex.snowflake ?: @"?",
-                      dequeueTime * 1000.0,
-                      avatarTime * 1000.0,
-                      cleanupTime * 1000.0,
-                      referenceParseTime * 1000.0,
-                      referenceBindTime * 1000.0,
-                      headerTime * 1000.0,
-                      contentTime * 1000.0,
-                      postContentTime * 1000.0,
-                      attachmentTime * 1000.0,
-                      residual * 1000.0,
-                      layout.hasReference);
-            }
-        }
-
-        cell.messageSnowflake =
-            [messageAtRowIndex.snowflake copy];
-
-        cell.configuredLayout = layout;
-        }
+    NSInteger modelIndex = [self modelIndexForRow:indexPath.row];
+    if (modelIndex < 0 || modelIndex >= (NSInteger)self.messages.count) {
+        NSCAssert(NO, @"Invalid message row");
+        return nil;
     }
-    cell.transform = CGAffineTransformMakeScale(1, -1);
-    return cell;
+    if (self.oldMode) return nil;
+
+    DCMessageLayout *layout = [self layoutForModelIndex:modelIndex];
+    if (!layout) {
+        return [tableView dequeueReusableCellWithIdentifier:@"Message Cell"];
+    }
+    return [self.messageRenderer cellForMessage:self.messages[modelIndex]
+                                             layout:layout
+                                          tableView:tableView
+                                                row:indexPath.row
+                                            context:self];
 }
 
 - (void)attributedTextContentView:(DTAttributedTextContentView *)attributedTextContentView
@@ -7090,7 +6592,8 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     NSInteger modelIndex = [self modelIndexForRow:indexPath.row];
     DCMessageLayout *layout = [self layoutForModelIndex:modelIndex];
     if (!layout) return 0;
-    return layout.height;
+    return layout.height + (self.readOnlyMessageListMode && self.messageCellActionTitle.length
+                            ? DCMessageListActionRowPadding : 0.0f);
 }
 
 - (void)tableView:(UITableView *)tableView
@@ -7365,6 +6868,11 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
 - (void)scrollViewDidScroll:(UIScrollView *)scrollView {
     if (scrollView != self.chatTableView) {
+        return;
+    }
+    if (self.readOnlyMessageListMode) {
+        [self concealSpoilersOutsideVisibleChatCells];
+        [self updateVisibleChatMediaResidency];
         return;
     }
 
@@ -8594,11 +8102,19 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     }
 
     id rawChannelID = [referenceMetadata objectForKey:@"channel_id"];
+    DCChannel *contextChannel = [self messageRenderingChannel];
     NSString *channelID = [rawChannelID isKindOfClass:[NSString class]]
-        ? rawChannelID : DCServerCommunicator.sharedInstance.selectedChannel.snowflake;
+        ? rawChannelID : contextChannel.snowflake;
     id rawGuildID = [referenceMetadata objectForKey:@"guild_id"];
     NSString *guildID = [rawGuildID isKindOfClass:[NSString class]]
-        ? rawGuildID : DCServerCommunicator.sharedInstance.selectedGuild.snowflake;
+        ? rawGuildID : contextChannel.parentGuild.snowflake;
+
+    if (self.readOnlyMessageListMode) {
+        if (self.messageReferenceJumpHandler) {
+            self.messageReferenceJumpHandler(reference.snowflake, channelID, guildID);
+        }
+        return;
+    }
 
     [self jumpToMessageID:reference.snowflake
                 channelID:channelID
@@ -8779,6 +8295,19 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 }
 
 - (IBAction)clickMemberButton:(id)sender {
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"experimentalMode"] &&
+        self.slideMenuController) {
+        [self configureExperimentalMemberNavigation];
+        if (!self.experimentalMemberListController || !self.navigationController) return;
+        if (self.navigationController.topViewController != self) return;
+
+        [self.inputField resignFirstResponder];
+        self.slideMenuController.gestureSupport = APLSlideMenuGestureSupportNone;
+        [self.navigationController pushViewController:self.experimentalMemberListController
+                                             animated:YES];
+        return;
+    }
+
     [self.slideMenuController showRightMenu:YES];
 }
 
@@ -9494,6 +9023,11 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 }
 
 - (void)dc_repairGeometryForCurrentBounds {
+    if (self.readOnlyMessageListMode) {
+        self.chatTableView.frame = self.view.bounds;
+        [self.chatTableView reloadData];
+        return;
+    }
     self.chatTableView.frame = CGRectMake(
         0, 0,
         self.view.bounds.size.width,
@@ -9603,6 +9137,10 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
 - (void)viewWillDisappear:(BOOL)animated {
     [super viewWillDisappear:animated];
+    if (self.readOnlyMessageListMode) {
+        [self stopForwardMomentumContinuation];
+        return;
+    }
 
     [DCChatSpoilerView concealAllSpoilers];
     for (UITableViewCell *tableCell in [self.chatTableView visibleCells]) {

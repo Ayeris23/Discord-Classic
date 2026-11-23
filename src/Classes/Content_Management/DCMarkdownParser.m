@@ -130,6 +130,12 @@ static DCMarkdownFeatures DCScanMarkdownFeatures(NSString *text) {
 @property (nonatomic, strong) NSDataDetector *cachedLinkDetector;
 @end
 
+static BOOL DCMarkdownGuildsMatch(DCGuild *a, DCGuild *b) {
+    if (a == b) return YES;
+    return a.snowflake.length && b.snowflake.length &&
+        [a.snowflake isEqualToString:b.snowflake];
+}
+
 @implementation DCMarkdownParser
 
 #pragma mark - Singleton
@@ -462,7 +468,7 @@ static DCMarkdownFeatures DCScanMarkdownFeatures(NSString *text) {
     if (features & DCMarkdownFeatureURL) {
         [self applyEscapedURLSchemes:result protectedRanges:protectedRanges];
         [self applyAngleBracketURLs:result protectedRanges:protectedRanges];
-        [self applyURLDetection:result protectedRanges:protectedRanges];
+        [self applyURLDetection:result inGuild:guild protectedRanges:protectedRanges];
     }
     if ((features & DCMarkdownFeatureMention) && (features & DCMarkdownFeatureEscape)) {
         [self applyEscapedMentions:result protectedRanges:protectedRanges];
@@ -1392,8 +1398,8 @@ static DCMarkdownFeatures DCScanMarkdownFeatures(NSString *text) {
             BOOL canResolveChannel = channel &&
                 (!channel.parentGuild.snowflake.length || channel.readable);
             if (canResolveChannel) {
-                DCGuild *contextGuild = guild ?: DCServerCommunicator.sharedInstance.selectedChannel.parentGuild;
-                if (channel.parentGuild && channel.parentGuild != contextGuild) {
+                if (channel.parentGuild &&
+                    !DCMarkdownGuildsMatch(channel.parentGuild, guild)) {
                     displayText = [NSString stringWithFormat:@"%@ > #%@",
                         channel.parentGuild.name, channel.name];
                 } else {
@@ -1590,7 +1596,8 @@ static DCMarkdownFeatures DCScanMarkdownFeatures(NSString *text) {
 }
 
 - (void)applyURLDetection:(NSMutableAttributedString *)string
-           protectedRanges:(NSMutableArray *)protectedRanges {
+                  inGuild:(DCGuild *)guild
+          protectedRanges:(NSMutableArray *)protectedRanges {
     /*
      * NSDataDetector is surprisingly expensive to initialize on iOS 5/6.
      * Most chat messages cannot contain a URL at all, so reject those before
@@ -1640,7 +1647,7 @@ static DCMarkdownFeatures DCScanMarkdownFeatures(NSString *text) {
                     (!channel.parentGuild.snowflake.length || channel.readable);
                 if (canResolveChannel) {
                     if (channel.parentGuild &&
-                        channel.parentGuild != DCServerCommunicator.sharedInstance.selectedChannel.parentGuild) {
+                        !DCMarkdownGuildsMatch(channel.parentGuild, guild)) {
                         displayText = [NSString stringWithFormat:@"%@ > #%@",
                             channel.parentGuild.name, channel.name];
                     } else {

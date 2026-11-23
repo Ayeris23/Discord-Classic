@@ -55,6 +55,8 @@
 @property (strong, nonatomic) DCUnreadEdgeIndicatorView *topChannelUnreadIndicator;
 @property (strong, nonatomic) DCUnreadEdgeIndicatorView *bottomChannelUnreadIndicator;
 @property (strong, nonatomic) DCUnreadEdgeOverlayView *channelUnreadOverlay;
+@property (assign, nonatomic) CGFloat topChannelUnreadIndicatorClearance;
+@property (assign, nonatomic) BOOL topChannelUnreadIndicatorTracksHeader;
 @property (strong, nonatomic) NSArray *mentionedChannelIndexPaths;
 @property (strong, nonatomic) DCChannel *pendingChannelMentionReveal;
 @property (assign, nonatomic) CGFloat pendingChannelMentionRevealOffset;
@@ -749,22 +751,46 @@ static const CGFloat DCGuildMentionBadgeCenterFromBottom = 11.0f;
     [self updateChannelUnreadEdgeIndicators];
 }
 
-- (CGFloat)channelPinnedHeaderClearanceAtOffset:(CGFloat)offsetY {
+- (CGFloat)channelPinnedHeaderClearanceAtOffset:(CGFloat)offsetY
+                                  protectedHeight:(CGFloat)protectedHeight {
     UITableView *table = self.channelTableView;
     if (!table || [self isDirectMessagesGuild:self.selectedGuild]) return 0.0f;
-    if ([table numberOfSections] != (NSInteger)self.displayChannelSections.count)
-        return 0.0f;
+    NSInteger sectionCount = (NSInteger)self.displayChannelSections.count;
+    if ([table numberOfSections] != sectionCount) return 0.0f;
 
     CGFloat visibleTop = offsetY + table.contentInset.top;
-    for (NSInteger section = 0; section < (NSInteger)self.displayChannelSections.count; section++) {
-        CGRect rect = [table rectForSection:section];
-        if (CGRectGetMaxY(rect) <= visibleTop) continue;
-        if (CGRectGetMinY(rect) > visibleTop) break;
-        if ([self categoryInDisplayedSection:section])
-            return [DCChannelCategoryHeaderView headerHeight];
-        break;
+    CGFloat stripBottom = visibleTop + protectedHeight;
+    NSInteger first = 0;
+    NSInteger end = sectionCount;
+    while (first < end) {
+        NSInteger mid = first + (end - first) / 2;
+        if (CGRectGetMaxY([table rectForSection:mid]) <= visibleTop)
+            first = mid + 1;
+        else
+            end = mid;
     }
-    return 0.0f;
+
+    CGFloat clearance = 0.0f;
+    for (NSInteger section = first; section < sectionCount; section++) {
+        CGRect sectionRect = [table rectForSection:section];
+        if (CGRectGetMinY(sectionRect) >= stripBottom) break;
+        if (![self categoryInDisplayedSection:section]) continue;
+
+        CGRect headerRect = [table rectForHeaderInSection:section];
+        CGFloat height = CGRectGetHeight(headerRect);
+        if (height <= 0.0f) continue;
+
+        CGFloat headerY = MIN(MAX(CGRectGetMinY(headerRect), visibleTop),
+                              CGRectGetMaxY(sectionRect) - height);
+        if (headerY < stripBottom && headerY + height > visibleTop)
+            clearance = MAX(clearance, headerY + height - visibleTop);
+    }
+    return MAX(0.0f, ceilf(clearance));
+}
+
+- (CGFloat)channelPinnedHeaderClearanceAtOffset:(CGFloat)offsetY {
+    return [self channelPinnedHeaderClearanceAtOffset:offsetY
+                                      protectedHeight:DCGuildUnreadEdgeClearance];
 }
 
 - (void)layoutChannelUnreadEdgeIndicators {
@@ -786,10 +812,26 @@ static const CGFloat DCGuildMentionBadgeCenterFromBottom = 11.0f;
             [container bringSubviewToFront:self.totalView];
     }
 
-    CGFloat topClearance = [self channelPinnedHeaderClearanceAtOffset:table.contentOffset.y];
+    BOOL topDismissing = !self.topChannelUnreadIndicatorTracksHeader &&
+        self.topChannelUnreadIndicator && !self.topChannelUnreadIndicator.hidden;
+    CGFloat protectedHeight = DCGuildUnreadEdgeClearance;
+    if (topDismissing) {
+        protectedHeight += self.topChannelUnreadIndicatorClearance +
+                           [DCUnreadEdgeIndicatorView animationOverflow];
+    }
+    CGFloat topClearance = [self channelPinnedHeaderClearanceAtOffset:table.contentOffset.y
+                                                      protectedHeight:protectedHeight];
+    if (self.topChannelUnreadIndicatorTracksHeader) {
+        self.topChannelUnreadIndicatorClearance = topClearance;
+    } else if (topDismissing) {
+        topClearance = MAX(topClearance, self.topChannelUnreadIndicatorClearance);
+    }
     CGRect frame = table.frame;
     CGRect overlayFrame = CGRectMake(frame.origin.x, frame.origin.y + topClearance,
         frame.size.width, MAX(0.0f, frame.size.height - topClearance));
+
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
     if (!CGRectEqualToRect(self.channelUnreadOverlay.frame, overlayFrame))
         self.channelUnreadOverlay.frame = overlayFrame;
 
@@ -814,13 +856,15 @@ static const CGFloat DCGuildMentionBadgeCenterFromBottom = 11.0f;
     CGFloat height = DCGuildUnreadEdgeClearance + 2.0f * overflow;
     CGFloat width = self.channelUnreadOverlay.bounds.size.width;
     CGFloat listHeight = self.channelUnreadOverlay.bounds.size.height;
-    CGRect topFrame = CGRectMake(0.0f, -overflow, width, height);
+    CGRect topFrame = CGRectMake(0.0f,
+        self.topChannelUnreadIndicatorClearance - topClearance - overflow, width, height);
     CGRect bottomFrame = CGRectMake(0.0f,
         listHeight - DCGuildUnreadEdgeClearance - overflow, width, height);
     if (!CGRectEqualToRect(self.topChannelUnreadIndicator.frame, topFrame))
         self.topChannelUnreadIndicator.frame = topFrame;
     if (!CGRectEqualToRect(self.bottomChannelUnreadIndicator.frame, bottomFrame))
         self.bottomChannelUnreadIndicator.frame = bottomFrame;
+    [CATransaction commit];
 
     if (!self.mentionedChannelIndexPaths.count ||
         [table numberOfSections] != (NSInteger)self.displayChannelSections.count) {
@@ -856,8 +900,10 @@ static const CGFloat DCGuildMentionBadgeCenterFromBottom = 11.0f;
         CGFloat headerY = MIN(MAX(CGRectGetMinY(headerRect), visibleTop),
                               CGRectGetMaxY(sectionRect) - headerHeight);
         CGFloat overlayY = headerY - table.contentOffset.y - topClearance;
-        CGFloat topStart = MAX(0.0f, overlayY);
-        CGFloat topEnd = MIN(DCGuildUnreadEdgeClearance, overlayY + headerHeight);
+        CGFloat topIndicatorY = overlayY + topClearance -
+                                self.topChannelUnreadIndicatorClearance;
+        CGFloat topStart = MAX(0.0f, topIndicatorY);
+        CGFloat topEnd = MIN(DCGuildUnreadEdgeClearance, topIndicatorY + headerHeight);
         if (topEnd > topStart)
             [topOcclusions addObject:[NSValue valueWithCGRect:
                 CGRectMake(0.0f, topStart, 1.0f, topEnd - topStart)]];
@@ -908,11 +954,12 @@ static const CGFloat DCGuildMentionBadgeCenterFromBottom = 11.0f;
 - (void)updateChannelUnreadEdgeIndicators {
     if (self.channelCategoryAnimationInProgress ||
         !self.isViewLoaded || !self.view.window || !self.channelTableView) return;
+    BOOL showTop = [self nearestChannelMentionAtEdge:DCUnreadEdgeTop] != nil;
+    BOOL showBottom = [self nearestChannelMentionAtEdge:DCUnreadEdgeBottom] != nil;
+    self.topChannelUnreadIndicatorTracksHeader = showTop;
     [self layoutChannelUnreadEdgeIndicators];
-    [self.topChannelUnreadIndicator setActive:
-        [self nearestChannelMentionAtEdge:DCUnreadEdgeTop] != nil animated:YES];
-    [self.bottomChannelUnreadIndicator setActive:
-        [self nearestChannelMentionAtEdge:DCUnreadEdgeBottom] != nil animated:YES];
+    [self.topChannelUnreadIndicator setActive:showTop animated:YES];
+    [self.bottomChannelUnreadIndicator setActive:showBottom animated:YES];
 }
 
 - (void)finishPendingChannelMentionReveal {
@@ -1036,7 +1083,6 @@ static const CGFloat DCGuildMentionBadgeCenterFromBottom = 11.0f;
         self.topUnreadIndicator.frame = topFrame;
     if (!CGRectEqualToRect(self.bottomUnreadIndicator.frame, bottomFrame))
         self.bottomUnreadIndicator.frame = bottomFrame;
-    [self layoutChannelUnreadEdgeIndicators];
 }
 
 - (CGFloat)unreadListVisibleTop {
@@ -1431,6 +1477,8 @@ static const CGFloat DCGuildMentionBadgeCenterFromBottom = 11.0f;
     [self.bottomUnreadIndicator removeFromSuperview];
     [self.channelUnreadOverlay removeFromSuperview];
     self.channelUnreadOverlay = nil;
+    self.topChannelUnreadIndicatorClearance = 0.0f;
+    self.topChannelUnreadIndicatorTracksHeader = NO;
     [self.topChannelUnreadIndicator removeFromSuperview];
     [self.bottomChannelUnreadIndicator removeFromSuperview];
     self.topChannelUnreadIndicator = nil;

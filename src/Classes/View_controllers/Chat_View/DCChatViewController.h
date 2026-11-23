@@ -35,6 +35,12 @@
 - (void)getMessages:(int)numberOfMessages beforeMessage:(DCMessage *)message;
 - (void)activateSelectedChannel;
 - (void)navigateToChannel:(DCChannel *)channel;
+- (void)configureReadOnlyMessageListForChannel:(DCChannel *)channel;
+- (void)setReadOnlyMessages:(NSArray *)messages;
+- (void)refreshReadOnlyMessage:(DCMessage *)message;
+@property (nonatomic, copy) NSString *messageCellActionTitle;
+@property (nonatomic, copy) void (^messageCellActionHandler)(DCMessage *message);
+@property (nonatomic, copy) void (^messageReferenceJumpHandler)(NSString *messageID, NSString *channelID, NSString *guildID);
 
 @property (weak, nonatomic) IBOutlet UIView *toolbar;
 @property (weak, nonatomic) IBOutlet UIImageView *toolbarBG;

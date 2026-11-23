@@ -8,12 +8,15 @@
 
 #import "DCInterfaceStyle.h"
 #import "DCCInfoViewController.h"
+#import "DCPinnedMessagesViewController.h"
+#import "DCThreadsViewController.h"
 #import "DCMemberListSectionHeaderView.h"
 #include "DCUser.h"
 #include "DCGuild.h"
 #include "DCChannel.h"
 #include "DCServerCommunicator.h"
 #include <CoreGraphics/CGGeometry.h>
+#include <math.h>
 #include "DCTools.h"
 #include "DCRecipientTableCell.h"
 #include "DCRole.h"
@@ -25,6 +28,8 @@ static const NSUInteger DCMemberListPrefetchThreshold = 25;
 static const NSTimeInterval DCMemberListMinimumSubscriptionInterval = 1.5;
 static const NSTimeInterval DCMemberListRefreshCheckDelay = 1.75;
 static const NSUInteger DCMemberListMaximumRefreshRetries = 2;
+static const CGFloat DCMemberListActionBarHeight = 64.0f;
+static const CGFloat DCMemberListActionButtonHeight = 30.0f;
 
 @interface DCCInfoViewController ()
 @property (strong, nonatomic) DCGuild *memberListGuild;
@@ -37,6 +42,8 @@ static const NSUInteger DCMemberListMaximumRefreshRetries = 2;
 @property (assign, nonatomic) BOOL memberListVisible;
 @property (assign, nonatomic) NSUInteger memberListRefreshRetryCount;
 @property (assign, nonatomic) NSUInteger memberListGeneration;
+@property (strong, nonatomic) NSArray *memberListActionButtons;
+- (void)layoutMemberListActionButtons;
 @end
 
 @implementation DCCInfoViewController
@@ -87,11 +94,96 @@ static const NSUInteger DCMemberListMaximumRefreshRetries = 2;
                                              object:nil];
 
     [self configureForSelectedChannel];
+
+    if (UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPhone) {
+        UIView *header = [[UIView alloc] initWithFrame:
+            CGRectMake(0.0f, 0.0f, self.tableView.bounds.size.width, DCMemberListActionBarHeight)];
+        header.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+        header.backgroundColor = self.tableView.backgroundColor;
+
+        UIImage *normal = [[DCInterfaceStyle barButtonBackgroundImage]
+            stretchableImageWithLeftCapWidth:5 topCapHeight:14];
+        UIImage *pressed = [[DCInterfaceStyle barButtonPressedBackgroundImage]
+            stretchableImageWithLeftCapWidth:5 topCapHeight:14];
+        NSArray *titles = @[@"Threads", @"Notifications", @"Pins"];
+        NSMutableArray *buttons = [NSMutableArray arrayWithCapacity:titles.count];
+        for (NSUInteger index = 0; index < titles.count; index++) {
+            UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
+            button.titleLabel.font = [UIFont boldSystemFontOfSize:13.0f];
+            button.titleLabel.adjustsFontSizeToFitWidth = YES;
+            button.titleLabel.minimumFontSize = 10.0f;
+            button.contentEdgeInsets = UIEdgeInsetsMake(0, 4, 0, 4);
+            [button setTitle:[titles objectAtIndex:index] forState:UIControlStateNormal];
+            [button setBackgroundImage:normal forState:UIControlStateNormal];
+            [button setBackgroundImage:pressed forState:UIControlStateHighlighted];
+            [button setBackgroundImage:normal forState:UIControlStateDisabled];
+            if (index == 0) {
+                [button addTarget:self action:@selector(showThreads:)
+                 forControlEvents:UIControlEventTouchUpInside];
+            } else if (index == 2) {
+                [button addTarget:self action:@selector(showPinnedMessages:)
+                 forControlEvents:UIControlEventTouchUpInside];
+            } else {
+                [button setTitleColor:[UIColor grayColor] forState:UIControlStateDisabled];
+                button.enabled = NO;
+            }
+            [header addSubview:button];
+            [buttons addObject:button];
+        }
+        self.memberListActionButtons = buttons;
+        self.tableView.tableHeaderView = header;
+        [self layoutMemberListActionButtons];
+    }
+}
+
+- (void)layoutMemberListActionButtons {
+    if (self.memberListActionButtons.count != 3) return;
+
+    CGFloat width = CGRectGetWidth(self.tableView.bounds);
+    if (width <= 0.0f) return;
+    UIView *header = self.tableView.tableHeaderView;
+    if (fabs(CGRectGetWidth(header.frame) - width) > 0.5f) {
+        CGRect frame = header.frame;
+        frame.size.width = width;
+        header.frame = frame;
+        self.tableView.tableHeaderView = header;
+    }
+
+    const CGFloat spacing = 6.0f;
+    const CGFloat sideInset = 8.0f;
+    CGFloat buttonWidth = floorf(MAX(0.0f, (width - 2.0f * sideInset -
+                                            2.0f * spacing) / 3.0f));
+    CGFloat startX = floorf((width - (3.0f * buttonWidth + 2.0f * spacing)) / 2.0f);
+    CGFloat buttonY = (DCMemberListActionBarHeight - DCMemberListActionButtonHeight) / 2.0f;
+    for (NSUInteger index = 0; index < self.memberListActionButtons.count; index++) {
+        UIButton *button = [self.memberListActionButtons objectAtIndex:index];
+        CGRect frame = CGRectMake(startX + index * (buttonWidth + spacing),
+                                  buttonY, buttonWidth, DCMemberListActionButtonHeight);
+        if (!CGRectEqualToRect(button.frame, frame)) button.frame = frame;
+    }
+}
+
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    [self layoutMemberListActionButtons];
+}
+
+- (void)showPinnedMessages:(id)sender {
+    DCChannel *channel = DCServerCommunicator.sharedInstance.selectedChannel;
+    [DCPinnedMessagesViewController presentForChannel:channel
+                                          fromController:self
+                                     sourceBarButtonItem:nil];
+}
+
+- (void)showThreads:(id)sender {
+    DCChannel *channel = DCServerCommunicator.sharedInstance.selectedChannel;
+    [DCThreadsViewController presentForChannel:channel fromController:self];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
     self.memberListVisible = YES;
+    [self layoutMemberListActionButtons];
     [self configureForSelectedChannel];
     [self.tableView reloadData];
 

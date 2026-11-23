@@ -30,6 +30,9 @@
 // the store is keyed entirely by channel ID.
 - (DCChannelWindow *)windowForChannel:(NSString *)channelSnowflake;
 
+// Returns an in-memory window without restoring one from disk or creating a new window.
+- (DCChannelWindow *)loadedWindowForChannel:(NSString *)channelSnowflake;
+
 // Navigation state is process-session state and is never disk checkpointed.
 - (BOOL)hasOpenedChannelThisSession:(NSString *)channelID;
 - (void)markChannelOpenedThisSession:(NSString *)channelID;

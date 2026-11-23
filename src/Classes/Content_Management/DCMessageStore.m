@@ -172,6 +172,13 @@ static NSArray *DCNormalizeFetchedMessages(NSArray *messages,
     if (channelID.length) [self.openedChannels removeObject:channelID];
 }
 
+- (DCChannelWindow *)loadedWindowForChannel:(NSString *)channelSnowflake {
+    if (!channelSnowflake.length) return nil;
+    @synchronized (self) {
+        return [self.channelWindows objectForKey:channelSnowflake];
+    }
+}
+
 - (DCChannelWindow *)windowForChannel:(NSString *)channelSnowflake {
     if (!channelSnowflake) return nil;
 

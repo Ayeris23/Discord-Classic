@@ -7,10 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-        B21AC1000000000000000003 /* DCActionSheetPresenter.m in Sources */ = {isa = PBXBuildFile; fileRef = B21AC1000000000000000001 /* DCActionSheetPresenter.m */; };
-		B21EA0010000000000000003 /* DCMemberListSectionHeaderView.m in Sources */ = {isa = PBXBuildFile; fileRef = B21EA0010000000000000002 /* DCMemberListSectionHeaderView.m */; };
-		B21EC1000000000000000003 /* DCChannelCategoryHeaderView.m in Sources */ = {isa = PBXBuildFile; fileRef = B21EC1000000000000000001 /* DCChannelCategoryHeaderView.m */; };
-		B21ED1000000000000000003 /* DCUnreadEdgeIndicatorView.m in Sources */ = {isa = PBXBuildFile; fileRef = B21ED1000000000000000001 /* DCUnreadEdgeIndicatorView.m */; };
 		09C6B925204A0F54007EAC26 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 09C6B924204A0F54007EAC26 /* UIKit.framework */; };
 		09C6B927204A0F54007EAC26 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 09C6B926204A0F54007EAC26 /* Foundation.framework */; };
 		09C6B929204A0F54007EAC26 /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 09C6B928204A0F54007EAC26 /* CoreGraphics.framework */; };
@@ -373,7 +369,6 @@
 		2F1123752F4EB0AD00159D64 /* DCOwnAccountInfoManagementController.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F1123392F4EB0AD00159D64 /* DCOwnAccountInfoManagementController.m */; };
 		2F1123762F4EB0AD00159D64 /* DCViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F11233C2F4EB0AD00159D64 /* DCViewController.m */; };
 		2F1123772F4EB0AD00159D64 /* DCChatViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F11233F2F4EB0AD00159D64 /* DCChatViewController.m */; };
-		A5D1C1000000000000000001 /* DCTypingIndicatorView.m in Sources */ = {isa = PBXBuildFile; fileRef = A5D1C1000000000000000003 /* DCTypingIndicatorView.m */; };
 		2F1123782F4EB0AD00159D64 /* UILazyImageView.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F1123412F4EB0AD00159D64 /* UILazyImageView.m */; };
 		2F1123792F4EB0AD00159D64 /* DCChannelListViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F1123442F4EB0AD00159D64 /* DCChannelListViewController.m */; };
 		2F11237A2F4EB0AD00159D64 /* DCGuildListViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 2F1123462F4EB0AD00159D64 /* DCGuildListViewController.m */; };
@@ -567,22 +562,22 @@
 		2FFA3A7B2F98879E00E67A40 /* NSObject+DTRuntime.m in Sources */ = {isa = PBXBuildFile; fileRef = 2FFA3A372F98879E00E67A40 /* NSObject+DTRuntime.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
 		2FFA3A7E2F98899400E67A40 /* DTAnimatedGIF.m in Sources */ = {isa = PBXBuildFile; fileRef = 2FFA3A7D2F98899400E67A40 /* DTAnimatedGIF.m */; };
 		2FFA3A822F9B0AD600E67A40 /* default.css.c in Sources */ = {isa = PBXBuildFile; fileRef = 2FFA3A812F9B0AD600E67A40 /* default.css.c */; };
+		3FF9165130B3DB40004898C0 /* DCPinnedMessagesViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 3FF9165030B3DB40004898C0 /* DCPinnedMessagesViewController.m */; };
+		3FF9165430B3E227004898C0 /* DCChatMessageRenderer.m in Sources */ = {isa = PBXBuildFile; fileRef = 3FF9165330B3E227004898C0 /* DCChatMessageRenderer.m */; };
+		3FF9165730B423CA004898C0 /* DCThreadsViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 3FF9165630B423CA004898C0 /* DCThreadsViewController.m */; };
 		9FDE61CDBE304A9B989107DC /* DCInterfaceStyle.m in Sources */ = {isa = PBXBuildFile; fileRef = 7DFC9E25F7D54E268A2D0499 /* DCInterfaceStyle.m */; };
 		A15C0A03123456789ABCDEF0 /* DCConnectionPopup.m in Sources */ = {isa = PBXBuildFile; fileRef = A15C0A02123456789ABCDEF0 /* DCConnectionPopup.m */; };
 		A15D00012F6F000000000001 /* DCIPadSplitViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = A15D00032F6F000000000003 /* DCIPadSplitViewController.m */; };
+		A5D1C1000000000000000001 /* DCTypingIndicatorView.m in Sources */ = {isa = PBXBuildFile; fileRef = A5D1C1000000000000000003 /* DCTypingIndicatorView.m */; };
 		AB181001CABB101000000001 /* DCChatTableCellNewMessages.xib in Resources */ = {isa = PBXBuildFile; fileRef = AB181002CABB101000000001 /* DCChatTableCellNewMessages.xib */; };
+		B21AC1000000000000000003 /* DCActionSheetPresenter.m in Sources */ = {isa = PBXBuildFile; fileRef = B21AC1000000000000000001 /* DCActionSheetPresenter.m */; };
+		B21EA0010000000000000003 /* DCMemberListSectionHeaderView.m in Sources */ = {isa = PBXBuildFile; fileRef = B21EA0010000000000000002 /* DCMemberListSectionHeaderView.m */; };
+		B21EC1000000000000000003 /* DCChannelCategoryHeaderView.m in Sources */ = {isa = PBXBuildFile; fileRef = B21EC1000000000000000001 /* DCChannelCategoryHeaderView.m */; };
+		B21ED1000000000000000003 /* DCUnreadEdgeIndicatorView.m in Sources */ = {isa = PBXBuildFile; fileRef = B21ED1000000000000000001 /* DCUnreadEdgeIndicatorView.m */; };
 		F22BFBD64E9A4137B1343EEC /* DCInterfaceAssetCatalog.m in Sources */ = {isa = PBXBuildFile; fileRef = 422F4AE731E2409BAE181FE0 /* DCInterfaceAssetCatalog.m */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-        B21AC1000000000000000001 /* DCActionSheetPresenter.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = DCActionSheetPresenter.m; sourceTree = "<group>"; };
-        B21AC1000000000000000002 /* DCActionSheetPresenter.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = DCActionSheetPresenter.h; sourceTree = "<group>"; };
-		B21EA0010000000000000001 /* DCMemberListSectionHeaderView.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = DCMemberListSectionHeaderView.h; sourceTree = "<group>"; };
-		B21EA0010000000000000002 /* DCMemberListSectionHeaderView.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = DCMemberListSectionHeaderView.m; sourceTree = "<group>"; };
-		B21EC1000000000000000002 /* DCChannelCategoryHeaderView.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = DCChannelCategoryHeaderView.h; sourceTree = "<group>"; };
-		B21EC1000000000000000001 /* DCChannelCategoryHeaderView.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = DCChannelCategoryHeaderView.m; sourceTree = "<group>"; };
-		B21ED1000000000000000001 /* DCUnreadEdgeIndicatorView.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = DCUnreadEdgeIndicatorView.m; sourceTree = "<group>"; };
-		B21ED1000000000000000002 /* DCUnreadEdgeIndicatorView.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = DCUnreadEdgeIndicatorView.h; sourceTree = "<group>"; };
 		09C6B924204A0F54007EAC26 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
 		09C6B926204A0F54007EAC26 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = System/Library/Frameworks/Foundation.framework; sourceTree = SDKROOT; };
 		09C6B928204A0F54007EAC26 /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
@@ -1071,8 +1066,6 @@
 		2F11233C2F4EB0AD00159D64 /* DCViewController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCViewController.m; sourceTree = "<group>"; };
 		2F11233E2F4EB0AD00159D64 /* DCChatViewController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCChatViewController.h; sourceTree = "<group>"; };
 		2F11233F2F4EB0AD00159D64 /* DCChatViewController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; lineEnding = 0; path = DCChatViewController.m; sourceTree = "<group>"; };
-		A5D1C1000000000000000002 /* DCTypingIndicatorView.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = DCTypingIndicatorView.h; sourceTree = "<group>"; };
-		A5D1C1000000000000000003 /* DCTypingIndicatorView.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = DCTypingIndicatorView.m; sourceTree = "<group>"; };
 		2F1123402F4EB0AD00159D64 /* UILazyImageView.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = UILazyImageView.h; sourceTree = "<group>"; };
 		2F1123412F4EB0AD00159D64 /* UILazyImageView.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = UILazyImageView.m; sourceTree = "<group>"; };
 		2F1123432F4EB0AD00159D64 /* DCChannelListViewController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCChannelListViewController.h; sourceTree = "<group>"; };
@@ -1408,6 +1401,12 @@
 		2FFA3A7C2F98899400E67A40 /* DTAnimatedGIF.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DTAnimatedGIF.h; sourceTree = "<group>"; };
 		2FFA3A7D2F98899400E67A40 /* DTAnimatedGIF.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DTAnimatedGIF.m; sourceTree = "<group>"; };
 		2FFA3A812F9B0AD600E67A40 /* default.css.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = default.css.c; sourceTree = "<group>"; };
+		3FF9164F30B3DB40004898C0 /* DCPinnedMessagesViewController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCPinnedMessagesViewController.h; sourceTree = "<group>"; };
+		3FF9165030B3DB40004898C0 /* DCPinnedMessagesViewController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCPinnedMessagesViewController.m; sourceTree = "<group>"; };
+		3FF9165230B3E227004898C0 /* DCChatMessageRenderer.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCChatMessageRenderer.h; sourceTree = "<group>"; };
+		3FF9165330B3E227004898C0 /* DCChatMessageRenderer.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCChatMessageRenderer.m; sourceTree = "<group>"; };
+		3FF9165530B423CA004898C0 /* DCThreadsViewController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCThreadsViewController.h; sourceTree = "<group>"; };
+		3FF9165630B423CA004898C0 /* DCThreadsViewController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCThreadsViewController.m; sourceTree = "<group>"; };
 		422F4AE731E2409BAE181FE0 /* DCInterfaceAssetCatalog.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = DCInterfaceAssetCatalog.m; sourceTree = "<group>"; };
 		5BA0983D2D2058E4009F7726 /* discord.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = discord.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		7D2DF2048B574519BF851AA9 /* DCInterfaceAssetCatalog.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = DCInterfaceAssetCatalog.h; sourceTree = "<group>"; };
@@ -1417,7 +1416,17 @@
 		A15C0A02123456789ABCDEF0 /* DCConnectionPopup.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = DCConnectionPopup.m; sourceTree = "<group>"; };
 		A15D00022F6F000000000002 /* DCIPadSplitViewController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCIPadSplitViewController.h; sourceTree = "<group>"; };
 		A15D00032F6F000000000003 /* DCIPadSplitViewController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCIPadSplitViewController.m; sourceTree = "<group>"; };
+		A5D1C1000000000000000002 /* DCTypingIndicatorView.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = DCTypingIndicatorView.h; sourceTree = "<group>"; };
+		A5D1C1000000000000000003 /* DCTypingIndicatorView.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = DCTypingIndicatorView.m; sourceTree = "<group>"; };
 		AB181002CABB101000000001 /* DCChatTableCellNewMessages.xib */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.xib; path = DCChatTableCellNewMessages.xib; sourceTree = "<group>"; };
+		B21AC1000000000000000001 /* DCActionSheetPresenter.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = DCActionSheetPresenter.m; sourceTree = "<group>"; };
+		B21AC1000000000000000002 /* DCActionSheetPresenter.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = DCActionSheetPresenter.h; sourceTree = "<group>"; };
+		B21EA0010000000000000001 /* DCMemberListSectionHeaderView.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = DCMemberListSectionHeaderView.h; sourceTree = "<group>"; };
+		B21EA0010000000000000002 /* DCMemberListSectionHeaderView.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = DCMemberListSectionHeaderView.m; sourceTree = "<group>"; };
+		B21EC1000000000000000001 /* DCChannelCategoryHeaderView.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = DCChannelCategoryHeaderView.m; sourceTree = "<group>"; };
+		B21EC1000000000000000002 /* DCChannelCategoryHeaderView.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = DCChannelCategoryHeaderView.h; sourceTree = "<group>"; };
+		B21ED1000000000000000001 /* DCUnreadEdgeIndicatorView.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = DCUnreadEdgeIndicatorView.m; sourceTree = "<group>"; };
+		B21ED1000000000000000002 /* DCUnreadEdgeIndicatorView.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = DCUnreadEdgeIndicatorView.h; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -2470,6 +2479,12 @@
 		2F11233D2F4EB0AD00159D64 /* Chat_View */ = {
 			isa = PBXGroup;
 			children = (
+				3FF9165530B423CA004898C0 /* DCThreadsViewController.h */,
+				3FF9165630B423CA004898C0 /* DCThreadsViewController.m */,
+				3FF9165230B3E227004898C0 /* DCChatMessageRenderer.h */,
+				3FF9165330B3E227004898C0 /* DCChatMessageRenderer.m */,
+				3FF9164F30B3DB40004898C0 /* DCPinnedMessagesViewController.h */,
+				3FF9165030B3DB40004898C0 /* DCPinnedMessagesViewController.m */,
 				2F11233E2F4EB0AD00159D64 /* DCChatViewController.h */,
 				2F11233F2F4EB0AD00159D64 /* DCChatViewController.m */,
 				A5D1C1000000000000000002 /* DCTypingIndicatorView.h */,
@@ -3264,6 +3279,7 @@
 				2F1122C92F4EA03000159D64 /* picture_psnr_enc.c in Sources */,
 				2FFA3A7E2F98899400E67A40 /* DTAnimatedGIF.m in Sources */,
 				2F1122E12F4EA03000159D64 /* palette.c in Sources */,
+				3FF9165430B3E227004898C0 /* DCChatMessageRenderer.m in Sources */,
 				2F1122F62F4EA03000159D64 /* UIImageView+WebCache.m in Sources */,
 				2F1122B92F4EA03000159D64 /* yuv_sse2.c in Sources */,
 				2F1DF68E2F53FF8F009C44CE /* DCTwoFactorViewController.m in Sources */,
@@ -3312,6 +3328,7 @@
 				2FFA39732F987C2C00E67A40 /* DTImage+HTML.m in Sources */,
 				2F1122F02F4EA03000159D64 /* SDWebImagePrefetcher.m in Sources */,
 				2F1122D12F4EA03000159D64 /* vp8l_enc.c in Sources */,
+				3FF9165130B3DB40004898C0 /* DCPinnedMessagesViewController.m in Sources */,
 				2F1123612F4EB0AD00159D64 /* DCGuild.m in Sources */,
 				2F1122FE2F4EA03000159D64 /* WSMessage.m in Sources */,
 				2F1122652F4EA03000159D64 /* sharpyuv_csp.c in Sources */,
@@ -3399,6 +3416,7 @@
 				2FFA397A2F987C2C00E67A40 /* DTTextAttachment.m in Sources */,
 				2F1122E32F4EA03000159D64 /* quant_levels_utils.c in Sources */,
 				2F1122C02F4EA03000159D64 /* cost_enc.c in Sources */,
+				3FF9165730B423CA004898C0 /* DCThreadsViewController.m in Sources */,
 				2FFA3A592F98879E00E67A40 /* DTCustomColoredAccessory.m in Sources */,
 				2F1122A72F4EA03000159D64 /* rescaler.c in Sources */,
 				2F11229F2F4EA03000159D64 /* lossless_enc_sse2.c in Sources */,
