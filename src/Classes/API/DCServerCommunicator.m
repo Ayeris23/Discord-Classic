@@ -225,56 +225,39 @@ static BOOL DCChannelTypeAppearsInGuildList(DCChannelType type) {
         || type == DCChannelTypeGuildCategory;
 }
 
-static void DCEvaluateChannelAccess(NSArray *rawOverwrites,
-                                    NSString *guildID,
-                                    NSString *ownerID,
-                                    NSString *userID,
-                                    NSSet *userRoleSet,
-                                    NSDictionary *guildRoles,
-                                    BOOL *canViewOut,
-                                    BOOL *canWriteOut) {
-    BOOL canView = YES;
-    BOOL canWrite = YES;
-
-    if ([ownerID isEqualToString:userID]) {
-        if (canViewOut) *canViewOut = YES;
-        if (canWriteOut) *canWriteOut = YES;
-        return;
-    }
+static uint64_t DCEffectiveChannelPermissions(NSArray *rawOverwrites,
+                                               NSString *guildID,
+                                               NSString *ownerID,
+                                               NSString *userID,
+                                               NSSet *userRoleSet,
+                                               NSDictionary *guildRoles) {
+    if (userID.length && [ownerID isEqualToString:userID]) return UINT64_MAX;
 
     uint64_t effective = 0;
     BOOL resolvedBasePermissions = NO;
     for (NSString *roleID in userRoleSet) {
         DCRole *role = [guildRoles objectForKey:roleID];
         if (!role || ![role.permissions respondsToSelector:@selector(longLongValue)]) continue;
-        effective |= [role.permissions longLongValue];
+        effective |= (uint64_t)[role.permissions longLongValue];
         resolvedBasePermissions = YES;
     }
 
-    if (resolvedBasePermissions) {
-        if ((effective & DCPermissionAdministrator) == DCPermissionAdministrator) {
-            if (canViewOut) *canViewOut = YES;
-            if (canWriteOut) *canWriteOut = YES;
-            return;
-        }
-    } else {
+    if ((effective & DCPermissionAdministrator) != 0) return UINT64_MAX;
+    if (!resolvedBasePermissions) {
         effective = DCPermissionViewChannel | DCPermissionSendMessages;
     }
 
     uint64_t everyoneDeny = 0, everyoneAllow = 0;
     uint64_t roleDeny = 0, roleAllow = 0;
     uint64_t memberDeny = 0, memberAllow = 0;
-
     if ([rawOverwrites isKindOfClass:[NSArray class]]) {
         for (NSDictionary *permission in rawOverwrites) {
             if (![permission isKindOfClass:[NSDictionary class]]) continue;
             NSString *identifier = [permission objectForKey:@"id"];
             if (![identifier isKindOfClass:[NSString class]]) continue;
-
-            uint64_t deny = [[permission objectForKey:@"deny"] longLongValue];
-            uint64_t allow = [[permission objectForKey:@"allow"] longLongValue];
+            uint64_t deny = (uint64_t)[[permission objectForKey:@"deny"] longLongValue];
+            uint64_t allow = (uint64_t)[[permission objectForKey:@"allow"] longLongValue];
             NSInteger type = [[permission objectForKey:@"type"] integerValue];
-
             if (type == 0) {
                 if ([identifier isEqualToString:guildID]) {
                     everyoneDeny |= deny;
@@ -296,11 +279,21 @@ static void DCEvaluateChannelAccess(NSArray *rawOverwrites,
     effective |= roleAllow;
     effective &= ~memberDeny;
     effective |= memberAllow;
+    return effective;
+}
 
-    canView = (effective & DCPermissionViewChannel) == DCPermissionViewChannel;
-    canWrite = canView &&
-        ((effective & DCPermissionSendMessages) == DCPermissionSendMessages);
-
+static void DCEvaluateChannelAccess(NSArray *rawOverwrites,
+                                    NSString *guildID,
+                                    NSString *ownerID,
+                                    NSString *userID,
+                                    NSSet *userRoleSet,
+                                    NSDictionary *guildRoles,
+                                    BOOL *canViewOut,
+                                    BOOL *canWriteOut) {
+    uint64_t effective = DCEffectiveChannelPermissions(rawOverwrites, guildID,
+        ownerID, userID, userRoleSet, guildRoles);
+    BOOL canView = (effective & DCPermissionViewChannel) != 0;
+    BOOL canWrite = canView && (effective & DCPermissionSendMessages) != 0;
     if (canViewOut) *canViewOut = canView;
     if (canWriteOut) *canWriteOut = canWrite;
 }
@@ -3692,6 +3685,17 @@ static BOOL DCDecodeGuildLayoutProto(NSData *protoData,
     }
 }
 
+- (uint64_t)effectivePermissionsForChannel:(DCChannel *)channel {
+    DCGuild *guild = channel.parentGuild;
+    if (!channel || !guild || !guild.snowflake.length || !self.snowflake.length)
+        return 0;
+    if (![guild.ownerID isEqualToString:self.snowflake] &&
+        (!guild.roles.count || !guild.userRoles.count)) return 0;
+    NSSet *roles = [NSSet setWithArray:guild.userRoles];
+    return DCEffectiveChannelPermissions(channel.permissionOverwrites,
+        guild.snowflake, guild.ownerID, self.snowflake, roles, guild.roles);
+}
+
 - (void)refreshChannelAccessForGuild:(DCGuild *)guild {
     if (!guild || !guild.snowflake.length) return;
 
@@ -4722,6 +4726,11 @@ typedef struct {
             if ([g.snowflake isEqualToString:guildId]) { guild = g; break; }
         }
         if (!guild || !members) return;
+        NSString *nonce = [d objectForKey:@"nonce"];
+        BOOL isLookupResponse = [nonce isKindOfClass:[NSString class]] &&
+            [nonce hasPrefix:@"dcl-"];
+        NSMutableArray *lookupUserIDs = isLookupResponse
+            ? [NSMutableArray arrayWithCapacity:members.count] : nil;
         for (NSDictionary *memberDict in members) {
             DCUser *user = [DCTools convertJsonUser:[memberDict objectForKey:@"user"]
                                               cache:YES];
@@ -4730,6 +4739,20 @@ typedef struct {
                                           toUser:user
                                          guildID:guildId
                                    authoritative:YES];
+            if (isLookupResponse && user.snowflake.length) {
+                [lookupUserIDs addObject:user.snowflake];
+            }
+        }
+        if (isLookupResponse && lookupUserIDs.count) {
+            NSArray *resolvedIDs = [lookupUserIDs copy];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [NSNotificationCenter.defaultCenter
+                    postNotificationName:@"DCChatLookupGuildMembersReceived"
+                                  object:nil
+                                userInfo:@{ @"guild_id": guildId,
+                                            @"nonce": nonce,
+                                            @"user_ids": resolvedIDs }];
+            });
         }
         if (self.selectedChannel &&
             [self.selectedChannel.parentGuild.snowflake isEqualToString:guildId]) {

@@ -54,6 +54,17 @@
     return [DCInterfaceAssetCatalog imageNamed:@"MessageField"];
 }
 
++ (UIImage *)threadTitleFieldBackgroundImage {
+    UIImage *image = [DCInterfaceAssetCatalog imageNamed:@"FieldSquare"];
+    if (!image) return nil;
+    UIEdgeInsets caps = UIEdgeInsetsMake(7.0f, 6.0f, 7.0f, 6.0f);
+    if ([image respondsToSelector:@selector(resizableImageWithCapInsets:resizingMode:)]) {
+        return [image resizableImageWithCapInsets:caps
+                                    resizingMode:UIImageResizingModeStretch];
+    }
+    return [image stretchableImageWithLeftCapWidth:6 topCapHeight:7];
+}
+
 + (UIImage *)sendButtonBackgroundImage {
     return [DCInterfaceAssetCatalog imageNamed:@"SendMessageButton"];
 }

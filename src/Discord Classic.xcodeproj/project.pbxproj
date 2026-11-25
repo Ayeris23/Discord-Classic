@@ -562,6 +562,15 @@
 		2FFA3A7B2F98879E00E67A40 /* NSObject+DTRuntime.m in Sources */ = {isa = PBXBuildFile; fileRef = 2FFA3A372F98879E00E67A40 /* NSObject+DTRuntime.m */; settings = {COMPILER_FLAGS = "-fobjc-arc"; }; };
 		2FFA3A7E2F98899400E67A40 /* DTAnimatedGIF.m in Sources */ = {isa = PBXBuildFile; fileRef = 2FFA3A7D2F98899400E67A40 /* DTAnimatedGIF.m */; };
 		2FFA3A822F9B0AD600E67A40 /* default.css.c in Sources */ = {isa = PBXBuildFile; fileRef = 2FFA3A812F9B0AD600E67A40 /* default.css.c */; };
+		3F075BF530B5EA030078ABC5 /* DCSearchUI.m in Sources */ = {isa = PBXBuildFile; fileRef = 3F075BF430B5EA030078ABC5 /* DCSearchUI.m */; };
+		3F075BF830B5EA2A0078ABC5 /* DCSearchThreads.m in Sources */ = {isa = PBXBuildFile; fileRef = 3F075BF730B5EA2A0078ABC5 /* DCSearchThreads.m */; };
+		3F075BFC30B5F3150078ABC5 /* SearchBarBackground2x.png in Resources */ = {isa = PBXBuildFile; fileRef = 3F075BFA30B5F3150078ABC5 /* SearchBarBackground2x.png */; };
+		3F075BFD30B5F3150078ABC5 /* SearchBarBackground.png in Resources */ = {isa = PBXBuildFile; fileRef = 3F075BFB30B5F3150078ABC5 /* SearchBarBackground.png */; };
+		3F185BE830B523ED00BD547E /* DCChatComposer.m in Sources */ = {isa = PBXBuildFile; fileRef = 3F185BE730B523ED00BD547E /* DCChatComposer.m */; };
+		3F185BEC30B52E8A00BD547E /* FieldSquare@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = 3F185BEA30B52E8A00BD547E /* FieldSquare@2x.png */; };
+		3F185BED30B52E8A00BD547E /* FieldSquare.png in Resources */ = {isa = PBXBuildFile; fileRef = 3F185BEB30B52E8A00BD547E /* FieldSquare.png */; };
+		3F1C16D930B4DA6E00EE8E0C /* DCChatLookupView.m in Sources */ = {isa = PBXBuildFile; fileRef = 3F1C16D830B4DA6E00EE8E0C /* DCChatLookupView.m */; };
+		3F1C16DC30B4ED7F00EE8E0C /* DCThreadCreateViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 3F1C16DB30B4ED7F00EE8E0C /* DCThreadCreateViewController.m */; };
 		3FF9165130B3DB40004898C0 /* DCPinnedMessagesViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 3FF9165030B3DB40004898C0 /* DCPinnedMessagesViewController.m */; };
 		3FF9165430B3E227004898C0 /* DCChatMessageRenderer.m in Sources */ = {isa = PBXBuildFile; fileRef = 3FF9165330B3E227004898C0 /* DCChatMessageRenderer.m */; };
 		3FF9165730B423CA004898C0 /* DCThreadsViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = 3FF9165630B423CA004898C0 /* DCThreadsViewController.m */; };
@@ -1401,6 +1410,20 @@
 		2FFA3A7C2F98899400E67A40 /* DTAnimatedGIF.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DTAnimatedGIF.h; sourceTree = "<group>"; };
 		2FFA3A7D2F98899400E67A40 /* DTAnimatedGIF.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DTAnimatedGIF.m; sourceTree = "<group>"; };
 		2FFA3A812F9B0AD600E67A40 /* default.css.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = default.css.c; sourceTree = "<group>"; };
+		3F075BF330B5EA030078ABC5 /* DCSearchUI.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCSearchUI.h; sourceTree = "<group>"; };
+		3F075BF430B5EA030078ABC5 /* DCSearchUI.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCSearchUI.m; sourceTree = "<group>"; };
+		3F075BF630B5EA2A0078ABC5 /* DCSearchThreads.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCSearchThreads.h; sourceTree = "<group>"; };
+		3F075BF730B5EA2A0078ABC5 /* DCSearchThreads.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCSearchThreads.m; sourceTree = "<group>"; };
+		3F075BFA30B5F3150078ABC5 /* SearchBarBackground2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = SearchBarBackground2x.png; sourceTree = "<group>"; };
+		3F075BFB30B5F3150078ABC5 /* SearchBarBackground.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = SearchBarBackground.png; sourceTree = "<group>"; };
+		3F185BE630B523ED00BD547E /* DCChatComposer.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCChatComposer.h; sourceTree = "<group>"; };
+		3F185BE730B523ED00BD547E /* DCChatComposer.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCChatComposer.m; sourceTree = "<group>"; };
+		3F185BEA30B52E8A00BD547E /* FieldSquare@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "FieldSquare@2x.png"; sourceTree = "<group>"; };
+		3F185BEB30B52E8A00BD547E /* FieldSquare.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = FieldSquare.png; sourceTree = "<group>"; };
+		3F1C16D730B4DA6E00EE8E0C /* DCChatLookupView.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCChatLookupView.h; sourceTree = "<group>"; };
+		3F1C16D830B4DA6E00EE8E0C /* DCChatLookupView.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCChatLookupView.m; sourceTree = "<group>"; };
+		3F1C16DA30B4ED7F00EE8E0C /* DCThreadCreateViewController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCThreadCreateViewController.h; sourceTree = "<group>"; };
+		3F1C16DB30B4ED7F00EE8E0C /* DCThreadCreateViewController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCThreadCreateViewController.m; sourceTree = "<group>"; };
 		3FF9164F30B3DB40004898C0 /* DCPinnedMessagesViewController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCPinnedMessagesViewController.h; sourceTree = "<group>"; };
 		3FF9165030B3DB40004898C0 /* DCPinnedMessagesViewController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCPinnedMessagesViewController.m; sourceTree = "<group>"; };
 		3FF9165230B3E227004898C0 /* DCChatMessageRenderer.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCChatMessageRenderer.h; sourceTree = "<group>"; };
@@ -1529,6 +1552,8 @@
 		2F111FCD2F4E913F00159D64 /* Images */ = {
 			isa = PBXGroup;
 			children = (
+				3F075BF930B5F3150078ABC5 /* Search */,
+				3F185BE930B52E8A00BD547E /* Text_Entry */,
 				2F32F3DE302B0009003BF841 /* folder@2x.png */,
 				2FFA38AB2F95E11500E67A40 /* AppIcons */,
 				2F74240B2F7771D600FAF3D9 /* Badge.png */,
@@ -2479,6 +2504,14 @@
 		2F11233D2F4EB0AD00159D64 /* Chat_View */ = {
 			isa = PBXGroup;
 			children = (
+				3F075BF630B5EA2A0078ABC5 /* DCSearchThreads.h */,
+				3F075BF730B5EA2A0078ABC5 /* DCSearchThreads.m */,
+				3F185BE630B523ED00BD547E /* DCChatComposer.h */,
+				3F185BE730B523ED00BD547E /* DCChatComposer.m */,
+				3F1C16DA30B4ED7F00EE8E0C /* DCThreadCreateViewController.h */,
+				3F1C16DB30B4ED7F00EE8E0C /* DCThreadCreateViewController.m */,
+				3F1C16D730B4DA6E00EE8E0C /* DCChatLookupView.h */,
+				3F1C16D830B4DA6E00EE8E0C /* DCChatLookupView.m */,
 				3FF9165530B423CA004898C0 /* DCThreadsViewController.h */,
 				3FF9165630B423CA004898C0 /* DCThreadsViewController.m */,
 				3FF9165230B3E227004898C0 /* DCChatMessageRenderer.h */,
@@ -2946,9 +2979,29 @@
 			path = Runtime;
 			sourceTree = "<group>";
 		};
+		3F075BF930B5F3150078ABC5 /* Search */ = {
+			isa = PBXGroup;
+			children = (
+				3F075BFA30B5F3150078ABC5 /* SearchBarBackground2x.png */,
+				3F075BFB30B5F3150078ABC5 /* SearchBarBackground.png */,
+			);
+			path = Search;
+			sourceTree = "<group>";
+		};
+		3F185BE930B52E8A00BD547E /* Text_Entry */ = {
+			isa = PBXGroup;
+			children = (
+				3F185BEA30B52E8A00BD547E /* FieldSquare@2x.png */,
+				3F185BEB30B52E8A00BD547E /* FieldSquare.png */,
+			);
+			path = Text_Entry;
+			sourceTree = "<group>";
+		};
 		9D43EA28E6394828AFD75534 /* Interface */ = {
 			isa = PBXGroup;
 			children = (
+				3F075BF330B5EA030078ABC5 /* DCSearchUI.h */,
+				3F075BF430B5EA030078ABC5 /* DCSearchUI.m */,
 				B21AC1000000000000000002 /* DCActionSheetPresenter.h */,
 				B21AC1000000000000000001 /* DCActionSheetPresenter.m */,
 				7D2DF2048B574519BF851AA9 /* DCInterfaceAssetCatalog.h */,
@@ -3095,6 +3148,7 @@
 				2F1120C42F4E913F00159D64 /* DefaultAvatar2.png in Resources */,
 				2F1120DE2F4E913F00159D64 /* Icon.png in Resources */,
 				2F11208C2F4E913F00159D64 /* Border@2x.png in Resources */,
+				3F075BFD30B5F3150078ABC5 /* SearchBarBackground.png in Resources */,
 				2F1121062F4E913F00159D64 /* commandbar-bg.png in Resources */,
 				2F1DF6842F537FBE009C44CE /* BarButtonDonePressed.png in Resources */,
 				2F1120BF2F4E913F00159D64 /* C-YouTube@2x.png in Resources */,
@@ -3137,6 +3191,7 @@
 				2F1120BA2F4E913F00159D64 /* C-Web.png in Resources */,
 				2F1120EF2F4E913F00159D64 /* PLVideoOverlayPlay.png in Resources */,
 				2F1120C32F4E913F00159D64 /* DefaultAvatar1@2x.png in Resources */,
+				3F075BFC30B5F3150078ABC5 /* SearchBarBackground2x.png in Resources */,
 				2F32F3EF305635BA003BF841 /* Down.png in Resources */,
 				2F1120C62F4E913F00159D64 /* DefaultAvatar3.png in Resources */,
 				2F1120F12F4E913F00159D64 /* PLVideoOverlayPlayDown.png in Resources */,
@@ -3172,6 +3227,7 @@
 				2F1120C92F4E913F00159D64 /* DefaultAvatar4@2x.png in Resources */,
 				2F1120D12F4E913F00159D64 /* U-Pen@2x.png in Resources */,
 				2FFA38C42F95E11500E67A40 /* icon120-ios7.png in Resources */,
+				3F185BED30B52E8A00BD547E /* FieldSquare.png in Resources */,
 				2F1121222F4E913F00159D64 /* DCChatVideoAttachment.xib in Resources */,
 				2F1120902F4E913F00159D64 /* addbarglyph@2x.png in Resources */,
 				2F1DF66C2F52BCAC009C44CE /* MessageField.png in Resources */,
@@ -3180,6 +3236,7 @@
 				2F11208E2F4E913F00159D64 /* No-Header@2x.png in Resources */,
 				2F1120E72F4E913F00159D64 /* menu@2x.png in Resources */,
 				2F1122D52F4EA03000159D64 /* libwebpmux.rc in Resources */,
+				3F185BEC30B52E8A00BD547E /* FieldSquare@2x.png in Resources */,
 				2FFA38BE2F95E11500E67A40 /* icon144.png in Resources */,
 				2F1120A32F4E913F00159D64 /* hamburgerButton@2x.png in Resources */,
 				2F1120CC2F4E913F00159D64 /* U-Add.png in Resources */,
@@ -3338,6 +3395,7 @@
 				2FFA39772F987C2C00E67A40 /* DTListItemHTMLElement.m in Sources */,
 				2F1122A92F4EA03000159D64 /* rescaler_mips_dsp_r2.c in Sources */,
 				2F1122512F4EA03000159D64 /* Base64.m in Sources */,
+				3F185BE830B523ED00BD547E /* DCChatComposer.m in Sources */,
 				2F11236E2F4EB0AD00159D64 /* DCGuildTableViewCell.m in Sources */,
 				2F1122952F4EA03000159D64 /* filters_mips_dsp_r2.c in Sources */,
 				2F1122B12F4EA03000159D64 /* upsampling_msa.c in Sources */,
@@ -3359,6 +3417,7 @@
 				2F1122752F4EA03000159D64 /* anim_decode.c in Sources */,
 				2FFA398A2F987C2C00E67A40 /* NSScanner+HTML.m in Sources */,
 				2F1122D32F4EA03000159D64 /* anim_encode.c in Sources */,
+				3F1C16D930B4DA6E00EE8E0C /* DCChatLookupView.m in Sources */,
 				2FFA39642F987C2C00E67A40 /* DTCoreTextLayoutFrame.m in Sources */,
 				2F1122D72F4EA03000159D64 /* muxedit.c in Sources */,
 				2F11228A2F4EA03000159D64 /* dec_neon.c in Sources */,
@@ -3368,6 +3427,7 @@
 				2F1122C42F4EA03000159D64 /* iterator_enc.c in Sources */,
 				2FFA39602F987C2C00E67A40 /* DTCoreTextFunctions.m in Sources */,
 				2F1122B62F4EA03000159D64 /* yuv_mips32.c in Sources */,
+				3F075BF830B5EA2A0078ABC5 /* DCSearchThreads.m in Sources */,
 				2FFA39582F987C2C00E67A40 /* DTAttributedTextContentView.m in Sources */,
 				2FFA39762F987C2C00E67A40 /* DTLinkButton.m in Sources */,
 				2F1122DA2F4EA03000159D64 /* bit_reader_utils.c in Sources */,
@@ -3524,6 +3584,7 @@
 				2F1123602F4EB0AD00159D64 /* DCEmoji.m in Sources */,
 				2FFA3A532F98879E00E67A40 /* DTAlertView.m in Sources */,
 				2F1122762F4EA03000159D64 /* demux.c in Sources */,
+				3F1C16DC30B4ED7F00EE8E0C /* DCThreadCreateViewController.m in Sources */,
 				2F1122572F4EA03000159D64 /* CKRefreshArrowView.m in Sources */,
 				2F1122F42F4EA03000159D64 /* UIImage+WebP.m in Sources */,
 				2FFA3A732F98879E00E67A40 /* NSURL+DTUnshorten.m in Sources */,
@@ -3531,6 +3592,7 @@
 				2F11236D2F4EB0AD00159D64 /* DCConnectedAccountsCell.m in Sources */,
 				2F11227C2F4EA03000159D64 /* alpha_processing_neon.c in Sources */,
 				2F1122EF2F4EA03000159D64 /* SDWebImageManager.m in Sources */,
+				3F075BF530B5EA030078ABC5 /* DCSearchUI.m in Sources */,
 				2F1122F52F4EA03000159D64 /* UIImageView+HighlightedWebCache.m in Sources */,
 				2F1122AC2F4EA03000159D64 /* rescaler_sse2.c in Sources */,
 				2F1122712F4EA03000159D64 /* tree_dec.c in Sources */,

@@ -296,11 +296,15 @@ typedef NS_ENUM(uint64_t, DCGatewayCapabilities) {
 - (void)setEmoji:(DCEmoji *)emoji forSnowflake:(NSString *)snowflake;
 - (void)registerPushToken:(NSString *)token;
 - (DCChannel *)registerCreatedDirectMessageFromResponse:(NSDictionary *)response;
+- (void)handleChannelCreateWithData:(NSDictionary *)data;
 - (void)requestMemberChunkForUserIds:(NSArray *)userIds inGuild:(NSString *)guildId;
 - (void)applyGuildProfileFromMember:(NSDictionary *)member
                              toUser:(DCUser *)user
                             guildID:(NSString *)guildID
                       authoritative:(BOOL)authoritative;
+
+// Effective guild permissions after channel overwrites.
+- (uint64_t)effectivePermissionsForChannel:(DCChannel *)channel;
 
 // Shared networking helpers
 + (NSString *)superPropertiesBase64;

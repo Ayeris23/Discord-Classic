@@ -8,6 +8,9 @@
 
 #import "DCThreadsViewController.h"
 #import "DCChannel.h"
+#import "DCThreadCreateViewController.h"
+#import "DCSearchUI.h"
+#import "DCSearchThreads.h"
 #import "DCGuild.h"
 #import "DCInterfaceStyle.h"
 #import "DCMemberListSectionHeaderView.h"
@@ -15,21 +18,33 @@
 #import "DCTools.h"
 #import "DCUser.h"
 #import <QuartzCore/QuartzCore.h>
+#import <math.h>
 
-static const CGFloat DCThreadRowHeight = 76.0f;
+static const CGFloat DCThreadRowHeight = 68.0f;
 static const NSUInteger DCThreadResultLimit = 500;
 static const NSUInteger DCThreadSearchPageSize = 25;
 
-static UIColor *DCThreadServerListBackgroundColor(void) {
-    return [UIColor colorWithRed:31.0f / 255.0f green:31.0f / 255.0f
-                            blue:31.0f / 255.0f alpha:1.0f];
+static UIColor *DCThreadChatCellBackgroundColor(void) {
+    static UIColor *color;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        color = [UIColor colorWithRed:40.0f / 255.0f green:41.0f / 255.0f
+                                blue:46.0f / 255.0f alpha:1.0f];
+    });
+    return color;
 }
 
-static UIColor *DCThreadChatCellBackgroundColor(void) {
-    return [UIColor colorWithRed:40.0f / 255.0f green:41.0f / 255.0f
-                            blue:46.0f / 255.0f alpha:1.0f];
+static UIColor *DCThreadAlternateCellBackgroundColor(void) {
+    static UIColor *color;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        color = [UIColor colorWithRed:33.0f / 255.0f green:34.0f / 255.0f
+                                blue:38.0f / 255.0f alpha:1.0f];
+    });
+    return color;
 }
-static const NSUInteger DCThreadUserLookupLimit = 16;
+
+static const NSUInteger DCThreadMemberBatchSize = 32;
 
 static dispatch_queue_t DCThreadUserLookupQueue(void) {
     static dispatch_queue_t queue;
@@ -64,6 +79,16 @@ static NSDate *DCThreadDateFromSnowflake(NSString *snowflake) {
     return [NSDate dateWithTimeIntervalSince1970:seconds];
 }
 
+static NSComparator DCThreadNewestFirstComparator(void) {
+    return ^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        NSString *aID = DCThreadString([a objectForKey:@"last_message_id"]);
+        NSString *bID = DCThreadString([b objectForKey:@"last_message_id"]);
+        if (!aID.length) aID = DCThreadString([a objectForKey:@"id"]);
+        if (!bID.length) bID = DCThreadString([b objectForKey:@"id"]);
+        return DCThreadCompareSnowflakes(bID, aID);
+    };
+}
+
 static NSString *DCThreadRelativeTime(NSString *snowflake) {
     NSDate *date = DCThreadDateFromSnowflake(snowflake);
     if (!date) return @"Unknown activity";
@@ -73,11 +98,13 @@ static NSString *DCThreadRelativeTime(NSString *snowflake) {
     if (age < 86400.0) return [NSString stringWithFormat:@"%ldh ago", (long)(age / 3600.0)];
     if (age < 604800.0) return [NSString stringWithFormat:@"%ldd ago", (long)(age / 86400.0)];
     if (age < 2592000.0) return [NSString stringWithFormat:@"%ldw ago", (long)(age / 604800.0)];
-    return [DCTools prettyTimestampForDate:date];
+    if (age < 31536000.0) return [NSString stringWithFormat:@"%ldmo ago", (long)(age / 2592000.0)];
+    return [NSString stringWithFormat:@"%ldy ago", (long)(age / 31536000.0)];
 }
 
 @interface DCThreadListCell : UITableViewCell
-@property (nonatomic, strong) UIView *panel;
+@property (nonatomic, strong) UIView *separatorHigh;
+@property (nonatomic, strong) UIView *separatorLow;
 @property (nonatomic, strong) UILabel *threadTitle;
 @property (nonatomic, strong) UILabel *authorLabel;
 @property (nonatomic, strong) UILabel *activityLabel;
@@ -93,57 +120,78 @@ static NSString *DCThreadRelativeTime(NSString *snowflake) {
     self.contentView.backgroundColor = [UIColor clearColor];
     self.selectionStyle = UITableViewCellSelectionStyleGray;
 
-    _panel = [[UIView alloc] initWithFrame:CGRectZero];
-    _panel.backgroundColor = DCThreadChatCellBackgroundColor();
-    _panel.layer.cornerRadius = 7.0f;
-    _panel.layer.borderWidth = 0.5f;
-    _panel.layer.borderColor = [UIColor colorWithWhite:1.0f alpha:0.08f].CGColor;
-    _panel.userInteractionEnabled = NO;
-    [self.contentView addSubview:_panel];
+    UIView *rowBackground = [[UIView alloc] initWithFrame:self.bounds];
+    rowBackground.backgroundColor = DCThreadChatCellBackgroundColor();
+    rowBackground.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    self.backgroundView = rowBackground;
+
+    _separatorHigh = [[UIView alloc] initWithFrame:CGRectZero];
+    _separatorHigh.backgroundColor = [UIColor colorWithRed:31.0f / 255.0f
+                                                     green:32.0f / 255.0f
+                                                      blue:36.0f / 255.0f alpha:1.0f];
+    _separatorHigh.userInteractionEnabled = NO;
+    [self.contentView addSubview:_separatorHigh];
+
+    _separatorLow = [[UIView alloc] initWithFrame:CGRectZero];
+    _separatorLow.backgroundColor = [UIColor colorWithRed:48.0f / 255.0f
+                                                    green:49.0f / 255.0f
+                                                     blue:56.0f / 255.0f alpha:1.0f];
+    _separatorLow.userInteractionEnabled = NO;
+    [self.contentView addSubview:_separatorLow];
 
     _threadTitle = [[UILabel alloc] initWithFrame:CGRectZero];
     _threadTitle.backgroundColor = [UIColor clearColor];
     _threadTitle.font = [UIFont boldSystemFontOfSize:16.0f];
     _threadTitle.textColor = [UIColor whiteColor];
+    _threadTitle.shadowColor = [UIColor blackColor];
+    _threadTitle.shadowOffset = CGSizeMake(0.0f, 1.0f);
     _threadTitle.lineBreakMode = UILineBreakModeTailTruncation;
-    [_panel addSubview:_threadTitle];
+    [self.contentView addSubview:_threadTitle];
 
     _referencedProfileImage = [[UIImageView alloc] initWithFrame:CGRectZero];
     _referencedProfileImage.backgroundColor = [UIColor clearColor];
     _referencedProfileImage.contentMode = UIViewContentModeScaleAspectFill;
     _referencedProfileImage.clipsToBounds = YES;
     _referencedProfileImage.layer.cornerRadius = 10.0f;
-    [_panel addSubview:_referencedProfileImage];
+    [self.contentView addSubview:_referencedProfileImage];
 
     _authorLabel = [[UILabel alloc] initWithFrame:CGRectZero];
     _authorLabel.backgroundColor = [UIColor clearColor];
-    _authorLabel.font = [UIFont boldSystemFontOfSize:14.0f];
+    _authorLabel.font = [UIFont boldSystemFontOfSize:13.0f];
     _authorLabel.textColor = [UIColor lightGrayColor];
+    _authorLabel.shadowColor = [UIColor colorWithRed:14.0f / 255.0f
+                                                  green:15.0f / 255.0f
+                                                   blue:16.0f / 255.0f alpha:1.0f];
+    _authorLabel.shadowOffset = CGSizeMake(0.0f, 1.0f);
     _authorLabel.lineBreakMode = UILineBreakModeTailTruncation;
-    [_panel addSubview:_authorLabel];
+    [self.contentView addSubview:_authorLabel];
 
     _activityLabel = [[UILabel alloc] initWithFrame:CGRectZero];
     _activityLabel.backgroundColor = [UIColor clearColor];
-    _activityLabel.font = [UIFont systemFontOfSize:12.0f];
-    _activityLabel.textColor = [UIColor lightGrayColor];
+    _activityLabel.font = [UIFont fontWithName:@"HelveticaNeue" size:10.0f];
+    if (!_activityLabel.font) _activityLabel.font = [UIFont systemFontOfSize:10.0f];
+    _activityLabel.textColor = [UIColor colorWithWhite:128.0f / 255.0f alpha:1.0f];
+    _activityLabel.shadowColor = [UIColor blackColor];
+    _activityLabel.shadowOffset = CGSizeMake(0.0f, 1.0f);
     _activityLabel.textAlignment = UITextAlignmentRight;
     _activityLabel.lineBreakMode = UILineBreakModeTailTruncation;
-    [_panel addSubview:_activityLabel];
+    [self.contentView addSubview:_activityLabel];
     return self;
 }
 
 - (void)layoutSubviews {
     [super layoutSubviews];
     CGFloat width = self.contentView.bounds.size.width;
-    self.panel.frame = CGRectMake(8.0f, 4.0f, MAX(0.0f, width - 16.0f), DCThreadRowHeight - 8.0f);
-    CGFloat insideWidth = self.panel.bounds.size.width;
-    self.threadTitle.frame = CGRectMake(12.0f, 9.0f, MAX(0.0f, insideWidth - 24.0f), 21.0f);
-    self.referencedProfileImage.frame = CGRectMake(12.0f, 38.0f, 20.0f, 20.0f);
-    CGFloat timeWidth = MIN(110.0f, insideWidth * 0.34f);
-    self.activityLabel.frame = CGRectMake(MAX(36.0f, insideWidth - timeWidth - 12.0f),
-                                          38.0f, timeWidth, 20.0f);
-    self.authorLabel.frame = CGRectMake(40.0f, 38.0f,
-                                       MAX(0.0f, insideWidth - 52.0f - timeWidth - 8.0f), 20.0f);
+    CGFloat height = self.contentView.bounds.size.height;
+    self.threadTitle.frame = CGRectMake(12.0f, 10.0f, MAX(0.0f, width - 24.0f), 20.0f);
+    self.referencedProfileImage.frame = CGRectMake(12.0f, 37.0f, 20.0f, 20.0f);
+    CGFloat timeWidth = floorf(MIN(110.0f, width * 0.34f));
+    CGFloat timeX = floorf(MAX(36.0f, width - timeWidth - 12.0f));
+    self.activityLabel.frame = CGRectMake(timeX, 40.0f, timeWidth, 16.0f);
+    self.authorLabel.frame = CGRectMake(40.0f, 37.0f,
+                                       MAX(0.0f, timeX - 48.0f), 20.0f);
+    self.separatorHigh.frame = CGRectMake(0.0f, MAX(0.0f, height - 2.0f), width, 1.0f);
+    self.separatorLow.frame = CGRectMake(0.0f, MAX(0.0f, height - 1.0f), width, 1.0f);
 }
 
 - (void)prepareForReuse {
@@ -156,14 +204,19 @@ static NSString *DCThreadRelativeTime(NSString *snowflake) {
 
 @end
 
-@interface DCThreadsViewController ()
+@interface DCThreadsViewController () <UISearchBarDelegate>
 @property (nonatomic, strong) DCChannel *parentChannel;
+@property (nonatomic, strong) UISearchBar *searchBar;
+@property (nonatomic, strong) DCSearchThreads *threadSearch;
 @property (nonatomic, strong) NSArray *activeThreads;
 @property (nonatomic, strong) NSArray *archivedThreads;
+@property (nonatomic, strong) NSMutableDictionary *cachedThreadPayloads;
 @property (nonatomic, strong) UIActivityIndicatorView *loadingSpinner;
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic, strong) NSMutableSet *requestedAuthors;
-@property (nonatomic, assign) NSUInteger lookupCount;
+@property (nonatomic, strong) NSMutableSet *pendingAuthors;
+@property (nonatomic, strong) NSMutableSet *profileRequestedAuthors;
+@property (nonatomic, assign) BOOL authorBatchScheduled;
 @property (nonatomic, assign) NSUInteger requestGeneration;
 @property (nonatomic, assign) BOOL loadStarted;
 @property (nonatomic, assign) BOOL loading;
@@ -172,6 +225,8 @@ static NSString *DCThreadRelativeTime(NSString *snowflake) {
 @property (nonatomic, assign) NSUInteger nextSearchOffset;
 @property (nonatomic, strong) UIView *pagingFooter;
 @property (nonatomic, strong) UILabel *pagingLabel;
+- (void)showCreateThread:(id)sender;
+- (void)updateCreateButtonAvailability;
 - (void)loadThreads;
 - (void)loadNextSearchPage;
 - (void)loadLegacyThreadsForGeneration:(NSUInteger)generation;
@@ -179,7 +234,18 @@ static NSString *DCThreadRelativeTime(NSString *snowflake) {
 - (void)updateStatus;
 - (void)closeThreads;
 - (void)refreshVisibleAuthors:(NSNotification *)notification;
+- (void)configureAuthorInCell:(DCThreadListCell *)cell forThread:(NSDictionary *)thread;
 - (void)requestAuthorIfNeeded:(NSString *)authorID;
+- (void)flushPendingAuthorRequests;
+- (void)fetchVisibleAuthorsMissingFromGateway:(NSArray *)authorIDs;
+- (void)fetchAuthorProfile:(NSString *)authorID;
+- (NSArray *)visibleThreadsForSection:(NSInteger)section;
+- (void)threadSearchDidUpdate;
+- (void)refreshSearchCancelButton;
+- (NSDictionary *)threadPayloadForCachedChannel:(DCChannel *)channel;
+- (void)mergeCachedThreadsIntoActive:(NSMutableArray *)active archived:(NSMutableArray *)archived;
+- (void)channelRegistryDidChange:(NSNotification *)notification;
+- (void)applicationBecameActive:(NSNotification *)notification;
 @end
 
 @implementation DCThreadsViewController
@@ -215,11 +281,21 @@ static NSString *DCThreadRelativeTime(NSString *snowflake) {
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.title = @"Threads";
-    self.view.backgroundColor = DCThreadServerListBackgroundColor();
+    self.view.backgroundColor = DCThreadChatCellBackgroundColor();
     self.tableView.backgroundColor = self.view.backgroundColor;
     self.tableView.separatorStyle = UITableViewCellSeparatorStyleNone;
     self.tableView.rowHeight = DCThreadRowHeight;
     self.tableView.sectionHeaderHeight = [DCMemberListSectionHeaderView headerHeight];
+    self.searchBar = [DCSearchUI searchBarWithPlaceholder:@"Search Threads" delegate:self];
+    self.searchBar.frame = CGRectMake(0.0f, 0.0f, self.tableView.bounds.size.width, 44.0f);
+    self.tableView.tableHeaderView = self.searchBar;
+
+    self.threadSearch = [[DCSearchThreads alloc] initWithChannelID:self.parentChannel.snowflake];
+    __weak DCThreadsViewController *weakSelf = self;
+    self.threadSearch.resultsChanged = ^{
+        DCThreadsViewController *viewer = weakSelf;
+        if (viewer) [viewer threadSearchDidUpdate];
+    };
 
     [DCInterfaceStyle applyNavigationTitleStyleToBar:self.navigationController.navigationBar];
     [self.navigationController.navigationBar setBackgroundImage:[DCInterfaceStyle navigationBarBackgroundImage]
@@ -236,18 +312,29 @@ static NSString *DCThreadRelativeTime(NSString *snowflake) {
 
     UIBarButtonItem *create = [[UIBarButtonItem alloc]
         initWithTitle:@"Create" style:UIBarButtonItemStyleDone
-               target:nil action:NULL];
+               target:self action:@selector(showCreateThread:)];
     [create setBackgroundImage:[DCInterfaceStyle primaryBarButtonBackgroundImage]
                     forState:UIControlStateNormal barMetrics:UIBarMetricsDefault];
     [create setBackgroundImage:[DCInterfaceStyle primaryBarButtonPressedBackgroundImage]
                     forState:UIControlStateHighlighted barMetrics:UIBarMetricsDefault];
-    create.enabled = NO;
     self.navigationItem.rightBarButtonItem = create;
+    [self updateCreateButtonAvailability];
 
     self.requestedAuthors = [NSMutableSet set];
+    self.pendingAuthors = [NSMutableSet set];
+    self.profileRequestedAuthors = [NSMutableSet set];
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(refreshVisibleAuthors:)
                                                  name:@"RELOAD USER DATA" object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(refreshVisibleAuthors:)
+                                                 name:@"GuildMemberListUpdated" object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(channelRegistryDidChange:)
+                                                 name:@"RELOAD CHANNEL LIST" object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(applicationBecameActive:)
+                                                 name:UIApplicationDidBecomeActiveNotification object:nil];
 
     self.loadingSpinner = [[UIActivityIndicatorView alloc]
         initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleWhite];
@@ -268,13 +355,146 @@ static NSString *DCThreadRelativeTime(NSString *snowflake) {
     [self updateStatus];
 }
 
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    [self updateCreateButtonAvailability];
+}
+
+- (void)updateCreateButtonAvailability {
+    uint64_t permission = [DCServerCommunicator.sharedInstance
+        effectivePermissionsForChannel:self.parentChannel];
+    DCChannel *registeredParent = [DCServerCommunicator.sharedInstance.channels
+        objectForKey:self.parentChannel.snowflake];
+    BOOL canCreate = registeredParent != nil &&
+        self.parentChannel.type == DCChannelTypeGuildText &&
+        (permission & DCPermissionViewChannel) != 0 &&
+        (permission & (DCPermissionCreatePublicThreads |
+                       DCPermissionCreatePrivateThreads)) != 0;
+    self.navigationItem.rightBarButtonItem.enabled = canCreate;
+}
+
+- (void)showCreateThread:(id)sender {
+    if (!self.navigationItem.rightBarButtonItem.enabled) return;
+    self.navigationItem.backBarButtonItem =
+        [DCInterfaceStyle navigationBackButtonItemWithTitle:@"Threads"];
+    DCThreadCreateViewController *creator = [[DCThreadCreateViewController alloc]
+        initWithParentChannel:self.parentChannel];
+    [self.navigationController pushViewController:creator animated:YES];
+}
+
+- (NSDictionary *)threadPayloadForCachedChannel:(DCChannel *)channel {
+    if (!DCThreadTypeIsSupported(channel.type) ||
+        ![channel.parentID isEqualToString:self.parentChannel.snowflake] ||
+        !channel.snowflake.length) return nil;
+    if (channel.parentGuild.snowflake.length &&
+        ![channel.parentGuild.snowflake isEqualToString:self.parentChannel.parentGuild.snowflake])
+        return nil;
+
+    NSMutableDictionary *payload = [NSMutableDictionary dictionaryWithDictionary:@{
+        @"id": channel.snowflake,
+        @"parent_id": self.parentChannel.snowflake,
+        @"guild_id": self.parentChannel.parentGuild.snowflake,
+        @"name": channel.name ?: @"Untitled Thread",
+        @"type": @(channel.type)
+    }];
+    if (channel.lastMessageId.length)
+        [payload setObject:channel.lastMessageId forKey:@"last_message_id"];
+    return payload;
+}
+
+- (void)mergeCachedThreadsIntoActive:(NSMutableArray *)active archived:(NSMutableArray *)archived {
+    NSMutableSet *seen = [NSMutableSet set];
+    for (NSDictionary *thread in active) {
+        NSString *identifier = DCThreadString([thread objectForKey:@"id"]);
+        if (identifier.length) [seen addObject:identifier];
+    }
+    for (NSDictionary *thread in archived) {
+        NSString *identifier = DCThreadString([thread objectForKey:@"id"]);
+        if (identifier.length) [seen addObject:identifier];
+    }
+    for (NSDictionary *payload in [self.cachedThreadPayloads allValues]) {
+        NSString *identifier = DCThreadString([payload objectForKey:@"id"]);
+        if (!identifier.length || [seen containsObject:identifier]) continue;
+        [seen addObject:identifier];
+        [active addObject:payload];
+    }
+    [active sortUsingComparator:DCThreadNewestFirstComparator()];
+    [archived sortUsingComparator:DCThreadNewestFirstComparator()];
+    if (active.count > DCThreadResultLimit)
+        [active removeObjectsInRange:NSMakeRange(DCThreadResultLimit, active.count - DCThreadResultLimit)];
+    NSUInteger remaining = DCThreadResultLimit - active.count;
+    if (archived.count > remaining)
+        [archived removeObjectsInRange:NSMakeRange(remaining, archived.count - remaining)];
+}
+
+- (void)channelRegistryDidChange:(NSNotification *)notification {
+    DCChannel *channel = notification.object;
+    if (![channel isKindOfClass:[DCChannel class]]) return;
+    NSDictionary *cachedPayload = [self threadPayloadForCachedChannel:channel];
+    if (!cachedPayload) return;
+
+    NSString *identifier = [cachedPayload objectForKey:@"id"];
+    [self.cachedThreadPayloads setObject:cachedPayload forKey:identifier];
+    NSMutableArray *active = [self.activeThreads mutableCopy] ?: [NSMutableArray array];
+    NSMutableArray *archived = [self.archivedThreads mutableCopy] ?: [NSMutableArray array];
+    BOOL changed = NO;
+    BOOL found = NO;
+    for (NSMutableArray *section in @[active, archived]) {
+        for (NSUInteger i = 0; i < section.count; i++) {
+            NSDictionary *existing = [section objectAtIndex:i];
+            if (![DCThreadString([existing objectForKey:@"id"]) isEqualToString:identifier]) continue;
+            found = YES;
+            NSMutableDictionary *updated = [existing mutableCopy];
+            if (channel.name.length)
+                [updated setObject:channel.name forKey:@"name"];
+            NSString *lastID = [cachedPayload objectForKey:@"last_message_id"];
+            if (lastID.length) [updated setObject:lastID forKey:@"last_message_id"];
+            if (![updated isEqualToDictionary:existing]) {
+                [section replaceObjectAtIndex:i withObject:updated];
+                changed = YES;
+            }
+            break;
+        }
+        if (found) break;
+    }
+    if (!found) {
+        [active addObject:cachedPayload];
+        changed = YES;
+    }
+    if (!changed) return;
+    [active sortUsingComparator:DCThreadNewestFirstComparator()];
+    [archived sortUsingComparator:DCThreadNewestFirstComparator()];
+    if (active.count > DCThreadResultLimit)
+        [active removeObjectsInRange:NSMakeRange(DCThreadResultLimit, active.count - DCThreadResultLimit)];
+    NSUInteger available = DCThreadResultLimit - active.count;
+    if (archived.count > available)
+        [archived removeObjectsInRange:NSMakeRange(available, archived.count - available)];
+    self.activeThreads = active;
+    self.archivedThreads = archived;
+    [self.threadSearch updateLoadedActiveThreads:active archivedThreads:archived];
+    if (!self.threadSearch.query.length) [self.tableView reloadData];
+    [self updateStatus];
+}
+
+- (void)applicationBecameActive:(NSNotification *)notification {
+    if (self.loadStarted && self.isViewLoaded && self.view.window &&
+        self.navigationController.topViewController == self && !self.loadingSearchPage)
+        [self loadThreads];
+}
+
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
-    if (!self.loadStarted) [self loadThreads];
+    [self loadThreads];
 }
 
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
+    if (fabsf(self.searchBar.frame.size.width - self.tableView.bounds.size.width) > 0.5f) {
+        CGRect headerFrame = self.searchBar.frame;
+        headerFrame.size.width = self.tableView.bounds.size.width;
+        self.searchBar.frame = headerFrame;
+        self.tableView.tableHeaderView = self.searchBar;
+    }
     CGPoint center = CGPointMake(CGRectGetMidX(self.tableView.backgroundView.bounds),
                                  CGRectGetMidY(self.tableView.backgroundView.bounds));
     self.statusLabel.frame = CGRectMake(16.0f, center.y + 12.0f,
@@ -284,42 +504,83 @@ static NSString *DCThreadRelativeTime(NSString *snowflake) {
 
 - (void)dealloc {
     ++_requestGeneration;
+    [self.threadSearch cancel];
+    [NSObject cancelPreviousPerformRequestsWithTarget:self];
     [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
 - (void)closeThreads {
     ++self.requestGeneration;
+    [self.threadSearch cancel];
+    [NSObject cancelPreviousPerformRequestsWithTarget:self];
     [self.navigationController dismissViewControllerAnimated:YES completion:nil];
 }
 
+- (NSArray *)visibleThreadsForSection:(NSInteger)section {
+    if (self.threadSearch.query.length)
+        return section == 0 ? self.threadSearch.activeResults : self.threadSearch.archivedResults;
+    return section == 0 ? self.activeThreads : self.archivedThreads;
+}
+
+- (void)threadSearchDidUpdate {
+    if (!self.isViewLoaded) return;
+    [self.tableView reloadData];
+    [self updateStatus];
+    [self updatePagingFooter];
+}
+
 - (void)updateStatus {
-    BOOL empty = self.activeThreads.count + self.archivedThreads.count == 0;
+    BOOL searching = self.threadSearch.query.length > 0;
+    BOOL empty = [self visibleThreadsForSection:0].count +
+                 [self visibleThreadsForSection:1].count == 0;
     self.tableView.backgroundView.hidden = !empty;
     self.statusLabel.hidden = !empty;
-    if (self.loading) {
-        self.statusLabel.text = @"Loading threads…";
+    BOOL showSpinner = searching ? self.threadSearch.loading : self.loading;
+    if (showSpinner) {
+        self.statusLabel.text = searching ? @"Searching threads…" : @"Loading threads…";
         [self.loadingSpinner startAnimating];
     } else {
         [self.loadingSpinner stopAnimating];
-        if (!self.statusLabel.text.length || [self.statusLabel.text isEqualToString:@"Loading threads…"])
-            self.statusLabel.text = @"No threads found in this channel.";
+        self.statusLabel.text = searching ? @"No matching thread names." :
+            @"No threads found in this channel.";
     }
 }
 
 - (void)loadThreads {
+    ++self.requestGeneration;
     self.loadStarted = YES;
     self.loading = YES;
+    self.loadingSearchPage = NO;
     self.hasMoreSearchResults = YES;
     self.nextSearchOffset = 0;
-    self.activeThreads = @[];
-    self.archivedThreads = @[];
-    ++self.requestGeneration;
+    self.cachedThreadPayloads = [NSMutableDictionary dictionary];
+    NSMutableArray *known = [NSMutableArray array];
+    for (DCChannel *channel in [DCServerCommunicator.sharedInstance.channels allValues]) {
+        if (![channel isKindOfClass:[DCChannel class]]) continue;
+        NSDictionary *payload = [self threadPayloadForCachedChannel:channel];
+        if (payload) [known addObject:payload];
+    }
+    [known sortUsingComparator:DCThreadNewestFirstComparator()];
+    for (NSUInteger i = 0; i < MIN(known.count, DCThreadResultLimit); i++) {
+        NSDictionary *payload = [known objectAtIndex:i];
+        [self.cachedThreadPayloads setObject:payload forKey:[payload objectForKey:@"id"]];
+    }
+    NSMutableArray *active = [NSMutableArray array];
+    NSMutableArray *archived = [NSMutableArray array];
+    [self mergeCachedThreadsIntoActive:active archived:archived];
+    self.activeThreads = active;
+    self.archivedThreads = archived;
+    [self.threadSearch updateLoadedActiveThreads:active archivedThreads:archived];
+    if (!self.threadSearch.query.length) [self.tableView reloadData];
     [self updateStatus];
     [self loadNextSearchPage];
 }
 
 - (void)updatePagingFooter {
-    if (!self.hasMoreSearchResults || !self.loadStarted) {
+    BOOL searching = self.threadSearch.query.length > 0;
+    BOOL more = searching ? self.threadSearch.hasMore : self.hasMoreSearchResults;
+    BOOL fetching = searching ? self.threadSearch.loading : self.loadingSearchPage;
+    if ((!more && !fetching) || (!searching && !self.loadStarted)) {
         if (self.tableView.tableFooterView == self.pagingFooter)
             self.tableView.tableFooterView = nil;
         return;
@@ -336,7 +597,9 @@ static NSString *DCThreadRelativeTime(NSString *snowflake) {
         self.pagingLabel.textAlignment = UITextAlignmentCenter;
         [self.pagingFooter addSubview:self.pagingLabel];
     }
-    self.pagingLabel.text = self.loadingSearchPage ? @"Loading more threads…" : @"Scroll for more threads";
+    self.pagingLabel.text = searching
+        ? (fetching ? @"Searching threads…" : @"Scroll for more matches")
+        : (fetching ? @"Loading more threads…" : @"Scroll for more threads");
     if (self.tableView.tableFooterView != self.pagingFooter)
         self.tableView.tableFooterView = self.pagingFooter;
 }
@@ -380,8 +643,10 @@ static NSString *DCThreadRelativeTime(NSString *snowflake) {
                 return;
             }
 
-            NSMutableArray *active = [viewer.activeThreads mutableCopy] ?: [NSMutableArray array];
-            NSMutableArray *archived = [viewer.archivedThreads mutableCopy] ?: [NSMutableArray array];
+            NSMutableArray *active = offset == 0 ? [NSMutableArray array] :
+                ([viewer.activeThreads mutableCopy] ?: [NSMutableArray array]);
+            NSMutableArray *archived = offset == 0 ? [NSMutableArray array] :
+                ([viewer.archivedThreads mutableCopy] ?: [NSMutableArray array]);
             NSMutableSet *seen = [NSMutableSet set];
             for (NSDictionary *thread in active) {
                 NSString *identifier = DCThreadString([thread objectForKey:@"id"]);
@@ -409,8 +674,10 @@ static NSString *DCThreadRelativeTime(NSString *snowflake) {
                 else [active addObject:thread];
                 if (active.count + archived.count >= DCThreadResultLimit) break;
             }
+            [viewer mergeCachedThreadsIntoActive:active archived:archived];
             viewer.activeThreads = active;
             viewer.archivedThreads = archived;
+            [viewer.threadSearch updateLoadedActiveThreads:active archivedThreads:archived];
             viewer.nextSearchOffset = offset + threads.count;
             viewer.hasMoreSearchResults = hasMore && threads.count > 0 &&
                 active.count + archived.count < DCThreadResultLimit;
@@ -428,11 +695,15 @@ static NSString *DCThreadRelativeTime(NSString *snowflake) {
 }
 
 - (void)scrollViewDidScroll:(UIScrollView *)scrollView {
-    if (scrollView != self.tableView || !self.hasMoreSearchResults ||
-        self.loadingSearchPage || self.loading) return;
+    if (scrollView != self.tableView) return;
     CGFloat remaining = scrollView.contentSize.height -
         (scrollView.contentOffset.y + scrollView.bounds.size.height);
-    if (remaining < 180.0f) [self loadNextSearchPage];
+    if (remaining >= 180.0f) return;
+    if (self.threadSearch.query.length) {
+        [self.threadSearch loadNextPage];
+    } else if (self.hasMoreSearchResults && !self.loadingSearchPage && !self.loading) {
+        [self loadNextSearchPage];
+    }
 }
 
 - (void)loadLegacyThreadsForGeneration:(NSUInteger)generation {
@@ -498,32 +769,10 @@ static NSString *DCThreadRelativeTime(NSString *snowflake) {
         dispatch_async(dispatch_get_main_queue(), ^{
             DCThreadsViewController *viewer = weakSelf;
             if (!viewer || viewer.requestGeneration != generation) return;
-            NSArray *cachedChannels = [DCServerCommunicator.sharedInstance.channels allValues];
-            for (DCChannel *channel in cachedChannels) {
-                if (![channel isKindOfClass:[DCChannel class]] ||
-                    !DCThreadTypeIsSupported(channel.type) ||
-                    ![channel.parentID isEqualToString:channelID] ||
-                    !channel.snowflake.length || [seen containsObject:channel.snowflake]) continue;
-                NSMutableDictionary *payload = [NSMutableDictionary dictionaryWithDictionary:@{
-                    @"id": channel.snowflake,
-                    @"parent_id": channelID,
-                    @"guild_id": guildID,
-                    @"name": channel.name ?: @"Untitled Thread",
-                    @"type": @(channel.type)
-                }];
-                if (channel.lastMessageId.length)
-                    [payload setObject:channel.lastMessageId forKey:@"last_message_id"];
-                [seen addObject:channel.snowflake];
-                [active addObject:payload];
-            }
-            [active sortUsingComparator:newestFirst];
-            if (active.count > DCThreadResultLimit)
-                [active removeObjectsInRange:NSMakeRange(DCThreadResultLimit, active.count - DCThreadResultLimit)];
-            NSUInteger available = DCThreadResultLimit - active.count;
-            if (archived.count > available)
-                [archived removeObjectsInRange:NSMakeRange(available, archived.count - available)];
+            [viewer mergeCachedThreadsIntoActive:active archived:archived];
             viewer.activeThreads = active;
             viewer.archivedThreads = archived;
+            [viewer.threadSearch updateLoadedActiveThreads:active archivedThreads:archived];
             viewer.loading = NO;
             if (!succeeded && !active.count) viewer.statusLabel.text = @"Unable to load threads.";
             [viewer.tableView reloadData];
@@ -537,7 +786,7 @@ static NSString *DCThreadRelativeTime(NSString *snowflake) {
 }
 
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    return section == 0 ? self.activeThreads.count : self.archivedThreads.count;
+    return [self visibleThreadsForSection:section].count;
 }
 
 - (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section {
@@ -555,7 +804,7 @@ static NSString *DCThreadRelativeTime(NSString *snowflake) {
 }
 
 - (NSDictionary *)threadAtIndexPath:(NSIndexPath *)path {
-    NSArray *section = path.section == 0 ? self.activeThreads : self.archivedThreads;
+    NSArray *section = [self visibleThreadsForSection:path.section];
     return path.row < (NSInteger)section.count ? [section objectAtIndex:path.row] : nil;
 }
 
@@ -564,24 +813,38 @@ static NSString *DCThreadRelativeTime(NSString *snowflake) {
     DCThreadListCell *cell = (DCThreadListCell *)[tableView dequeueReusableCellWithIdentifier:reuseID];
     if (!cell) cell = [[DCThreadListCell alloc] initWithStyle:UITableViewCellStyleDefault
                                               reuseIdentifier:reuseID];
+    NSUInteger stripeIndex = path.row +
+        (path.section == 1 ? [self visibleThreadsForSection:0].count : 0);
+    cell.backgroundView.backgroundColor = (stripeIndex & 1)
+        ? DCThreadAlternateCellBackgroundColor() : DCThreadChatCellBackgroundColor();
     NSDictionary *thread = [self threadAtIndexPath:path];
     cell.threadTitle.text = DCThreadString([thread objectForKey:@"name"]) ?: @"Untitled Thread";
     NSString *lastID = DCThreadString([thread objectForKey:@"last_message_id"]);
     cell.activityLabel.text = DCThreadRelativeTime(lastID ?: DCThreadString([thread objectForKey:@"id"]));
+    [self configureAuthorInCell:cell forThread:thread];
+    return cell;
+}
+
+- (void)configureAuthorInCell:(DCThreadListCell *)cell forThread:(NSDictionary *)thread {
     NSString *ownerID = DCThreadString([thread objectForKey:@"owner_id"]);
     DCUser *user = [DCServerCommunicator.sharedInstance userForSnowflake:ownerID];
-    cell.authorLabel.text = user ? [user displayNameInGuild:self.parentChannel.parentGuild] : @"Unknown author";
-    cell.authorLabel.textColor = user
+    NSString *displayName = [user displayNameInGuild:self.parentChannel.parentGuild];
+    BOOL hasIdentity = displayName.length > 0;
+    cell.authorLabel.text = hasIdentity ? displayName : @"Unknown author";
+    cell.authorLabel.textColor = hasIdentity
         ? [DCInterfaceStyle roleColorForUser:user inGuild:self.parentChannel.parentGuild]
         : [UIColor lightGrayColor];
-    UIImage *avatar = user ? [DCTools cachedUserAvatar:user inGuild:self.parentChannel.parentGuild] : nil;
-    cell.referencedProfileImage.image = avatar ?: user.profileImage ?: [DCInterfaceStyle defaultAvatarImageAtIndex:0];
-    if (user && !avatar) [DCTools getUserAvatar:user inGuild:self.parentChannel.parentGuild];
-    if (ownerID.length && (!user ||
+    UIImage *avatar = hasIdentity
+        ? [DCTools cachedUserAvatar:user inGuild:self.parentChannel.parentGuild] : nil;
+    cell.referencedProfileImage.image = avatar ?:
+        (hasIdentity ? user.profileImage : nil) ?: [DCInterfaceStyle defaultAvatarImageAtIndex:0];
+    if (hasIdentity && !avatar) {
+        [DCTools getUserAvatar:user inGuild:self.parentChannel.parentGuild];
+    }
+    if (ownerID.length && (!hasIdentity ||
         ![user.guildRoleIDs objectForKey:self.parentChannel.parentGuild.snowflake])) {
         [self requestAuthorIfNeeded:ownerID];
     }
-    return cell;
 }
 
 - (void)refreshVisibleAuthors:(NSNotification *)notification {
@@ -599,21 +862,61 @@ static NSString *DCThreadRelativeTime(NSString *snowflake) {
         NSDictionary *thread = [self threadAtIndexPath:path];
         NSString *ownerID = DCThreadString([thread objectForKey:@"owner_id"]);
         if (changedUser && ![changedUser.snowflake isEqualToString:ownerID]) continue;
-        DCUser *user = [DCServerCommunicator.sharedInstance userForSnowflake:ownerID];
-        if (!user) continue;
-        cell.authorLabel.text = [user displayNameInGuild:self.parentChannel.parentGuild];
-        cell.authorLabel.textColor = [DCInterfaceStyle roleColorForUser:user
-                                                                 inGuild:self.parentChannel.parentGuild];
-        UIImage *avatar = [DCTools cachedUserAvatar:user inGuild:self.parentChannel.parentGuild];
-        cell.referencedProfileImage.image = avatar ?: user.profileImage ?: [DCInterfaceStyle defaultAvatarImageAtIndex:0];
+        [self configureAuthorInCell:cell forThread:thread];
     }
 }
 
 - (void)requestAuthorIfNeeded:(NSString *)authorID {
-    if (!authorID.length || [self.requestedAuthors containsObject:authorID] ||
-        self.lookupCount >= DCThreadUserLookupLimit) return;
+    if (!authorID.length || [self.requestedAuthors containsObject:authorID]) return;
     [self.requestedAuthors addObject:authorID];
-    ++self.lookupCount;
+    [self.pendingAuthors addObject:authorID];
+    if (self.authorBatchScheduled) return;
+    self.authorBatchScheduled = YES;
+    [self performSelector:@selector(flushPendingAuthorRequests)
+               withObject:nil afterDelay:0.05];
+}
+
+- (void)flushPendingAuthorRequests {
+    self.authorBatchScheduled = NO;
+    if (!self.pendingAuthors.count) return;
+    NSArray *identifiers = [self.pendingAuthors allObjects];
+    NSUInteger count = MIN(DCThreadMemberBatchSize, identifiers.count);
+    NSArray *batch = [identifiers subarrayWithRange:NSMakeRange(0, count)];
+    [self.pendingAuthors minusSet:[NSSet setWithArray:batch]];
+
+    NSString *guildID = self.parentChannel.parentGuild.snowflake;
+    if (guildID.length) {
+        [DCServerCommunicator.sharedInstance requestMemberChunkForUserIds:batch
+                                                                   inGuild:guildID];
+        [self performSelector:@selector(fetchVisibleAuthorsMissingFromGateway:)
+                   withObject:batch afterDelay:1.5];
+    }
+    if (self.pendingAuthors.count) {
+        self.authorBatchScheduled = YES;
+        [self performSelector:@selector(flushPendingAuthorRequests)
+                   withObject:nil afterDelay:0.15];
+    }
+}
+
+- (void)fetchVisibleAuthorsMissingFromGateway:(NSArray *)authorIDs {
+    if (!self.isViewLoaded || !self.view.window) return;
+    NSMutableSet *visibleIDs = [NSMutableSet set];
+    for (NSIndexPath *path in [self.tableView indexPathsForVisibleRows]) {
+        NSDictionary *thread = [self threadAtIndexPath:path];
+        NSString *ownerID = DCThreadString([thread objectForKey:@"owner_id"]);
+        if (ownerID.length) [visibleIDs addObject:ownerID];
+    }
+    for (NSString *authorID in authorIDs) {
+        if (![visibleIDs containsObject:authorID]) continue;
+        DCUser *user = [DCServerCommunicator.sharedInstance userForSnowflake:authorID];
+        if ([user displayNameInGuild:self.parentChannel.parentGuild].length) continue;
+        [self fetchAuthorProfile:authorID];
+    }
+}
+
+- (void)fetchAuthorProfile:(NSString *)authorID {
+    if (!authorID.length || [self.profileRequestedAuthors containsObject:authorID]) return;
+    [self.profileRequestedAuthors addObject:authorID];
     NSUInteger generation = self.requestGeneration;
     NSString *guildID = [self.parentChannel.parentGuild.snowflake copy];
     NSString *token = [DCServerCommunicator.sharedInstance.token copy];
@@ -622,30 +925,79 @@ static NSString *DCThreadRelativeTime(NSString *snowflake) {
     dispatch_async(DCThreadUserLookupQueue(), ^{
         DCThreadsViewController *viewer = weakSelf;
         if (!viewer || viewer.requestGeneration != generation) return;
-        NSString *path = [NSString stringWithFormat:@"/guilds/%@/members/%@", guildID, userID];
+        DCUser *cached = [DCServerCommunicator.sharedInstance userForSnowflake:userID];
+        if ([cached displayNameInGuild:viewer.parentChannel.parentGuild].length) return;
+
+        NSString *path = [NSString stringWithFormat:@"/users/%@/profile?guild_id=%@", userID, guildID];
         NSMutableURLRequest *request = [DCServerCommunicator requestWithPath:path token:token];
-        [request setTimeoutInterval:12.0];
+        [request setTimeoutInterval:10.0];
         NSHTTPURLResponse *response = nil;
         NSData *data = [NSURLConnection sendSynchronousRequest:request
                                             returningResponse:&response error:nil];
-        if (response.statusCode != 200 || !data.length) return;
-        id member = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-        if (![member isKindOfClass:[NSDictionary class]]) return;
-        NSDictionary *userJSON = [member objectForKey:@"user"];
+        NSDictionary *profile = nil;
+        id responseJSON = data.length
+            ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+        if (response.statusCode == 200 && [responseJSON isKindOfClass:[NSDictionary class]]) {
+            profile = responseJSON;
+        }
+        NSDictionary *userJSON = DCThreadString([profile objectForKey:@"id"])
+            ? profile : [profile objectForKey:@"user"];
+        NSDictionary *memberJSON = [profile objectForKey:@"guild_member"];
+        if (![userJSON isKindOfClass:[NSDictionary class]]) {
+            path = [NSString stringWithFormat:@"/guilds/%@/members/%@", guildID, userID];
+            request = [DCServerCommunicator requestWithPath:path token:token];
+            [request setTimeoutInterval:10.0];
+            data = [NSURLConnection sendSynchronousRequest:request
+                                        returningResponse:&response error:nil];
+            responseJSON = data.length
+                ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+            if (response.statusCode == 200 && [responseJSON isKindOfClass:[NSDictionary class]]) {
+                memberJSON = responseJSON;
+                userJSON = [memberJSON objectForKey:@"user"];
+            }
+        }
         if (![userJSON isKindOfClass:[NSDictionary class]]) return;
         dispatch_async(dispatch_get_main_queue(), ^{
             DCThreadsViewController *currentViewer = weakSelf;
             if (!currentViewer || currentViewer.requestGeneration != generation) return;
             DCUser *user = [DCTools convertJsonUser:userJSON cache:YES];
             if (!user) return;
-            [DCServerCommunicator.sharedInstance applyGuildProfileFromMember:member
-                                                                        toUser:user
-                                                                       guildID:guildID
-                                                                authoritative:YES];
-            [DCTools getUserAvatar:user inGuild:currentViewer.parentChannel.parentGuild];
+            if ([memberJSON isKindOfClass:[NSDictionary class]]) {
+                [DCServerCommunicator.sharedInstance applyGuildProfileFromMember:memberJSON
+                                                                           toUser:user
+                                                                          guildID:guildID
+                                                                   authoritative:YES];
+            }
             [currentViewer refreshVisibleAuthors:nil];
         });
     });
+}
+
+- (void)searchBarTextDidBeginEditing:(UISearchBar *)searchBar {
+    [searchBar setShowsCancelButton:YES animated:YES];
+    [DCSearchUI styleCancelButtonInSearchBar:searchBar];
+    [self performSelector:@selector(refreshSearchCancelButton) withObject:nil afterDelay:0.2];
+}
+
+- (void)refreshSearchCancelButton {
+    [DCSearchUI styleCancelButtonInSearchBar:self.searchBar];
+}
+
+- (void)searchBar:(UISearchBar *)searchBar textDidChange:(NSString *)searchText {
+    [self.threadSearch updateQuery:searchText activeThreads:self.activeThreads
+                  archivedThreads:self.archivedThreads];
+}
+
+- (void)searchBarCancelButtonClicked:(UISearchBar *)searchBar {
+    searchBar.text = @"";
+    [self.threadSearch updateQuery:@"" activeThreads:self.activeThreads
+                  archivedThreads:self.archivedThreads];
+    [searchBar resignFirstResponder];
+    [searchBar setShowsCancelButton:NO animated:YES];
+}
+
+- (void)searchBarSearchButtonClicked:(UISearchBar *)searchBar {
+    [searchBar resignFirstResponder];
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)path {
@@ -657,6 +1009,8 @@ static NSString *DCThreadRelativeTime(NSString *snowflake) {
         [threadPayload setObject:self.parentChannel.parentGuild.snowflake forKey:@"guild_id"];
     }
     ++self.requestGeneration;
+    [self.threadSearch cancel];
+    [NSObject cancelPreviousPerformRequestsWithTarget:self];
     [self.navigationController dismissViewControllerAnimated:YES completion:^{
         [[NSNotificationCenter defaultCenter] postNotificationName:@"DCThreadOpenRequested"
                                                             object:nil

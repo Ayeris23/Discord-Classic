@@ -21,6 +21,7 @@
 + (UIImage *)barButtonPressedBackgroundImage;
 + (UIImage *)toolbarBackgroundImage;
 + (UIImage *)messageFieldBackgroundImage;
++ (UIImage *)threadTitleFieldBackgroundImage;
 + (UIImage *)sendButtonBackgroundImage;
 + (UIImage *)sendButtonPressedBackgroundImage;
 + (UIImage *)sendButtonDisabledBackgroundImage;

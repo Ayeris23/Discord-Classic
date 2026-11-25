@@ -12,6 +12,8 @@
 #import "DCPinnedMessagesViewController.h"
 #import "DCThreadsViewController.h"
 #import "DCChatMessageRenderer.h"
+#import "DCChatLookupView.h"
+#import "DCChatComposer.h"
 #import "DCConnectionPopup.h"
 #import "DCTypingIndicatorView.h"
 #include <dispatch/dispatch.h>
@@ -24,6 +26,7 @@
 #include <UIKit/UIKit.h>
 #include <malloc/malloc.h>
 #include <math.h>
+#include <stdlib.h>
 #include <objc/NSObjCRuntime.h>
 #import <MediaPlayer/MediaPlayer.h>
 #import <CoreImage/CoreImage.h>
@@ -74,7 +77,7 @@
 @implementation DCPendingAttachmentUpload
 @end
 
-@interface DCChatViewController () <DCTypingIndicatorViewDelegate, DCChatMessageRenderingContext>
+@interface DCChatViewController () <DCTypingIndicatorViewDelegate, DCChatMessageRenderingContext, DCChatLookupViewDelegate>
 @property (nonatomic, readonly) NSMutableArray *messages;
 @property (strong, nonatomic) DCMessageLayoutBuilder *messageLayoutBuilder;
 @property (nonatomic, strong) DCChannelWindow *currentWindow;
@@ -82,6 +85,16 @@
 @property (nonatomic, strong) DCChannel *readOnlyMessageListChannel;
 @property (nonatomic, strong) DCChannel *displayedMessageChannel;
 @property (nonatomic, strong) DCChatMessageRenderer *messageRenderer;
+@property (nonatomic, strong) DCChatComposer *chatComposer;
+@property (nonatomic, retain) DCChatLookupView *chatLookupView;
+@property (nonatomic, retain) UIView *chatLookupDimmingView;
+@property (nonatomic, retain) NSArray *chatLookupCandidates;
+@property (nonatomic, copy) NSString *chatLookupQuery;
+@property (nonatomic, copy) NSString *chatLookupGuildID;
+@property (nonatomic, copy) NSString *chatLookupSearchNonce;
+@property (nonatomic, assign) NSUInteger chatLookupSearchSequence;
+@property (nonatomic, assign) NSRange chatLookupTokenRange;
+@property (nonatomic, assign) BOOL chatLookupVisible;
 @property (nonatomic, strong) UIBarButtonItem *pinnedMessagesButton;
 @property (nonatomic, strong) UIBarButtonItem *threadsButton;
 @property (nonatomic, strong) UIBarButtonItem *notificationsButton;
@@ -175,6 +188,9 @@
 @property (nonatomic, assign) BOOL composerHasPendingEditOffset;
 @property (nonatomic, retain) ALAssetsLibrary *attachmentAssetLibrary;
 - (void)resetTypingIndicatorForChannelChange;
+- (void)updateChatLookupForInput;
+- (void)hideChatLookupAnimated:(BOOL)animated;
+- (void)layoutChatLookup;
 - (void)configureReadOnlyMessageListView;
 - (void)configureMessageListActionForCell:(DCChatTableCell *)cell layoutHeight:(CGFloat)height;
 - (void)tappedMessageListAction:(UIButton *)sender;
@@ -2125,6 +2141,10 @@ static dispatch_queue_t chat_presentation_queue;
                                                name:@"GuildMemberListUpdated"
                                              object:nil];
     [NSNotificationCenter.defaultCenter addObserver:self
+                                           selector:@selector(chatLookupGuildMembersReceived:)
+                                               name:@"DCChatLookupGuildMembersReceived"
+                                             object:nil];
+    [NSNotificationCenter.defaultCenter addObserver:self
                                            selector:@selector(handleImageViewerGeometryChanged:)
                                                name:DCImageViewerUnderlyingGeometryDidChangeNotification
                                              object:nil];
@@ -2154,23 +2174,15 @@ static dispatch_queue_t chat_presentation_queue;
                       forState:UIControlStateHighlighted
                     barMetrics:UIBarMetricsDefault];
 
-        UIImage *toolbarBG = [DCInterfaceStyle toolbarBackgroundImage];
-        UIEdgeInsets toolbarCaps = UIEdgeInsetsMake(23, 0, 20, 0); // top/bottom caps, full width stretches center
-        UIImage *stretchableToolbarBG;
-        if ([toolbarBG respondsToSelector:@selector(resizableImageWithCapInsets:resizingMode:)]) {
-            stretchableToolbarBG = [toolbarBG resizableImageWithCapInsets:toolbarCaps
-                                                             resizingMode:UIImageResizingModeStretch];
-        } else {
-            stretchableToolbarBG = [toolbarBG stretchableImageWithLeftCapWidth:0 topCapHeight:10];
-        }
-        self.toolbarBG.image = stretchableToolbarBG;
-        self.toolbar.clipsToBounds       = NO;
-
-        CAGradientLayer *shadow = [CAGradientLayer layer];
-        shadow.frame = CGRectMake(0, -3, [UIScreen mainScreen].bounds.size.width, 3);
-        shadow.colors = @[(id)[UIColor colorWithWhite:0 alpha:0].CGColor,
-                          (id)[UIColor colorWithWhite:0 alpha:0.15].CGColor];
-        [self.toolbar.layer insertSublayer:shadow atIndex:0];
+        self.chatComposer = [[DCChatComposer alloc]
+            initWithExistingToolbar:self.toolbar
+                      backgroundView:self.toolbarBG
+                    fieldBackground:self.messageFieldBG
+                          textView:self.inputField
+                        placeholder:self.inputFieldPlaceholder
+                         sendButton:self.sendButton
+                        photoButton:self.photoButton];
+        [self.chatComposer applyDefaultAppearance];
 
         [self.sidebarButton setBackgroundImage:[DCInterfaceStyle barButtonBackgroundImage]
                                       forState:UIControlStateNormal
@@ -2189,17 +2201,7 @@ static dispatch_queue_t chat_presentation_queue;
                     barMetrics:UIBarMetricsDefault];
 
 
-        [self.sendButton setBackgroundImage:[DCInterfaceStyle sendButtonBackgroundImage]
-                                   forState:UIControlStateNormal];
-        [self.sendButton setBackgroundImage:[DCInterfaceStyle sendButtonPressedBackgroundImage]
-                                   forState:UIControlStateHighlighted];
-        [self.sendButton setBackgroundImage:[DCInterfaceStyle sendButtonDisabledBackgroundImage]
-                                   forState:UIControlStateDisabled];
 
-        [self.photoButton setBackgroundImage:[DCInterfaceStyle cameraButtonBackgroundImage]
-                                    forState:UIControlStateNormal];
-        [self.photoButton setBackgroundImage:[DCInterfaceStyle cameraButtonPressedBackgroundImage]
-                                    forState:UIControlStateHighlighted];
     }
 
     lastTimeInterval = 0;
@@ -2229,18 +2231,18 @@ static dispatch_queue_t chat_presentation_queue;
         [self.view addSubview:self.typingIndicator];
     }
 
-    // Message Input bitmap
-    UIImage *img = [DCInterfaceStyle messageFieldBackgroundImage];
-    UIEdgeInsets caps = UIEdgeInsetsMake(15, 15, 15, 15);
-    
-    UIImage *stretch;
-    if ([img respondsToSelector:@selector(resizableImageWithCapInsets:resizingMode:)]) {
-        stretch = [img resizableImageWithCapInsets:caps resizingMode:UIImageResizingModeStretch];
-    } else {
-        stretch = [img stretchableImageWithLeftCapWidth:15 topCapHeight:15];
+    // Retain the legacy field setup for the old interface.
+    if (self.oldMode) {
+        UIImage *img = [DCInterfaceStyle messageFieldBackgroundImage];
+        UIEdgeInsets caps = UIEdgeInsetsMake(15, 15, 15, 15);
+        UIImage *stretch;
+        if ([img respondsToSelector:@selector(resizableImageWithCapInsets:resizingMode:)]) {
+            stretch = [img resizableImageWithCapInsets:caps resizingMode:UIImageResizingModeStretch];
+        } else {
+            stretch = [img stretchableImageWithLeftCapWidth:15 topCapHeight:15];
+        }
+        self.messageFieldBG.image = stretch;
     }
-    
-    self.messageFieldBG.image = stretch;
 
     if (self.oldMode) {
         [self.chatTableView registerNib:[UINib nibWithNibName:@"O-DCChatTableCell"
@@ -2338,6 +2340,7 @@ static dispatch_queue_t chat_presentation_queue;
     [self layoutEmptyChatLoadingIndicator];
     [self layoutMessageEdgeLoadingIndicators];
     [self updateMessageEdgeLoadingIndicators];
+    [self layoutChatLookup];
 }
 
 #pragma mark - Reusable read-only message list
@@ -2931,6 +2934,278 @@ static dispatch_queue_t chat_presentation_queue;
     self.sendButton.enabled = self.inputField.text.length != 0 || hasStagedAttachments;
 }
 
+#pragma mark - Chat input lookup
+
+- (void)appendChatLookupUser:(DCUser *)user
+                      toList:(NSMutableArray *)users
+                         seen:(NSMutableSet *)seen {
+    if (![user isKindOfClass:[DCUser class]] || !user.snowflake.length ||
+        [seen containsObject:user.snowflake]) return;
+    [seen addObject:user.snowflake];
+    [users addObject:user];
+}
+
+- (NSArray *)recentChatLookupUsers {
+    NSMutableArray *users = [NSMutableArray array];
+    NSMutableSet *seen = [NSMutableSet set];
+
+    // Keep recently active authors ahead of the general member list.
+    for (DCMessage *message in [self.messages reverseObjectEnumerator]) {
+        [self appendChatLookupUser:message.author toList:users seen:seen];
+    }
+
+    DCChannel *channel = [self messageRenderingChannel];
+    for (DCUser *user in channel.recipients) {
+        [self appendChatLookupUser:user toList:users seen:seen];
+    }
+
+    DCGuild *guild = channel.parentGuild;
+    if (guild) {
+        NSDictionary *memberItems = nil;
+        NSArray *legacyMembers = nil;
+        @synchronized (guild) {
+            memberItems = [guild.memberListItems copy];
+            legacyMembers = [guild.members copy];
+        }
+        // memberListItems contains every hydrated position, unlike guild.members,
+        // which only retains a small legacy slice. Enumerate all loaded pages.
+        NSArray *positions = [[memberItems allKeys] sortedArrayUsingSelector:@selector(compare:)];
+        for (NSNumber *position in positions) {
+            [self appendChatLookupUser:[memberItems objectForKey:position]
+                                toList:users seen:seen];
+        }
+        for (DCUser *user in legacyMembers) {
+            [self appendChatLookupUser:user toList:users seen:seen];
+        }
+    }
+    return users;
+}
+
+- (void)scheduleChatLookupMemberSearchForQuery:(NSString *)query guild:(DCGuild *)guild {
+    NSString *normalized = [query lowercaseString] ?: @"";
+    NSString *guildID = guild.snowflake;
+    if ([self.chatLookupQuery isEqualToString:normalized] &&
+        (self.chatLookupGuildID == guildID ||
+         [self.chatLookupGuildID isEqualToString:guildID])) return;
+
+    [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                             selector:@selector(requestChatLookupGuildMembers)
+                                               object:nil];
+    self.chatLookupQuery = normalized;
+    self.chatLookupGuildID = guildID;
+    self.chatLookupSearchNonce = nil;
+
+    // Discord's member stream is sparse. Search for missing members on demand
+    // instead of downloading the entire guild on every lookup.
+    if (normalized.length >= 2 && guildID.length) {
+        [self performSelector:@selector(requestChatLookupGuildMembers)
+                   withObject:nil afterDelay:0.30];
+    }
+}
+
+- (void)requestChatLookupGuildMembers {
+    if (!self.chatLookupVisible || self.chatLookupQuery.length < 2 ||
+        !self.chatLookupGuildID.length ||
+        ![[self messageRenderingChannel].parentGuild.snowflake
+          isEqualToString:self.chatLookupGuildID]) return;
+
+    // The nonce lets us discard responses from a previous query or channel.
+    self.chatLookupSearchSequence++;
+    NSString *nonce = [NSString stringWithFormat:@"dcl-%08lx-%08x",
+        (unsigned long)self.chatLookupSearchSequence, arc4random()];
+    self.chatLookupSearchNonce = nonce;
+    [[DCServerCommunicator sharedInstance] sendJSON:@{
+        @"op": @(DCGatewayOpCodeRequestGuildMembers),
+        @"d": @{
+            @"guild_id": self.chatLookupGuildID,
+            @"query": self.chatLookupQuery,
+            @"limit": @100,
+            @"presences": @NO,
+            @"nonce": nonce
+        }
+    }];
+}
+
+- (void)chatLookupGuildMembersReceived:(NSNotification *)notification {
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self chatLookupGuildMembersReceived:notification];
+        });
+        return;
+    }
+    NSDictionary *info = notification.userInfo;
+    if (!self.chatLookupVisible ||
+        ![[info objectForKey:@"guild_id"] isEqualToString:self.chatLookupGuildID] ||
+        ![[info objectForKey:@"nonce"] isEqualToString:self.chatLookupSearchNonce]) return;
+
+    NSArray *identifiers = [info objectForKey:@"user_ids"];
+    if (![identifiers isKindOfClass:[NSArray class]] || !identifiers.count) return;
+    NSMutableArray *users = [self.chatLookupCandidates mutableCopy] ?: [NSMutableArray array];
+    NSMutableSet *seen = [NSMutableSet setWithCapacity:users.count + identifiers.count];
+    for (DCUser *user in users) {
+        if (user.snowflake.length) [seen addObject:user.snowflake];
+    }
+    DCServerCommunicator *communicator = [DCServerCommunicator sharedInstance];
+    for (NSString *identifier in identifiers) {
+        DCUser *user = [communicator userForSnowflake:identifier];
+        [self appendChatLookupUser:user toList:users seen:seen];
+    }
+    self.chatLookupCandidates = users;
+    [self.chatLookupView setMentionUsers:users
+                                  guild:[self messageRenderingChannel].parentGuild
+                                  query:self.chatLookupQuery];
+    [self layoutChatLookup];
+}
+
+- (void)ensureChatLookupView {
+    if (self.chatLookupView || !self.chatTableView || !self.toolbar) return;
+
+    UIView *dimming = [[UIView alloc] initWithFrame:self.chatTableView.frame];
+    dimming.backgroundColor = [UIColor colorWithWhite:0.0f alpha:0.4f];
+    dimming.alpha = 0.0f;
+    dimming.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    UITapGestureRecognizer *dismiss = [[UITapGestureRecognizer alloc]
+        initWithTarget:self action:@selector(dismissChatLookup:)];
+    [dimming addGestureRecognizer:dismiss];
+    self.chatLookupDimmingView = dimming;
+
+    DCChatLookupView *lookup = [[DCChatLookupView alloc] initWithFrame:CGRectZero];
+    lookup.delegate = self;
+    self.chatLookupView = lookup;
+}
+
+- (void)dismissChatLookup:(UITapGestureRecognizer *)recognizer {
+    if (recognizer.state == UIGestureRecognizerStateEnded) {
+        [self hideChatLookupAnimated:YES];
+    }
+}
+
+- (CGRect)chatLookupVisibleFrame {
+    CGFloat top = CGRectGetMinY(self.chatTableView.frame);
+    CGFloat bottom = CGRectGetMinY(self.toolbar.frame);
+    CGFloat available = MAX(0.0f, bottom - top);
+    CGFloat height = UI_USER_INTERFACE_IDIOM() == UIUserInterfaceIdiomPhone
+        ? MIN(available, 44.0f * 10.0f)
+        : MIN(available, 44.0f * MIN((NSUInteger)10,
+                                      MAX((NSUInteger)1, self.chatLookupView.resultCount)));
+    return CGRectMake(0.0f, floorf(bottom - height),
+                      self.view.bounds.size.width, ceilf(height));
+}
+
+- (void)layoutChatLookup {
+    if (!self.chatLookupVisible || !self.chatLookupView) return;
+    self.chatLookupDimmingView.frame = self.chatTableView.frame;
+    self.chatLookupView.frame = [self chatLookupVisibleFrame];
+}
+
+- (void)hideChatLookupAnimated:(BOOL)animated {
+    if (!self.chatLookupVisible) return;
+    self.chatLookupVisible = NO;
+    self.chatLookupTokenRange = NSMakeRange(NSNotFound, 0);
+    self.chatLookupCandidates = nil;
+    self.chatLookupSearchNonce = nil;
+    self.chatLookupQuery = nil;
+    self.chatLookupGuildID = nil;
+    [NSObject cancelPreviousPerformRequestsWithTarget:self
+                                             selector:@selector(requestChatLookupGuildMembers)
+                                               object:nil];
+    CGFloat bottom = CGRectGetMinY(self.toolbar.frame);
+    CGRect hidden = self.chatLookupView.frame;
+    hidden.origin.y = bottom;
+    NSTimeInterval duration = animated ? 0.18 : 0.0;
+    [UIView animateWithDuration:duration animations:^{
+        self.chatLookupDimmingView.alpha = 0.0f;
+        self.chatLookupView.frame = hidden;
+    } completion:^(BOOL finished) {
+        if (self.chatLookupVisible) return;
+        [self.chatLookupView removeFromSuperview];
+        [self.chatLookupDimmingView removeFromSuperview];
+        [self.chatLookupView clearResults];
+    }];
+}
+
+- (void)updateChatLookupForInput {
+    if (self.readOnlyMessageListMode || !self.inputField.isFirstResponder ||
+        !self.toolbar.userInteractionEnabled) {
+        [self hideChatLookupAnimated:NO];
+        return;
+    }
+
+    NSString *text = self.inputField.text ?: @"";
+    NSRange selection = self.inputField.selectedRange;
+    if (selection.location == NSNotFound || selection.location > text.length) {
+        [self hideChatLookupAnimated:YES];
+        return;
+    }
+    NSUInteger cursor = selection.location;
+    NSRange at = [text rangeOfString:@"@" options:NSBackwardsSearch
+                              range:NSMakeRange(0, cursor)];
+    if (at.location == NSNotFound) {
+        [self hideChatLookupAnimated:YES];
+        return;
+    }
+    NSUInteger start = NSMaxRange(at);
+    NSString *query = [text substringWithRange:NSMakeRange(start, cursor - start)];
+    NSCharacterSet *spaces = [NSCharacterSet whitespaceAndNewlineCharacterSet];
+    BOOL invalid = [query rangeOfCharacterFromSet:spaces].location != NSNotFound;
+    if (at.location > 0) {
+        unichar preceding = [text characterAtIndex:at.location - 1];
+        invalid |= [[NSCharacterSet alphanumericCharacterSet] characterIsMember:preceding];
+    }
+    if (invalid || [query rangeOfString:@"<"].location != NSNotFound ||
+        [query rangeOfString:@">"].location != NSNotFound) {
+        [self hideChatLookupAnimated:YES];
+        return;
+    }
+
+    BOOL opening = !self.chatLookupVisible;
+    if (opening) {
+        [self ensureChatLookupView];
+        self.chatLookupCandidates = [self recentChatLookupUsers];
+        if (!self.chatLookupView) return;
+    }
+    self.chatLookupTokenRange = NSMakeRange(at.location, cursor - at.location);
+    DCGuild *guild = [self messageRenderingChannel].parentGuild;
+    [self.chatLookupView setMentionUsers:self.chatLookupCandidates
+                                  guild:guild
+                                  query:query];
+    [self scheduleChatLookupMemberSearchForQuery:query guild:guild];
+
+    if (opening) {
+        self.chatLookupVisible = YES;
+        self.chatLookupDimmingView.frame = self.chatTableView.frame;
+        [self.view insertSubview:self.chatLookupDimmingView aboveSubview:self.chatTableView];
+        CGRect frame = [self chatLookupVisibleFrame];
+        CGRect hidden = frame;
+        hidden.origin.y = CGRectGetMinY(self.toolbar.frame);
+        self.chatLookupView.frame = hidden;
+        [self.view insertSubview:self.chatLookupView aboveSubview:self.chatLookupDimmingView];
+        [UIView animateWithDuration:0.18 animations:^{
+            self.chatLookupDimmingView.alpha = 1.0f;
+            self.chatLookupView.frame = frame;
+        }];
+    } else {
+        [self layoutChatLookup];
+    }
+}
+
+- (void)chatLookupView:(DCChatLookupView *)lookup didSelectUser:(DCUser *)user {
+    if (!user.snowflake.length || !self.chatLookupVisible) return;
+    NSString *text = self.inputField.text ?: @"";
+    NSRange token = self.chatLookupTokenRange;
+    if (token.location == NSNotFound || NSMaxRange(token) > text.length ||
+        ![[text substringWithRange:NSMakeRange(token.location, 1)] isEqualToString:@"@"])
+        return;
+
+    NSString *mention = [NSString stringWithFormat:@"<@%@> ", user.snowflake];
+    self.inputField.text = [text stringByReplacingCharactersInRange:token withString:mention];
+    self.inputField.selectedRange = NSMakeRange(token.location + mention.length, 0);
+    [self hideChatLookupAnimated:YES];
+    self.inputFieldPlaceholder.hidden = YES;
+    [self updateSendButtonEnabledState];
+    [self resizeInputField];
+}
+
 - (BOOL)textViewShouldBeginEditing:(UITextView *)textView {
     self.inputFieldPlaceholder.hidden = self.inputField.text.length != 0;
     lastTimeInterval                  = 0;
@@ -2962,11 +3237,19 @@ static dispatch_queue_t chat_presentation_queue;
         lastTimeInterval = currentTimeInterval;
     }
     [self resizeInputField];
+    if (textView == self.inputField) [self updateChatLookupForInput];
+}
+
+- (void)textViewDidChangeSelection:(UITextView *)textView {
+    if (textView == self.inputField && self.chatLookupVisible) {
+        [self updateChatLookupForInput];
+    }
 }
 
 - (void)textViewDidEndEditing:(UITextView *)textView {
     self.inputFieldPlaceholder.hidden = self.inputField.text.length != 0;
     lastTimeInterval                  = 0;
+    if (textView == self.inputField) [self hideChatLookupAnimated:NO];
 }
 
 - (void)handleChannelLoadCold:(DCChannel *)channel {
@@ -3365,6 +3648,7 @@ static dispatch_queue_t chat_presentation_queue;
 
 - (void)activateSelectedChannel {
     NSAssert([NSThread isMainThread], @"Must activate channel on main thread");
+    [self hideChatLookupAnimated:NO];
 
     DCChannel *channel =
         DCServerCommunicator.sharedInstance.selectedChannel;
@@ -7907,6 +8191,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     [self.toolbar setY:self.view.height - self.keyboardHeight - self.toolbar.height];
     [self updateJumpToPresentButtonFrame];
     [self layoutEmptyChatLoadingIndicator];
+    [self layoutChatLookup];
     [UIView commitAnimations];
 
     // Do not restart the live-edge scroll if the table is already there.
@@ -7938,6 +8223,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
     [self.toolbar setY:self.view.height - self.toolbar.height];
     [self updateJumpToPresentButtonFrame];
     [self layoutEmptyChatLoadingIndicator];
+    [self layoutChatLookup];
     [UIView commitAnimations];
 }
 
@@ -7964,7 +8250,8 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
        shouldReceiveTouch:(UITouch *)touch {
     UIView *v = touch.view;
     while (v) {
-        if (v == self.toolbar || v == self.jumpToPresentButton) return NO;
+        if (v == self.toolbar || v == self.jumpToPresentButton ||
+            v == self.chatLookupView || v == self.chatLookupDimmingView) return NO;
         v = v.superview;
     }
     return YES;
@@ -8069,6 +8356,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
         self.disablePing = NO;
         [self.inputField setText:@""];
+        [self hideChatLookupAnimated:NO];
         [self updateSendButtonEnabledState];
         self.inputField.scrollEnabled = NO;
         [self resizeInputField];
@@ -9124,6 +9412,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
     // Nil weak IBOutlets — non-ARC __unsafe_unretained outlets are
     // never zeroed automatically on view unload
+    self.chatComposer = nil;
     self.chatTableView          = nil;
     self.toolbar                = nil;
     self.toolbarBG              = nil;
@@ -9137,6 +9426,7 @@ forRowAtIndexPath:(NSIndexPath *)indexPath {
 
 - (void)viewWillDisappear:(BOOL)animated {
     [super viewWillDisappear:animated];
+    [self hideChatLookupAnimated:NO];
     if (self.readOnlyMessageListMode) {
         [self stopForwardMomentumContinuation];
         return;
