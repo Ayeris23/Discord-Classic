@@ -7,6 +7,7 @@
 //
 
 #import "DCInterfaceStyle.h"
+#import "DCFontManager.h"
 #import "DCActionSheetPresenter.h"
 #import "DCMenuViewController.h"
 #import "DCConnectionPopup.h"
@@ -1452,6 +1453,20 @@ static const CGFloat DCGuildMentionBadgeCenterFromBottom = 11.0f;
     [DCInterfaceStyle applyNavigationTitleStyleToBar:self.navigationController.navigationBar];
     [self installMenuRefreshControls];
 
+    if (![[NSUserDefaults standardUserDefaults] boolForKey:@"hackyMode"]) {
+        __weak DCMenuViewController *weakSelf = self;
+        [[DCFontManager sharedManager] prepareBundledFontsWithCompletion:^{
+            DCMenuViewController *menu = weakSelf;
+            if (!menu || ![menu isDirectMessagesGuild:menu.selectedGuild]) return;
+            for (UITableViewCell *cell in [menu.channelTableView visibleCells]) {
+                if ([cell isKindOfClass:[DCPrivateChannelTableCell class]]) {
+                    DCPrivateChannelTableCell *privateCell = (DCPrivateChannelTableCell *)cell;
+                    [privateCell setDisplayName:privateCell.nameLabel.text];
+                }
+            }
+        }];
+    }
+
     self.experimentalMode =
         [[NSUserDefaults standardUserDefaults] boolForKey:@"experimentalMode"];
     self.totalView.hidden = YES;
@@ -2778,9 +2793,9 @@ static const CGFloat DCGuildMentionBadgeCenterFromBottom = 11.0f;
                     NSString *displayName = [buddy displayName];
                     if (displayName.length) {
                         channelAtRowIndex.name = displayName;
-                        cell.nameLabel.text = displayName;
+                        [cell setDisplayName:displayName];
                     } else {
-                        cell.nameLabel.text = channelAtRowIndex.name;
+                        [cell setDisplayName:channelAtRowIndex.name];
                     }
 
                     // Visible DM rows should be able to finish their own avatar
@@ -2802,7 +2817,7 @@ static const CGFloat DCGuildMentionBadgeCenterFromBottom = 11.0f;
                 } else {
                     // Always overwrite reused-cell state, even when recipient
                     // hydration is temporarily incomplete.
-                    cell.nameLabel.text = channelAtRowIndex.name;
+                    [cell setDisplayName:channelAtRowIndex.name];
                     cell.pfp.image = [channelAtRowIndex.icon isKindOfClass:[UIImage class]]
                         ? channelAtRowIndex.icon : nil;
                     cell.statusImage.hidden = YES;

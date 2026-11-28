@@ -7,7 +7,12 @@
 //
 
 #import "DCPrivateChannelTableCell.h"
+#import "DCFontManager.h"
 #import <math.h>
+
+@interface DCPrivateChannelTableCell ()
+@property (strong, nonatomic) UIFont *baseNameFont;
+@end
 
 @implementation DCPrivateChannelTableCell
 
@@ -16,6 +21,12 @@
     [super awakeFromNib];
     self.mentionBadge = [MentionBadge badgeWithCount:0];
     [self.contentView addSubview:self.mentionBadge];
+}
+
+- (void)setDisplayName:(NSString *)displayName {
+    if (!self.baseNameFont) self.baseNameFont = self.nameLabel.font;
+    [[DCFontManager sharedManager] setText:displayName forLabel:self.nameLabel
+                                 baseFont:self.baseNameFont];
 }
 
 - (void)setSelected:(BOOL)selected animated:(BOOL)animated {

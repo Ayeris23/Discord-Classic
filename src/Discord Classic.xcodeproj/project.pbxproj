@@ -566,6 +566,10 @@
 		3F075BF830B5EA2A0078ABC5 /* DCSearchThreads.m in Sources */ = {isa = PBXBuildFile; fileRef = 3F075BF730B5EA2A0078ABC5 /* DCSearchThreads.m */; };
 		3F075BFC30B5F3150078ABC5 /* SearchBarBackground2x.png in Resources */ = {isa = PBXBuildFile; fileRef = 3F075BFA30B5F3150078ABC5 /* SearchBarBackground2x.png */; };
 		3F075BFD30B5F3150078ABC5 /* SearchBarBackground.png in Resources */ = {isa = PBXBuildFile; fileRef = 3F075BFB30B5F3150078ABC5 /* SearchBarBackground.png */; };
+		3F078B2F30B77C0B006253AD /* DCFontManager.m in Sources */ = {isa = PBXBuildFile; fileRef = 3F078B2E30B77C0B006253AD /* DCFontManager.m */; };
+		3F078B3430B77C18006253AD /* NotoSansMath-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 3F078B3130B77C18006253AD /* NotoSansMath-Regular.ttf */; };
+		3F078B3530B77C18006253AD /* NotoSansSymbols-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 3F078B3230B77C18006253AD /* NotoSansSymbols-Regular.ttf */; };
+		3F078B3630B77C18006253AD /* NotoSansSymbols2-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 3F078B3330B77C18006253AD /* NotoSansSymbols2-Regular.ttf */; };
 		3F185BE830B523ED00BD547E /* DCChatComposer.m in Sources */ = {isa = PBXBuildFile; fileRef = 3F185BE730B523ED00BD547E /* DCChatComposer.m */; };
 		3F185BEC30B52E8A00BD547E /* FieldSquare@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = 3F185BEA30B52E8A00BD547E /* FieldSquare@2x.png */; };
 		3F185BED30B52E8A00BD547E /* FieldSquare.png in Resources */ = {isa = PBXBuildFile; fileRef = 3F185BEB30B52E8A00BD547E /* FieldSquare.png */; };
@@ -1416,6 +1420,11 @@
 		3F075BF730B5EA2A0078ABC5 /* DCSearchThreads.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCSearchThreads.m; sourceTree = "<group>"; };
 		3F075BFA30B5F3150078ABC5 /* SearchBarBackground2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = SearchBarBackground2x.png; sourceTree = "<group>"; };
 		3F075BFB30B5F3150078ABC5 /* SearchBarBackground.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = SearchBarBackground.png; sourceTree = "<group>"; };
+		3F078B2D30B77C0B006253AD /* DCFontManager.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCFontManager.h; sourceTree = "<group>"; };
+		3F078B2E30B77C0B006253AD /* DCFontManager.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCFontManager.m; sourceTree = "<group>"; };
+		3F078B3130B77C18006253AD /* NotoSansMath-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "NotoSansMath-Regular.ttf"; sourceTree = "<group>"; };
+		3F078B3230B77C18006253AD /* NotoSansSymbols-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "NotoSansSymbols-Regular.ttf"; sourceTree = "<group>"; };
+		3F078B3330B77C18006253AD /* NotoSansSymbols2-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "NotoSansSymbols2-Regular.ttf"; sourceTree = "<group>"; };
 		3F185BE630B523ED00BD547E /* DCChatComposer.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCChatComposer.h; sourceTree = "<group>"; };
 		3F185BE730B523ED00BD547E /* DCChatComposer.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCChatComposer.m; sourceTree = "<group>"; };
 		3F185BEA30B52E8A00BD547E /* FieldSquare@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "FieldSquare@2x.png"; sourceTree = "<group>"; };
@@ -1523,6 +1532,7 @@
 		2F111FC82F4E913F00159D64 /* Assets */ = {
 			isa = PBXGroup;
 			children = (
+				3F078B3030B77C18006253AD /* Fonts */,
 				2F111FC92F4E913F00159D64 /* Bundles */,
 				2F111FCB2F4E913F00159D64 /* Catalogs */,
 				2F111FCD2F4E913F00159D64 /* Images */,
@@ -2988,6 +2998,16 @@
 			path = Search;
 			sourceTree = "<group>";
 		};
+		3F078B3030B77C18006253AD /* Fonts */ = {
+			isa = PBXGroup;
+			children = (
+				3F078B3130B77C18006253AD /* NotoSansMath-Regular.ttf */,
+				3F078B3230B77C18006253AD /* NotoSansSymbols-Regular.ttf */,
+				3F078B3330B77C18006253AD /* NotoSansSymbols2-Regular.ttf */,
+			);
+			path = Fonts;
+			sourceTree = "<group>";
+		};
 		3F185BE930B52E8A00BD547E /* Text_Entry */ = {
 			isa = PBXGroup;
 			children = (
@@ -3000,6 +3020,8 @@
 		9D43EA28E6394828AFD75534 /* Interface */ = {
 			isa = PBXGroup;
 			children = (
+				3F078B2D30B77C0B006253AD /* DCFontManager.h */,
+				3F078B2E30B77C0B006253AD /* DCFontManager.m */,
 				3F075BF330B5EA030078ABC5 /* DCSearchUI.h */,
 				3F075BF430B5EA030078ABC5 /* DCSearchUI.m */,
 				B21AC1000000000000000002 /* DCActionSheetPresenter.h */,
@@ -3115,6 +3137,7 @@
 				2F11209F2F4E913F00159D64 /* NavigationButton@2x.png in Resources */,
 				2F11208B2F4E913F00159D64 /* Border.png in Resources */,
 				2F1120E82F4E913F00159D64 /* oldDiscord.png in Resources */,
+				3F078B3430B77C18006253AD /* NotoSansMath-Regular.ttf in Resources */,
 				2F1DF67A2F52C97F009C44CE /* SendMessageButton.png in Resources */,
 				2F1122542F4EA03000159D64 /* FontAwesome.ttf in Resources */,
 				2F1120FD2F4E913F00159D64 /* dnd.png in Resources */,
@@ -3207,6 +3230,7 @@
 				2F1121262F4E913F00159D64 /* O-DCChatTableCell.xib in Resources */,
 				2F11209E2F4E913F00159D64 /* NavigationButton.png in Resources */,
 				2F1121032F4E913F00159D64 /* DirectMessages.png in Resources */,
+				3F078B3630B77C18006253AD /* NotoSansSymbols2-Regular.ttf in Resources */,
 				2FFA38C22F95E11500E67A40 /* icon58.png in Resources */,
 				2F1120C72F4E913F00159D64 /* DefaultAvatar3@2x.png in Resources */,
 				2F1120912F4E913F00159D64 /* CBarButtonMap.png in Resources */,
@@ -3275,6 +3299,7 @@
 				2F1120E12F4E913F00159D64 /* Default-568h@2x.png in Resources */,
 				2F32F3F1305635BA003BF841 /* DownPressed.png in Resources */,
 				2F1120882F4E913F00159D64 /* bannerBottomShadow@2x.png in Resources */,
+				3F078B3530B77C18006253AD /* NotoSansSymbols-Regular.ttf in Resources */,
 				2F1120C12F4E913F00159D64 /* DefaultAvatar0@2x.png in Resources */,
 				2F1DF6772F52C97F009C44CE /* CameraButton@2x.png in Resources */,
 				2F1122782F4EA03000159D64 /* libwebpdemux.rc in Resources */,
@@ -3454,6 +3479,7 @@
 				2F1122862F4EA03000159D64 /* dec_clip_tables.c in Sources */,
 				2FFA3A6E2F98879E00E67A40 /* NSMutableArray+DTMoving.m in Sources */,
 				2FFA3A3C2F98879E00E67A40 /* NSURL+DTAWS.m in Sources */,
+				3F078B2F30B77C0B006253AD /* DCFontManager.m in Sources */,
 				2F1122EE2F4EA03000159D64 /* SDWebImageDownloaderOperation.m in Sources */,
 				2F1122DD2F4EA03000159D64 /* filters_utils.c in Sources */,
 				2FFA3A412F98879E00E67A40 /* DTFoundationConstants.m in Sources */,
