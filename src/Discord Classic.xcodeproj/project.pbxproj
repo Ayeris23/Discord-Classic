@@ -570,6 +570,7 @@
 		3F078B3430B77C18006253AD /* NotoSansMath-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 3F078B3130B77C18006253AD /* NotoSansMath-Regular.ttf */; };
 		3F078B3530B77C18006253AD /* NotoSansSymbols-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 3F078B3230B77C18006253AD /* NotoSansSymbols-Regular.ttf */; };
 		3F078B3630B77C18006253AD /* NotoSansSymbols2-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 3F078B3330B77C18006253AD /* NotoSansSymbols2-Regular.ttf */; };
+		3F1171E030BAC5B7006B445A /* DCLabel.m in Sources */ = {isa = PBXBuildFile; fileRef = 3F1171DF30BAC5B7006B445A /* DCLabel.m */; };
 		3F185BE830B523ED00BD547E /* DCChatComposer.m in Sources */ = {isa = PBXBuildFile; fileRef = 3F185BE730B523ED00BD547E /* DCChatComposer.m */; };
 		3F185BEC30B52E8A00BD547E /* FieldSquare@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = 3F185BEA30B52E8A00BD547E /* FieldSquare@2x.png */; };
 		3F185BED30B52E8A00BD547E /* FieldSquare.png in Resources */ = {isa = PBXBuildFile; fileRef = 3F185BEB30B52E8A00BD547E /* FieldSquare.png */; };
@@ -1425,6 +1426,8 @@
 		3F078B3130B77C18006253AD /* NotoSansMath-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "NotoSansMath-Regular.ttf"; sourceTree = "<group>"; };
 		3F078B3230B77C18006253AD /* NotoSansSymbols-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "NotoSansSymbols-Regular.ttf"; sourceTree = "<group>"; };
 		3F078B3330B77C18006253AD /* NotoSansSymbols2-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "NotoSansSymbols2-Regular.ttf"; sourceTree = "<group>"; };
+		3F1171DE30BAC5B7006B445A /* DCLabel.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCLabel.h; sourceTree = "<group>"; };
+		3F1171DF30BAC5B7006B445A /* DCLabel.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCLabel.m; sourceTree = "<group>"; };
 		3F185BE630B523ED00BD547E /* DCChatComposer.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = DCChatComposer.h; sourceTree = "<group>"; };
 		3F185BE730B523ED00BD547E /* DCChatComposer.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = DCChatComposer.m; sourceTree = "<group>"; };
 		3F185BEA30B52E8A00BD547E /* FieldSquare@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "FieldSquare@2x.png"; sourceTree = "<group>"; };
@@ -3020,6 +3023,8 @@
 		9D43EA28E6394828AFD75534 /* Interface */ = {
 			isa = PBXGroup;
 			children = (
+				3F1171DE30BAC5B7006B445A /* DCLabel.h */,
+				3F1171DF30BAC5B7006B445A /* DCLabel.m */,
 				3F078B2D30B77C0B006253AD /* DCFontManager.h */,
 				3F078B2E30B77C0B006253AD /* DCFontManager.m */,
 				3F075BF330B5EA030078ABC5 /* DCSearchUI.h */,
@@ -3517,6 +3522,7 @@
 				2F1122912F4EA03000159D64 /* enc_neon.c in Sources */,
 				2F1122B32F4EA03000159D64 /* upsampling_sse2.c in Sources */,
 				2FFA39532F987C2C00E67A40 /* DTAccessibilityElement.m in Sources */,
+				3F1171E030BAC5B7006B445A /* DCLabel.m in Sources */,
 				2F1122A32F4EA03000159D64 /* lossless_neon.c in Sources */,
 				2F1122AF2F4EA03000159D64 /* upsampling.c in Sources */,
 				2FFA39922F987C2C00E67A40 /* NSString+DTUtilities.m in Sources */,

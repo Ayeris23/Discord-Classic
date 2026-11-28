@@ -7,6 +7,7 @@
 //
 
 #import "DCFontManager.h"
+#import "DCLabel.h"
 #import <CoreText/CoreText.h>
 #import <dispatch/dispatch.h>
 
@@ -83,12 +84,6 @@
         if (completion) completion();
         return;
     }
-    if (![UILabel instancesRespondToSelector:@selector(setAttributedText:)]) {
-        self.prepared = YES;
-        NSLog(@"[Fonts] Attributed labels unavailable; using system fonts");
-        if (completion) completion();
-        return;
-    }
     if (completion) [self.preparationCompletions addObject:[completion copy]];
     if (self.preparing) return;
     self.preparing = YES;
@@ -124,21 +119,19 @@
             }
 
             dispatch_async(dispatch_get_main_queue(), ^{
-                NSMutableArray *available = [NSMutableArray arrayWithCapacity:names.count];
                 for (NSString *name in names) {
                     UIFont *font = [UIFont fontWithName:name size:12.0];
                     if (font) {
-                        [available addObject:name];
                         NSLog(@"[Fonts] Registered %@", name);
                     } else {
-                        NSLog(@"[Fonts] UIKit could not resolve %@", name);
+                        NSLog(@"[Fonts] Registered %@ (Core Text only)", name);
                     }
                 }
-                self.fallbackFontNames = [available copy];
+                self.fallbackFontNames = [names copy];
                 self.fontCoverage = [coverage copy];
                 self.preparing = NO;
                 self.prepared = YES;
-                NSLog(@"[Fonts] Ready: %lu/%lu fonts", (unsigned long)available.count,
+                NSLog(@"[Fonts] Ready: %lu/%lu fonts (Core Text)", (unsigned long)names.count,
                       (unsigned long)files.count);
 
                 NSArray *completions = [self.preparationCompletions copy];
@@ -204,17 +197,11 @@ static UTF32Char DCFontScalarForRange(NSString *text, NSRange range) {
     return candidate;
 }
 
-- (void)setText:(NSString *)text forLabel:(UILabel *)label baseFont:(UIFont *)baseFont {
-    if (!label) return;
-    baseFont = baseFont ?: label.font;
-    label.text = text;
-    if (baseFont && ![label.font isEqual:baseFont]) label.font = baseFont;
-
+- (NSDictionary *)fallbackRunsForText:(NSString *)text baseFont:(UIFont *)baseFont {
     if (!self.prepared || !self.fallbackFontNames.count || !text.length || !baseFont ||
-        ![label respondsToSelector:@selector(setAttributedText:)] ||
-        [text canBeConvertedToEncoding:NSASCIIStringEncoding]) return;
+        [text canBeConvertedToEncoding:NSASCIIStringEncoding]) return nil;
 
-    NSMutableAttributedString *styled = nil;
+    NSMutableDictionary *runs = nil;
     NSUInteger index = 0;
     while (index < text.length) {
         NSRange range = [text rangeOfComposedCharacterSequenceAtIndex:index];
@@ -222,9 +209,74 @@ static UTF32Char DCFontScalarForRange(NSString *text, NSRange range) {
         UTF32Char scalar = DCFontScalarForRange(text, range);
         // Leave combining sequences and emoji clusters to the system shaper.
         if (scalar < 0x80) continue;
-
         NSString *name = [self fallbackNameForScalar:scalar text:text range:range baseFont:baseFont];
         if (!name) continue;
+        if (!runs) runs = [NSMutableDictionary dictionary];
+        [runs setObject:name forKey:[NSValue valueWithRange:range]];
+    }
+    return runs;
+}
+
+- (void)reportFallback:(NSString *)name text:(NSString *)text range:(NSRange)range
+              renderer:(NSString *)renderer {
+    if ([self.reportedFonts containsObject:name]) return;
+    [self.reportedFonts addObject:name];
+    NSLog(@"[Fonts] Explicit fallback U+%04lX: %@ (%@)",
+          (unsigned long)DCFontScalarForRange(text, range), name, renderer);
+}
+
+- (NSAttributedString *)coreTextFallbackForText:(NSString *)text baseFont:(UIFont *)baseFont
+                                          runs:(NSDictionary *)runs {
+    CTFontRef base = CTFontCreateWithName((__bridge CFStringRef)baseFont.fontName,
+                                         baseFont.pointSize, NULL);
+    if (!base) return nil;
+    NSDictionary *attributes = @{
+        (__bridge NSString *)kCTFontAttributeName: (__bridge id)base,
+        (__bridge NSString *)kCTForegroundColorFromContextAttributeName: @YES
+    };
+    NSMutableAttributedString *styled = [[NSMutableAttributedString alloc] initWithString:text
+                                                                               attributes:attributes];
+    CFRelease(base);
+    BOOL applied = NO;
+    NSMutableDictionary *fonts = [NSMutableDictionary dictionary];
+    for (NSValue *value in runs) {
+        NSString *name = [runs objectForKey:value];
+        id font = [fonts objectForKey:name];
+        if (!font) {
+            font = CFBridgingRelease(CTFontCreateWithName((__bridge CFStringRef)name,
+                                                         baseFont.pointSize, NULL));
+            if (!font) continue;
+            [fonts setObject:font forKey:name];
+        }
+        [styled addAttribute:(__bridge NSString *)kCTFontAttributeName
+                       value:font range:[value rangeValue]];
+        applied = YES;
+        [self reportFallback:name text:text range:[value rangeValue] renderer:@"Core Text"];
+    }
+    return applied ? styled : nil;
+}
+
+- (void)setText:(NSString *)text forLabel:(UILabel *)label baseFont:(UIFont *)baseFont {
+    if (!label) return;
+    baseFont = baseFont ?: label.font;
+    label.text = text;
+    if (baseFont && ![label.font isEqual:baseFont]) label.font = baseFont;
+
+    BOOL coreTextLabel = [label isKindOfClass:[DCLabel class]];
+    if (!coreTextLabel && ![label respondsToSelector:@selector(setAttributedText:)]) return;
+    NSDictionary *runs = [self fallbackRunsForText:text baseFont:baseFont];
+    if (!runs.count) return;
+
+    if (coreTextLabel) {
+        DCLabel *fallbackLabel = (DCLabel *)label;
+        [fallbackLabel setCoreTextFallback:[self coreTextFallbackForText:text baseFont:baseFont runs:runs]];
+        return;
+    }
+
+    NSMutableAttributedString *styled = nil;
+    for (NSValue *value in runs) {
+        NSRange range = [value rangeValue];
+        NSString *name = [runs objectForKey:value];
         UIFont *font = [UIFont fontWithName:name size:baseFont.pointSize];
         if (!font) continue;
 
@@ -244,10 +296,7 @@ static UTF32Char DCFontScalarForRange(NSString *text, NSRange range) {
             styled = [[NSMutableAttributedString alloc] initWithString:text attributes:attributes];
         }
         [styled addAttribute:NSFontAttributeName value:font range:range];
-        if (![self.reportedFonts containsObject:name]) {
-            [self.reportedFonts addObject:name];
-            NSLog(@"[Fonts] Explicit fallback U+%04lX: %@", (unsigned long)scalar, name);
-        }
+        [self reportFallback:name text:text range:range renderer:@"UIKit"];
     }
     if (styled) label.attributedText = styled;
 }

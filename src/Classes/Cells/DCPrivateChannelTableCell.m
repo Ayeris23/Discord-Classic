@@ -8,10 +8,12 @@
 
 #import "DCPrivateChannelTableCell.h"
 #import "DCFontManager.h"
+#import "DCLabel.h"
 #import <math.h>
 
 @interface DCPrivateChannelTableCell ()
 @property (strong, nonatomic) UIFont *baseNameFont;
+- (void)installLegacyNameLabel;
 @end
 
 @implementation DCPrivateChannelTableCell
@@ -19,8 +21,48 @@
 
 - (void)awakeFromNib {
     [super awakeFromNib];
+    if ([[[UIDevice currentDevice] systemVersion] compare:@"6.0" options:NSNumericSearch] == NSOrderedAscending &&
+        ![[NSUserDefaults standardUserDefaults] boolForKey:@"hackyMode"]) {
+        [self installLegacyNameLabel];
+    }
     self.mentionBadge = [MentionBadge badgeWithCount:0];
     [self.contentView addSubview:self.mentionBadge];
+}
+
+- (void)installLegacyNameLabel {
+    UILabel *original = self.nameLabel;
+    UIView *parent = original.superview;
+    if (!parent || [original isKindOfClass:[DCLabel class]]) return;
+
+    DCLabel *label = [[DCLabel alloc] initWithFrame:original.frame];
+    label.autoresizingMask = original.autoresizingMask;
+    label.contentMode = original.contentMode;
+    label.opaque = original.opaque;
+    label.clipsToBounds = original.clipsToBounds;
+    label.backgroundColor = original.backgroundColor;
+    label.alpha = original.alpha;
+    label.hidden = original.hidden;
+    label.tag = original.tag;
+    label.userInteractionEnabled = original.userInteractionEnabled;
+    label.font = original.font;
+    label.textColor = original.textColor;
+    label.highlightedTextColor = original.highlightedTextColor;
+    label.shadowColor = original.shadowColor;
+    label.shadowOffset = original.shadowOffset;
+    label.textAlignment = original.textAlignment;
+    label.lineBreakMode = original.lineBreakMode;
+    label.baselineAdjustment = original.baselineAdjustment;
+    label.numberOfLines = original.numberOfLines;
+    label.adjustsFontSizeToFitWidth = original.adjustsFontSizeToFitWidth;
+    label.highlighted = original.highlighted;
+    label.enabled = original.enabled;
+    label.text = original.text;
+    label.isAccessibilityElement = original.isAccessibilityElement;
+    label.accessibilityTraits = original.accessibilityTraits;
+
+    [parent insertSubview:label aboveSubview:original];
+    self.nameLabel = label;
+    [original removeFromSuperview];
 }
 
 - (void)setDisplayName:(NSString *)displayName {
